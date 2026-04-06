@@ -265,6 +265,14 @@ pub enum LibraryUpdate {
     PlaylistTrackRemoved { _playlist_id: String, index: usize },
     /// Playlist list fetched for the picker (separate from the overlay's list).
     PlaylistsForPicker(Vec<playterm_subsonic::Playlist>),
+    /// Full library metadata index finished refreshing (background task).
+    /// Tuple:
+    /// - Vec<Song>: fresh index contents
+    /// - Option<String>: Navidrome `lastScan` token to persist when scan-skip is enabled.
+    /// - bool: whether this refresh was explicitly forced by the user (Ctrl+r).
+    LibraryIndexRefreshComplete {
+        result: Result<(Vec<playterm_subsonic::Song>, Option<String>, bool), String>,
+    },
 }
 
 // ── PlaylistPicker ────────────────────────────────────────────────────────────
@@ -331,6 +339,17 @@ pub struct App {
     /// Monotonically increasing counter sent with every play command (`PlayUrl` / `PlayCached`).
     /// The engine uses it to discard stale downloads from rapid skips.
     play_gen: u64,
+
+    // ── Library metadata index (Milestone 2) ───────────────────────────────────
+    /// Cached tracks for fzf (text only; persisted under `~/.cache/playterm/` by default).
+    pub library_index_tracks: Vec<playterm_subsonic::Song>,
+    library_index_by_id: HashMap<String, playterm_subsonic::Song>,
+    /// Unix seconds when the index was last fully refreshed, if known.
+    pub library_index_refreshed_at: Option<u64>,
+    /// True while a background full-library fetch is running.
+    pub library_index_refreshing: bool,
+    /// When the current refresh started; drives status-bar animation until complete.
+    pub library_index_refresh_started: Option<Instant>,
 
     // ── Offline cache (Feature 5.3) ───────────────────────────────────────────
     /// Track file cache (LRU, persisted to `~/.cache/playterm/`).
@@ -427,6 +446,13 @@ impl App {
         let static_accent = theme.accent;
         let lyrics_visible = config.lyrics_visible;
         let track_cache = crate::cache::TrackCache::load(config.cache_enabled, config.cache_max_size_gb);
+        let index_path = config.resolved_library_index_path();
+        let (library_index_tracks, library_index_refreshed_at) =
+            match crate::library_index::load(&index_path) {
+                Some(f) => (f.tracks, Some(f.refreshed_at_unix)),
+                None => (Vec::new(), None),
+            };
+        let library_index_by_id = crate::library_index::index_by_id(&library_index_tracks);
         Ok(Self {
             active_tab: Tab::Home,
             browser_focus: BrowserColumn::Artists,
@@ -453,6 +479,11 @@ impl App {
             keybinds,
             theme,
             play_gen: 0,
+            library_index_tracks,
+            library_index_by_id,
+            library_index_refreshed_at,
+            library_index_refreshing: false,
+            library_index_refresh_started: None,
             cache: track_cache,
             prefetch_gen: Arc::new(AtomicU64::new(0)),
             help_visible: false,
@@ -636,6 +667,141 @@ impl App {
                 .map_err(|e| e.to_string());
             let _ = tx.send(LibraryUpdate::Artists(result)).await;
         });
+    }
+
+    /// Walk the full library (`getArtists` + `getAlbum` per album) and refresh the
+    /// on-disk metadata index used by the fzf picker.
+    pub fn spawn_library_index_refresh(&mut self, force: bool) {
+        if !self.config.library_index_enabled {
+            if force {
+                self.flash_status("Library index is disabled in config");
+            }
+            return;
+        }
+        if self.library_index_refreshing {
+            self.flash_status_secs("Library index refresh already in progress", 8);
+            return;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if !force {
+            if !self.library_index_tracks.is_empty() {
+                if let Some(refreshed) = self.library_index_refreshed_at {
+                    let stale = self.config.library_index_max_age_secs == 0
+                        || now.saturating_sub(refreshed) > self.config.library_index_max_age_secs;
+                    if !stale {
+                        return;
+                    }
+                }
+            }
+        }
+        self.library_index_refreshing = true;
+        self.library_index_refresh_started = Some(Instant::now());
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        let index_path = self.config.resolved_library_index_path();
+        let nav_skip = self.config.library_navidrome_skip_unchanged_scan;
+        let album_p = self.config.library_fetch_album_parallelism;
+        let artist_p = self.config.library_fetch_artist_parallelism;
+        tokio::spawn(async move {
+            let result: Result<(Vec<playterm_subsonic::Song>, Option<String>, bool), String> = async {
+                if nav_skip && !force {
+                    if let Some(file) = crate::library_index::load(&index_path) {
+                        if let Some(ref tok) = file.navidrome_last_scan {
+                            if let Ok(status) = client.get_scan_status().await {
+                                if !status.scanning {
+                                    if status.last_scan.as_deref() == Some(tok.as_str()) {
+                                        return Ok((file.tracks.clone(), Some(tok.clone()), false));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let opts = playterm_subsonic::FetchLibraryOptions {
+                    album_parallelism: album_p,
+                    artist_parallelism: artist_p,
+                };
+                let tracks = playterm_subsonic::fetch_all_library_songs_with_options(&client, opts)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let scan_tok = if nav_skip {
+                    client
+                        .get_scan_status()
+                        .await
+                        .ok()
+                        .and_then(|s| s.last_scan)
+                } else {
+                    None
+                };
+                Ok((tracks, scan_tok, force))
+            }
+            .await;
+            let _ = tx.send(LibraryUpdate::LibraryIndexRefreshComplete { result }).await;
+        });
+    }
+
+    pub fn flash_status(&mut self, msg: impl Into<String>) {
+        self.flash_status_secs(msg, 3);
+    }
+
+    pub fn flash_status_secs(&mut self, msg: impl Into<String>, secs: u64) {
+        self.status_flash = Some((msg.into(), Instant::now() + Duration::from_secs(secs)));
+    }
+
+    /// Apply fzf picker selection: append to the queue, or replace the queue when
+    /// `replace` is true (clears queue and stops playback first).
+    pub fn apply_library_index_picks(&mut self, ids: &[String], replace: bool) -> usize {
+        if ids.is_empty() {
+            return 0;
+        }
+        if replace {
+            self.queue.songs.clear();
+            self.queue.cursor = 0;
+            self.queue.scroll = 0;
+            self.queue.pre_shuffle_order = None;
+            let _ = self.player_tx.send(PlayerCommand::Stop);
+            self.playback.current_song = None;
+            self.playback.elapsed = std::time::Duration::ZERO;
+            self.playback.paused = false;
+            self.playback.player_loaded = false;
+        }
+        let was_empty = self.queue.songs.is_empty();
+        let mut n = 0usize;
+        for id in ids {
+            if let Some(song) = self.library_index_by_id.get(id.as_str()).cloned() {
+                self.queue.push(song);
+                n += 1;
+            }
+        }
+        if n == 0 {
+            let msg = if ids.len() == 1 {
+                "Selected track not found in index"
+            } else {
+                "Selected tracks not found in index"
+            };
+            self.flash_status(msg);
+            return 0;
+        }
+        if was_empty && !self.queue.songs.is_empty() {
+            self.queue.cursor = 0;
+            self.play_current();
+        }
+        if replace {
+            self.flash_status_secs(
+                if n == 1 {
+                    "Replaced queue (1 track)".into()
+                } else {
+                    format!("Replaced queue ({n} tracks)")
+                },
+                3,
+            );
+        } else if n > 1 {
+            self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
+        }
+        n
     }
 
     /// Spawn a task to fetch albums for the given artist.
@@ -997,6 +1163,48 @@ impl App {
                 if let Some(ref mut picker) = self.playlist_picker {
                     picker.playlists = playlists;
                     picker.loading = false;
+                }
+            }
+            LibraryUpdate::LibraryIndexRefreshComplete { result } => {
+                self.library_index_refreshing = false;
+                self.library_index_refresh_started = None;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                match result {
+                    Ok((tracks, navidrome_last_scan, forced)) => {
+                        let path = self.config.resolved_library_index_path();
+                        let scan_save = navidrome_last_scan.as_deref();
+                        if let Err(e) =
+                            crate::library_index::save(&path, &tracks, now, scan_save)
+                        {
+                            eprintln!("library index save: {e}");
+                        }
+                        self.library_index_refreshed_at = Some(now);
+                        self.library_index_tracks = tracks;
+                        self.library_index_by_id =
+                            crate::library_index::index_by_id(&self.library_index_tracks);
+                        let msg = if forced {
+                            "Library index refresh complete"
+                        } else {
+                            "Library index updated"
+                        };
+                        self.status_flash = Some((
+                            msg.into(),
+                            Instant::now() + Duration::from_secs(2),
+                        ));
+                        if forced && self.config.library_notify_on_forced_index_refresh {
+                            crate::desktop_notify::spawn_forced_library_index_complete();
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("library index refresh: {e}");
+                        self.status_flash = Some((
+                            format!("Library index refresh failed: {e}"),
+                            Instant::now() + Duration::from_secs(5),
+                        ));
+                    }
                 }
             }
         }
@@ -1429,6 +1637,8 @@ impl App {
                     }
                 }
             }
+            Action::LibraryIndexRefresh => self.spawn_library_index_refresh(true),
+            Action::LibraryFzfPicker => {}
             Action::Quit => self.should_quit = true,
             Action::SwitchTab => {
                 self.playlist_overlay.visible = false;

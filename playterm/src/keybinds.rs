@@ -85,12 +85,24 @@ pub struct Keybinds {
     /// Jump to NowPlaying tab (default: '3')
     pub go_to_nowplaying:   KeySpec,
     pub quit:               KeySpec,
+    /// Fuzzy library picker (`None` = disabled).
+    pub library_fzf:        Option<KeySpec>,
+    /// Force library index refresh (`None` = disabled).
+    pub library_refresh:    Option<KeySpec>,
 }
 
 impl Keybinds {
     pub fn from_section(sec: &KeybindsSection) -> Self {
         fn resolve(opt: Option<&str>, default: KeySpec) -> KeySpec {
             opt.and_then(parse_key).unwrap_or(default)
+        }
+        /// `None` in config → `default`; empty string → disabled (`None` output).
+        fn resolve_opt(opt: Option<&str>, default: Option<KeySpec>) -> Option<KeySpec> {
+            match opt {
+                None => default,
+                Some(s) if s.trim().is_empty() => None,
+                Some(s) => parse_key(s),
+            }
         }
         Self {
             scroll_up:          resolve(sec.scroll_up.as_deref(),          KeySpec::new(KeyCode::Char('k'))),
@@ -116,6 +128,20 @@ impl Keybinds {
             go_to_browser:      resolve(sec.go_to_browser.as_deref(),       KeySpec::new(KeyCode::Char('2'))),
             go_to_nowplaying:   resolve(sec.go_to_nowplaying.as_deref(),    KeySpec::new(KeyCode::Char('3'))),
             quit:               resolve(sec.quit.as_deref(),                KeySpec::new(KeyCode::Char('q'))),
+            library_fzf: resolve_opt(
+                sec.library_fzf.as_deref(),
+                Some(KeySpec {
+                    code: KeyCode::Char('f'),
+                    modifiers: KeyModifiers::CONTROL,
+                }),
+            ),
+            library_refresh: resolve_opt(
+                sec.library_refresh.as_deref(),
+                Some(KeySpec {
+                    code: KeyCode::Char('r'),
+                    modifiers: KeyModifiers::CONTROL,
+                }),
+            ),
         }
     }
 }
@@ -139,6 +165,20 @@ fn parse_key(s: &str) -> Option<KeySpec> {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() == 1 {
         return Some(KeySpec::new(KeyCode::Char(chars[0])));
+    }
+
+    // Ctrl+x (lowercase letter after prefix).
+    if let Some(rest) = s.strip_prefix("Ctrl+").or_else(|| s.strip_prefix("ctrl+")) {
+        let mut it = rest.chars();
+        if let Some(c) = it.next() {
+            if it.next().is_none() {
+                return Some(KeySpec {
+                    code: KeyCode::Char(c.to_ascii_lowercase()),
+                    modifiers: KeyModifiers::CONTROL,
+                });
+            }
+        }
+        return None;
     }
 
     // Named special keys.

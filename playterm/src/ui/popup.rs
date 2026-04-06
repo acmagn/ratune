@@ -40,6 +40,11 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
             ("A",       "On artist / album add to queue"),
             ("D",       "Clear queue"),
         ]),
+        ("Library (fzf)", vec![
+            ("Ctrl+f", "Open picker (Tab multi-select)"),
+            ("Enter", "Append picks to queue"),
+            ("Ctrl+r", "In picker: replace queue · else: refresh index"),
+        ]),
         ("Volume & Display", vec![
             ("+ / -", "Volume up / down"),
             ("t",     "Toggle dynamic theme"),

@@ -139,6 +139,20 @@ pub struct SubsonicLibrary {
     pub artists: Vec<Artist>,
 }
 
+/// Library scan state from `getScanStatus` (Subsonic 1.15+). Navidrome includes
+/// `last_scan` as an RFC3339 timestamp after a completed scan.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanStatus {
+    #[serde(default)]
+    pub scanning: bool,
+    #[serde(default)]
+    pub count: i64,
+    #[serde(default)]
+    pub folder_count: i64,
+    pub last_scan: Option<String>,
+}
+
 // ── Lyrics types ──────────────────────────────────────────────────────────────
 
 /// One line of lyrics returned by `getLyricsBySongId`.
@@ -264,4 +278,18 @@ pub(crate) struct PlaylistBody {
     pub status: String,
     pub error: Option<SubsonicError>,
     pub playlist: Option<PlaylistDetail>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ScanStatusEnvelope {
+    #[serde(rename = "subsonic-response")]
+    pub response: ScanStatusBody,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ScanStatusBody {
+    pub status: String,
+    pub error: Option<SubsonicError>,
+    #[serde(rename = "scanStatus")]
+    pub scan_status: Option<ScanStatus>,
 }

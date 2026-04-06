@@ -113,6 +113,10 @@ pub enum Action {
     PlaylistConfirmYes,
     /// Decline the yes/no confirmation prompt.
     PlaylistConfirmNo,
+    /// Open the fzf (or `sk`) track picker using the local metadata index.
+    LibraryFzfPicker,
+    /// Force a full refresh of the metadata index from Subsonic.
+    LibraryIndexRefresh,
     Quit,
     None,
 }

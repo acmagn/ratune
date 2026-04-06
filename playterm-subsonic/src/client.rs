@@ -17,13 +17,18 @@
 
 use anyhow::{Result, anyhow};
 use reqwest::{Client, ClientBuilder};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use crate::error::check_status;
 use crate::models::{
     Album, AlbumEnvelope, Artist, ArtistEnvelope, Artists, ArtistsEnvelope,
     PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope,
-    SearchEnvelope, SearchResult3, Song, SongEnvelope, SubsonicLibrary,
+    ScanStatus, ScanStatusEnvelope, SearchEnvelope, SearchResult3, Song, SongEnvelope,
+    SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -128,6 +133,24 @@ impl SubsonicClient {
     }
 
     // ── Public API ─────────────────────────────────────────────────────────────
+
+    /// Library scan progress (`getScanStatus`, Subsonic 1.15+). Navidrome sets
+    /// [`ScanStatus::last_scan`] when a scan has finished.
+    pub async fn get_scan_status(&self) -> Result<ScanStatus> {
+        let env: ScanStatusEnvelope = self
+            .http
+            .get(self.endpoint_url("getScanStatus"))
+            .query(&self.auth_params())
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        r.scan_status
+            .clone()
+            .ok_or_else(|| anyhow!("missing 'scanStatus' in getScanStatus response"))
+    }
 
     /// Ping the server to verify connectivity and authentication.
     pub async fn ping(&self) -> Result<()> {
@@ -467,11 +490,52 @@ pub async fn fetch_library(client: &SubsonicClient) -> Result<SubsonicLibrary> {
     Ok(SubsonicLibrary { artists })
 }
 
-/// Fetch all songs for a single artist: calls `getArtist` for album stubs, then
-/// `getAlbum` for each album sequentially.
-///
-/// Returns a flat, disc+track-number-sorted `Vec<Song>` across all albums.
-pub async fn fetch_songs_for_artist(client: &SubsonicClient, artist: &Artist) -> Vec<Song> {
+/// Many servers (including Navidrome) omit `artist` on each `Song` in `getAlbum`
+/// even when the album has `artist` set. Fill from album, then the library artist
+/// name, so UIs and indexes (e.g. fzf) can search by performer name.
+fn apply_album_artist_fallback(song: &mut Song, album_artist: Option<&str>, library_artist_name: &str) {
+    let track_has_artist = song
+        .artist
+        .as_deref()
+        .map(|a| !a.trim().is_empty())
+        .unwrap_or(false);
+    if track_has_artist {
+        return;
+    }
+    if let Some(a) = album_artist {
+        if !a.trim().is_empty() {
+            song.artist = Some(a.to_string());
+            return;
+        }
+    }
+    if !library_artist_name.trim().is_empty() {
+        song.artist = Some(library_artist_name.to_string());
+    }
+}
+
+/// Concurrency for full-library metadata walks ([`fetch_all_library_songs_with_options`]).
+#[derive(Debug, Clone, Copy)]
+pub struct FetchLibraryOptions {
+    /// Concurrent `getAlbum` requests per artist (minimum 1).
+    pub album_parallelism: usize,
+    /// How many artists to walk concurrently (minimum 1).
+    pub artist_parallelism: usize,
+}
+
+impl Default for FetchLibraryOptions {
+    fn default() -> Self {
+        Self {
+            album_parallelism: 12,
+            artist_parallelism: 4,
+        }
+    }
+}
+
+async fn fetch_songs_for_artist_inner(
+    client: &SubsonicClient,
+    artist: &Artist,
+    album_parallelism: usize,
+) -> Vec<Song> {
     let artist_detail = match client.get_artist(&artist.id).await {
         Ok(a) => a,
         Err(e) => {
@@ -480,11 +544,40 @@ pub async fn fetch_songs_for_artist(client: &SubsonicClient, artist: &Artist) ->
         }
     };
 
+    let library_name = artist_detail.name.clone();
+    let library_name_ref = library_name.as_str();
+    let limit = album_parallelism.max(1);
+    let sem = Arc::new(Semaphore::new(limit));
+    let mut set = JoinSet::new();
+
+    for album_stub in artist_detail.album {
+        let client = client.clone();
+        let sem = sem.clone();
+        let aid = album_stub.id.clone();
+        set.spawn(async move {
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return (aid, Err(anyhow!("semaphore closed"))),
+            };
+            (aid, client.get_album(&album_stub.id).await)
+        });
+    }
+
     let mut songs: Vec<Song> = Vec::new();
-    for album_stub in &artist_detail.album {
-        match client.get_album(&album_stub.id).await {
-            Ok(album) => songs.extend(album.song),
-            Err(e) => eprintln!("playterm-subsonic: get_album({}) failed — {e}", album_stub.id),
+    while let Some(joined) = set.join_next().await {
+        match joined {
+            Ok((_album_id, Ok(album))) => {
+                let album_artist_owned = album.artist.clone();
+                let album_artist = album_artist_owned.as_deref();
+                for mut s in album.song {
+                    apply_album_artist_fallback(&mut s, album_artist, library_name_ref);
+                    songs.push(s);
+                }
+            }
+            Ok((album_id, Err(e))) => {
+                eprintln!("playterm-subsonic: get_album({}) failed — {e}", album_id);
+            }
+            Err(e) => eprintln!("playterm-subsonic: album task join — {e}"),
         }
     }
 
@@ -492,11 +585,118 @@ pub async fn fetch_songs_for_artist(client: &SubsonicClient, artist: &Artist) ->
     songs
 }
 
+/// Fetch all songs for a single artist: `getArtist`, then `getAlbum` for each album.
+///
+/// Uses the same default album concurrency as [`FetchLibraryOptions::default`].
+/// Returns a flat, disc+track-number-sorted `Vec<Song>` across all albums.
+pub async fn fetch_songs_for_artist(client: &SubsonicClient, artist: &Artist) -> Vec<Song> {
+    fetch_songs_for_artist_inner(client, artist, FetchLibraryOptions::default().album_parallelism).await
+}
+
+/// Fetch metadata for every track in the library: `getArtists`, then for each
+/// artist `getArtist` + parallel `getAlbum` (see [`FetchLibraryOptions`]).
+///
+/// Deduplicates by song ID and sorts by artist name, album id, disc, track.
+pub async fn fetch_all_library_songs_with_options(
+    client: &SubsonicClient,
+    opts: FetchLibraryOptions,
+) -> Result<Vec<Song>> {
+    let lib = fetch_library(client).await?;
+    let artist_limit = opts.artist_parallelism.max(1);
+    let album_p = opts.album_parallelism.max(1);
+    let sem = Arc::new(Semaphore::new(artist_limit));
+    let mut set = JoinSet::new();
+
+    for artist in lib.artists {
+        let client = client.clone();
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem
+                .acquire()
+                .await
+                .expect("library index artist semaphore");
+            fetch_songs_for_artist_inner(&client, &artist, album_p).await
+        });
+    }
+
+    let mut by_id: HashMap<String, Song> = HashMap::new();
+    while let Some(joined) = set.join_next().await {
+        match joined {
+            Ok(song_vecs) => {
+                for s in song_vecs {
+                    by_id.insert(s.id.clone(), s);
+                }
+            }
+            Err(e) => eprintln!("playterm-subsonic: artist task join — {e}"),
+        }
+    }
+
+    let mut tracks: Vec<Song> = by_id.into_values().collect();
+    tracks.sort_by(|a, b| {
+        let an = a.artist.as_deref().unwrap_or("");
+        let bn = b.artist.as_deref().unwrap_or("");
+        an.cmp(bn)
+            .then_with(|| a.album_id.cmp(&b.album_id))
+            .then_with(|| a.disc_number.unwrap_or(1).cmp(&b.disc_number.unwrap_or(1)))
+            .then_with(|| a.track.unwrap_or(0).cmp(&b.track.unwrap_or(0)))
+    });
+    Ok(tracks)
+}
+
+/// Like [`fetch_all_library_songs_with_options`] with [`FetchLibraryOptions::default`].
+pub async fn fetch_all_library_songs(client: &SubsonicClient) -> Result<Vec<Song>> {
+    fetch_all_library_songs_with_options(client, FetchLibraryOptions::default()).await
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn song_with_artist(artist: Option<String>) -> Song {
+        Song {
+            id: "1".into(),
+            title: "T".into(),
+            album: Some("Alb".into()),
+            artist,
+            album_id: None,
+            artist_id: None,
+            track: None,
+            disc_number: None,
+            year: None,
+            genre: None,
+            cover_art: None,
+            duration: None,
+            bit_rate: None,
+            content_type: None,
+            suffix: None,
+            size: None,
+            path: None,
+            starred: None,
+        }
+    }
+
+    #[test]
+    fn album_artist_fallback_fills_empty_track_artist() {
+        let mut s = song_with_artist(None);
+        apply_album_artist_fallback(&mut s, Some("Album Artist"), "Library Artist");
+        assert_eq!(s.artist.as_deref(), Some("Album Artist"));
+    }
+
+    #[test]
+    fn album_artist_fallback_uses_library_when_album_empty() {
+        let mut s = song_with_artist(None);
+        apply_album_artist_fallback(&mut s, None, "Library Artist");
+        assert_eq!(s.artist.as_deref(), Some("Library Artist"));
+    }
+
+    #[test]
+    fn album_artist_fallback_keeps_track_artist() {
+        let mut s = song_with_artist(Some("Feat".into()));
+        apply_album_artist_fallback(&mut s, Some("Album Artist"), "Library Artist");
+        assert_eq!(s.artist.as_deref(), Some("Feat"));
+    }
 
     /// Build a test client from environment variables, falling back to the
     /// hard-coded Navidrome instance.

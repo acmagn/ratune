@@ -1,9 +1,12 @@
 mod action;
 mod app;
 mod cache;
+mod fzf_picker;
+mod library_index;
 mod mpris;
 mod color;
 mod config;
+mod desktop_notify;
 mod history;
 mod keybinds;
 mod lyrics;
@@ -82,6 +85,8 @@ async fn main() -> Result<()> {
 
     // Begin fetching artists immediately.
     app.fetch_artists();
+    // Background metadata index refresh when missing or stale (Milestone 2).
+    app.spawn_library_index_refresh(false);
 
     // Spawn a task that sets a flag on SIGTERM or SIGHUP so the main loop
     // can shut down cleanly (same path as pressing `q`).
@@ -175,6 +180,69 @@ async fn main() -> Result<()> {
     }
 
     result
+}
+
+/// Suspend the TUI and run `fzf` over the local metadata index.
+fn run_library_fzf_picker(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    last_rendered_art: &mut Option<(String, Rect)>,
+    art_displayed: &mut bool,
+) -> anyhow::Result<()> {
+    use crate::fzf_picker;
+    use crate::library_index;
+
+    if !app.config.library_index_enabled {
+        app.flash_status("Library index is disabled in config");
+        return Ok(());
+    }
+    if app.library_index_refreshing {
+        app.flash_status_secs("Library index refresh in progress — try again shortly", 8);
+        return Ok(());
+    }
+    if app.library_index_tracks.is_empty() {
+        app.flash_status("Library index empty — wait for refresh or press Ctrl+r");
+        return Ok(());
+    }
+
+    fzf_picker::suspend_tui(terminal, app.in_tmux)?;
+    let input = library_index::fzf_input_lines(&app.library_index_tracks);
+    let mut fzf_args = app.config.fzf_args.clone();
+    if !fzf_args.iter().any(|a| a.starts_with("--header")) {
+        fzf_args.insert(0, format!("--header={}", library_index::fzf_header_line()));
+    }
+    let res = fzf_picker::run_fzf(&app.config.fzf_binary, &fzf_args, &input);
+    if let Err(e) = fzf_picker::resume_tui(terminal, app.in_tmux) {
+        eprintln!("resume terminal after fzf: {e}");
+    }
+    // Subprocess UI may leave the alternate buffer and Kitty graphics out of sync;
+    // clear everything and force a full redraw on the next frame.
+    if let Err(e) = terminal.clear() {
+        eprintln!("terminal clear after fzf: {e}");
+    }
+    if app.kitty_supported {
+        let _ = ui::kitty_art::clear_image(app.in_tmux);
+        *last_rendered_art = None;
+        *art_displayed = false;
+        if app.active_tab == Tab::Home {
+            app.home_art_needs_redraw = true;
+        }
+    }
+    match res {
+        Ok(Some(lines)) => {
+            let (replace, rows) = fzf_picker::parse_fzf_output_lines(&lines);
+            let ids: Vec<String> = rows
+                .iter()
+                .filter_map(|line| library_index::parse_pick_line(line))
+                .collect();
+            if !ids.is_empty() {
+                app.apply_library_index_picks(&ids, replace);
+            }
+        }
+        Ok(None) => {}
+        Err(e) => app.flash_status(format!("fzf: {e}")),
+    }
+    Ok(())
 }
 
 async fn run_loop(
@@ -436,7 +504,19 @@ async fn run_loop(
                             } else {
                                 map_key(key.code, key.modifiers, app.active_tab, &app.keybinds)
                             };
-                            app.dispatch(action);
+                            match action {
+                                Action::LibraryFzfPicker => {
+                                    if let Err(e) = run_library_fzf_picker(
+                                        app,
+                                        terminal,
+                                        &mut last_rendered_art,
+                                        &mut art_displayed,
+                                    ) {
+                                        eprintln!("fzf picker: {e}");
+                                    }
+                                }
+                                other => app.dispatch(other),
+                            }
                         }
                     }
                 }
@@ -854,6 +934,17 @@ fn map_key(code: KeyCode, modifiers: KeyModifiers, active_tab: Tab, kb: &Keybind
     if kb.search.matches(code, modifiers)       { return Action::SearchStart;  }
     if kb.volume_up.matches(code, modifiers)    { return Action::VolumeUp;     }
     if kb.volume_down.matches(code, modifiers)  { return Action::VolumeDown;   }
+
+    if let Some(spec) = &kb.library_fzf {
+        if spec.matches(code, modifiers) {
+            return Action::LibraryFzfPicker;
+        }
+    }
+    if let Some(spec) = &kb.library_refresh {
+        if spec.matches(code, modifiers) {
+            return Action::LibraryIndexRefresh;
+        }
+    }
 
     Action::None
 }
