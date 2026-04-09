@@ -37,7 +37,7 @@ use ratatui::Terminal;
 
 use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
-use config::Config;
+use config::{Config, HomePanel};
 use keybinds::Keybinds;
 use state::{PlaylistFocus, PlaylistInputMode};
 
@@ -331,43 +331,93 @@ async fn run_loop(
                     }
                 } else if let Some((cover_id, bytes)) = &app.art_cache {
                     let sz = terminal.size()?;
-                    let art_rect = ui::layout::art_rect(Rect::new(0, 0, sz.width, sz.height));
+                    let show_art = app.config.nowplaying_show_art;
+                    let art_right = app
+                        .config
+                        .nowplaying_art_position
+                        .trim()
+                        .eq_ignore_ascii_case("right");
+                    let visualizer_under_art = app.visualizer_visible
+                        && app
+                            .config
+                            .visualizer_location
+                            .trim()
+                            .eq_ignore_ascii_case("art")
+                        && show_art;
+                    let boxed_np = app
+                        .config
+                        .now_playing_layout
+                        .trim()
+                        .eq_ignore_ascii_case("boxed");
+                    let np_under_art = boxed_np
+                        && app
+                            .config
+                            .now_playing_box_location
+                            .trim()
+                            .eq_ignore_ascii_case("art")
+                        && show_art;
+
+                    let art_rect_opt = ui::layout::now_playing_album_art_rect(
+                        Rect::new(0, 0, sz.width, sz.height),
+                        &ui::layout::layout_options_for_app(app),
+                        show_art,
+                        app.config.nowplaying_art_width_percent,
+                        art_right,
+                        app.visualizer_visible,
+                        visualizer_under_art,
+                        boxed_np,
+                        np_under_art,
+                    );
 
                     if kitty_cover_unrenderable.as_deref() == Some(cover_id.as_str()) {
                         if art_displayed {
                             let _ = ui::kitty_art::clear_image(app.in_tmux);
                             art_displayed = false;
                         }
-                    } else {
-                        let stored_matches = last_rendered_art
-                            .as_ref()
-                            .map(|(id, r)| id == cover_id && r == &art_rect)
-                            .unwrap_or(false);
-
-                        if stored_matches && art_displayed {
-                            // Image is already visible — nothing to do.
+                    } else if let Some(art_rect) = art_rect_opt {
+                        let placement = ui::kitty_art::album_art_placeholder_inner(art_rect);
+                        if placement.width == 0 || placement.height == 0 {
+                            if art_displayed {
+                                let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                art_displayed = false;
+                            }
+                            last_rendered_art = None;
                         } else {
-                            // Album changed, first display, tab return, or terminal
-                            // was resized — full re-encode and re-transmit.
-                            match ui::kitty_art::render_image(
-                                bytes,
-                                art_rect,
-                                app.in_tmux,
-                                app.tmux_status_offset,
-                            ) {
-                                Ok(()) => {
-                                    last_rendered_art = Some((cover_id.clone(), art_rect));
-                                    art_displayed = true;
-                                }
-                                Err(e) => {
-                                    eprintln!("kitty render: {e}");
-                                    let _ = ui::kitty_art::clear_image(app.in_tmux);
-                                    kitty_cover_unrenderable = Some(cover_id.clone());
-                                    last_rendered_art = None;
-                                    art_displayed = false;
+                            let stored_matches = last_rendered_art
+                                .as_ref()
+                                .map(|(id, r)| id == cover_id && r == &placement)
+                                .unwrap_or(false);
+
+                            if stored_matches && art_displayed {
+                                // Image is already visible — nothing to do.
+                            } else {
+                                // Album changed, first display, tab return, or terminal
+                                // was resized — full re-encode and re-transmit.
+                                match ui::kitty_art::render_image(
+                                    bytes,
+                                    placement,
+                                    app.in_tmux,
+                                    app.tmux_status_offset,
+                                ) {
+                                    Ok(()) => {
+                                        last_rendered_art = Some((cover_id.clone(), placement));
+                                        art_displayed = true;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("kitty render: {e}");
+                                        let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                        kitty_cover_unrenderable = Some(cover_id.clone());
+                                        last_rendered_art = None;
+                                        art_displayed = false;
+                                    }
                                 }
                             }
                         }
+                    } else if art_displayed {
+                        // Art column hidden — clear Kitty overlay.
+                        let _ = ui::kitty_art::clear_image(app.in_tmux);
+                        last_rendered_art = None;
+                        art_displayed = false;
                     }
                 } else if art_displayed {
                     // In NowPlaying tab but no art — clear any stale image.
@@ -394,7 +444,7 @@ async fn run_loop(
                 let sz = terminal.size()?;
                 let area = Rect::new(0, 0, sz.width, sz.height);
                 // Replicate the strip area used in home_tab.rs render.
-                let content_area = ui::layout::build_layout(area).center;
+                let content_area = ui::layout::build_layout(area, &ui::layout::layout_options_for_app(app)).center;
                 let half = (content_area.height / 2).max(3);
                 let top_area = Rect { height: half, ..content_area };
                 // albums_inner = top_area inset by 1 on each side (block border).
@@ -629,45 +679,53 @@ async fn run_loop(
 
 /// Handle mouse clicks within the Home tab center area.
 fn handle_home_click(x: u16, y: u16, app: &mut App, center: ratatui::layout::Rect) {
-    use ratatui::layout::{Constraint, Layout};
-    use crate::ui::kitty_art::art_strip_thumbnail_size;
+    use crate::ui::home_tab::compute_home_layout;
 
     if y < center.y || y >= center.y + center.height {
         return;
     }
 
-    // Replicate the home_tab layout: top 50% = recently played, bottom 50% = tracks+rediscover.
-    let half = (center.height / 2).max(3);
-    let bottom_h = center.height.saturating_sub(half);
-
-    let top_area = ratatui::layout::Rect {
-        x: center.x,
-        y: center.y,
-        width: center.width,
-        height: half,
-    };
-    let bottom_area = ratatui::layout::Rect {
-        x: center.x,
-        y: center.y + half,
-        width: center.width,
-        height: bottom_h,
+    let Some(layout) = compute_home_layout(center, &app.config) else {
+        return;
     };
 
-    // ── Top block: Recently Played ────────────────────────────────────────────
-    if y >= top_area.y && y < top_area.y + top_area.height {
-        // Inner area (subtract 1-cell border on all sides).
-        let inner = ratatui::layout::Rect {
-            x: top_area.x + 1,
-            y: top_area.y + 1,
-            width: top_area.width.saturating_sub(2),
-            height: top_area.height.saturating_sub(2),
-        };
-        if y >= inner.y && y < inner.y + inner.height && x >= inner.x && x < inner.x + inner.width {
-            // Focus the RecentAlbums section.
+    // ── Top band ─────────────────────────────────────────────────────────────
+    if y >= layout.top.y && y < layout.top.y + layout.top.height {
+        home_click_panel(x, y, layout.top, layout.top_panel, app);
+        return;
+    }
+
+    if layout.bottom_h == 0 {
+        return;
+    }
+
+    if x >= layout.bottom_left.x && x < layout.bottom_left.x + layout.bottom_left.width {
+        home_click_panel(x, y, layout.bottom_left, layout.bottom_left_panel, app);
+        return;
+    }
+
+    if x >= layout.bottom_right.x && x < layout.bottom_right.x + layout.bottom_right.width {
+        home_click_panel(x, y, layout.bottom_right, layout.bottom_right_panel, app);
+    }
+}
+
+fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App) {
+    use crate::ui::kitty_art::art_strip_thumbnail_size;
+
+    match panel {
+        HomePanel::RecentAlbums => {
+            let inner = Rect {
+                x: area.x + 1,
+                y: area.y + 1,
+                width: area.width.saturating_sub(2),
+                height: area.height.saturating_sub(2),
+            };
+            if y < inner.y || y >= inner.y + inner.height || x < inner.x || x >= inner.x + inner.width {
+                return;
+            }
             app.home.active_section = app::HomeSection::RecentAlbums;
             app.home.selected_index = 0;
 
-            // Compute which thumbnail was clicked.
             let thumb_area_h = inner.height.saturating_sub(2).max(1);
             let (thumb_cols, _) = art_strip_thumbnail_size(app.cell_px, thumb_area_h);
             let gap = 1u16;
@@ -676,7 +734,6 @@ fn handle_home_click(x: u16, y: u16, app: &mut App, center: ratatui::layout::Rec
             let album_index = app.home.album_scroll_offset + slot;
             if album_index < app.home.recent_albums.len() {
                 if app.home.album_selected_index == album_index {
-                    // Second click on already-selected album: navigate to Browser.
                     if app.kitty_supported {
                         let _ = crate::ui::kitty_art::clear_image(app.in_tmux);
                         let _ = crate::ui::kitty_art::clear_art_strip(app.in_tmux);
@@ -684,39 +741,21 @@ fn handle_home_click(x: u16, y: u16, app: &mut App, center: ratatui::layout::Rec
                     app.active_tab = app::Tab::Browser;
                     app.search_filter = None;
                 } else {
-                    // First click: just select.
                     app.home.album_selected_index = album_index;
                 }
             }
         }
-        return;
-    }
-
-    // ── Bottom blocks ─────────────────────────────────────────────────────────
-    if bottom_h == 0 || y < bottom_area.y || y >= bottom_area.y + bottom_area.height {
-        return;
-    }
-
-    let bottom_cols = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(bottom_area);
-
-    let tracks_area    = bottom_cols[0];
-    let rediscover_area = bottom_cols[1];
-
-    // Recent Tracks block.
-    if x >= tracks_area.x && x < tracks_area.x + tracks_area.width {
-        let inner_y = tracks_area.y + 1;
-        let inner_h = tracks_area.height.saturating_sub(2);
-        if y >= inner_y && y < inner_y + inner_h {
+        HomePanel::RecentTracks => {
+            let inner_y = area.y + 1;
+            let inner_h = area.height.saturating_sub(2);
+            if y < inner_y || y >= inner_y + inner_h {
+                return;
+            }
             let row = (y - inner_y) as usize;
             if row < app.home.recent_tracks.len() {
                 if app.home.active_section == app::HomeSection::RecentTracks
                     && app.home.selected_index == row
                 {
-                    // Second click on already-selected row: play it.
                     app.dispatch(Action::Select);
                 } else {
                     app.home.active_section = app::HomeSection::RecentTracks;
@@ -724,20 +763,17 @@ fn handle_home_click(x: u16, y: u16, app: &mut App, center: ratatui::layout::Rec
                 }
             }
         }
-        return;
-    }
-
-    // Rediscover block.
-    if x >= rediscover_area.x && x < rediscover_area.x + rediscover_area.width {
-        let inner_y = rediscover_area.y + 1;
-        let inner_h = rediscover_area.height.saturating_sub(2);
-        if y >= inner_y && y < inner_y + inner_h {
+        HomePanel::Rediscover => {
+            let inner_y = area.y + 1;
+            let inner_h = area.height.saturating_sub(2);
+            if y < inner_y || y >= inner_y + inner_h {
+                return;
+            }
             let row = (y - inner_y) as usize;
             if row < app.home.rediscover.len() {
                 if app.home.active_section == app::HomeSection::Rediscover
                     && app.home.selected_index == row
                 {
-                    // Second click: navigate to Browser.
                     app.dispatch(Action::Select);
                 } else {
                     app.home.active_section = app::HomeSection::Rediscover;
@@ -1002,7 +1038,7 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
     use state::LoadingState;
 
     // Always use build_layout: the renderer uses it for all three tabs.
-    let areas = ui::layout::build_layout(terminal_size);
+    let areas = ui::layout::build_layout(terminal_size, &ui::layout::layout_options_for_app(app));
     let center = areas.center;
     let now_playing = areas.now_playing;
 
@@ -1029,58 +1065,53 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
         return;
     }
 
-    // ── Now-playing bar: [30% info | 40% controls | 30% progress] ────────────
-    let np_cols = Layout::horizontal([
-        Constraint::Percentage(30),
-        Constraint::Percentage(40),
-        Constraint::Percentage(30),
-    ])
-    .split(now_playing);
+    // ── Now-playing bar (layout matches `ui::now_playing::render`) ───────────
+    let chrome = ui::now_playing::interaction_rects(app, now_playing);
 
-    let controls_area = np_cols[1];
-    let progress_area = np_cols[2];
-
-    // Controls: row 1 of the now-playing bar (0-indexed).
-    if y == now_playing.y + 1
-        && x >= controls_area.x
-        && x < controls_area.x + controls_area.width
-    {
-        // Divide controls into three equal zones: prev | play-pause | next.
-        let rel_x = x - controls_area.x;
-        let third = controls_area.width / 3;
-        if rel_x < third {
-            app.dispatch(Action::PrevTrack);
-        } else if rel_x < 2 * third {
-            app.dispatch(Action::PlayPause);
-        } else {
-            app.dispatch(Action::NextTrack);
+    if let Some(controls_area) = chrome.controls {
+        if y >= controls_area.y
+            && y < controls_area.y + controls_area.height
+            && x >= controls_area.x
+            && x < controls_area.x + controls_area.width
+        {
+            let rel_x = x - controls_area.x;
+            let third = controls_area.width / 3;
+            if rel_x < third {
+                app.dispatch(Action::PrevTrack);
+            } else if rel_x < 2 * third {
+                app.dispatch(Action::PlayPause);
+            } else {
+                app.dispatch(Action::NextTrack);
+            }
+            return;
         }
-        return;
     }
 
-    // Progress bar: row 2 of the now-playing bar.
-    if y == now_playing.y + 2
-        && x >= progress_area.x
-        && x < progress_area.x + progress_area.width
-        && app.playback.current_song.is_some()
-    {
-        if let Some(total) = app.playback.total {
-            let e = app.playback.elapsed.as_secs();
-            let ts = total.as_secs();
-            let elapsed_str_len = format!("{}:{:02}", e / 60, e % 60).len() as u16;
-            let total_str_len = format!("{}:{:02}", ts / 60, ts % 60).len() as u16;
-            let bar_start = progress_area.x + elapsed_str_len + 2;
-            let bar_end = (progress_area.x + progress_area.width)
-                .saturating_sub(total_str_len + 2);
+    if let Some(progress_area) = chrome.progress {
+        if y >= progress_area.y
+            && y < progress_area.y + progress_area.height
+            && x >= progress_area.x
+            && x < progress_area.x + progress_area.width
+            && app.playback.current_song.is_some()
+        {
+            if let Some(total) = app.playback.total {
+                let e = app.playback.elapsed.as_secs();
+                let ts = total.as_secs();
+                let elapsed_str_len = format!("{}:{:02}", e / 60, e % 60).len() as u16;
+                let total_str_len = format!("{}:{:02}", ts / 60, ts % 60).len() as u16;
+                let bar_start = progress_area.x + elapsed_str_len + 2;
+                let bar_end = (progress_area.x + progress_area.width)
+                    .saturating_sub(total_str_len + 2);
 
-            if x >= bar_start && bar_end > bar_start {
-                let bar_w = (bar_end - bar_start) as f64;
-                let ratio = (x - bar_start) as f64 / bar_w;
-                let seek_secs = (ratio * ts as f64) as u64;
-                app.dispatch(Action::SeekTo(std::time::Duration::from_secs(seek_secs)));
+                if x >= bar_start && bar_end > bar_start {
+                    let bar_w = (bar_end - bar_start) as f64;
+                    let ratio = (x - bar_start) as f64 / bar_w;
+                    let seek_secs = (ratio * ts as f64) as u64;
+                    app.dispatch(Action::SeekTo(std::time::Duration::from_secs(seek_secs)));
+                }
             }
+            return;
         }
-        return;
     }
 
     // ── Center area ───────────────────────────────────────────────────────────
@@ -1219,10 +1250,100 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             }
         }
         Tab::NowPlaying => {
+            let show_art = app.config.nowplaying_show_art;
+            let visualizer_under_art = app.visualizer_visible
+                && app
+                    .config
+                    .visualizer_location
+                    .trim()
+                    .eq_ignore_ascii_case("art")
+                && show_art;
+            let boxed_np = app
+                .config
+                .now_playing_layout
+                .trim()
+                .eq_ignore_ascii_case("boxed");
+            let np_under_art = boxed_np
+                && app
+                    .config
+                    .now_playing_box_location
+                    .trim()
+                    .eq_ignore_ascii_case("art")
+                && show_art;
+
+            if boxed_np {
+                if let Some(pane) = ui::layout::now_playing_boxed_pane_rect(
+                    center,
+                    show_art,
+                    app.config.nowplaying_art_width_percent,
+                    app.config
+                        .nowplaying_art_position
+                        .trim()
+                        .eq_ignore_ascii_case("right"),
+                    app.lyrics_visible,
+                    app.visualizer_visible,
+                    visualizer_under_art,
+                    true,
+                    np_under_art,
+                ) {
+                    let chrome = ui::now_playing::interaction_rects_pane(app, pane);
+                    if let Some(controls_area) = chrome.controls {
+                        if y >= controls_area.y
+                            && y < controls_area.y + controls_area.height
+                            && x >= controls_area.x
+                            && x < controls_area.x + controls_area.width
+                        {
+                            let rel_x = x - controls_area.x;
+                            let third = controls_area.width / 3;
+                            if rel_x < third {
+                                app.dispatch(Action::PrevTrack);
+                            } else if rel_x < 2 * third {
+                                app.dispatch(Action::PlayPause);
+                            } else {
+                                app.dispatch(Action::NextTrack);
+                            }
+                            return;
+                        }
+                    }
+                    if let Some(progress_area) = chrome.progress {
+                        if y >= progress_area.y
+                            && y < progress_area.y + progress_area.height
+                            && x >= progress_area.x
+                            && x < progress_area.x + progress_area.width
+                            && app.playback.current_song.is_some()
+                        {
+                            if let Some(total) = app.playback.total {
+                                let e = app.playback.elapsed.as_secs();
+                                let ts = total.as_secs();
+                                let elapsed_str_len = format!("{}:{:02}", e / 60, e % 60).len() as u16;
+                                let total_str_len = format!("{}:{:02}", ts / 60, ts % 60).len() as u16;
+                                let bar_start = progress_area.x + elapsed_str_len + 2;
+                                let bar_end = (progress_area.x + progress_area.width)
+                                    .saturating_sub(total_str_len + 2);
+
+                                if x >= bar_start && bar_end > bar_start {
+                                    let bar_w = (bar_end - bar_start) as f64;
+                                    let ratio = (x - bar_start) as f64 / bar_w;
+                                    let seek_secs = (ratio * ts as f64) as u64;
+                                    app.dispatch(Action::SeekTo(std::time::Duration::from_secs(seek_secs)));
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+
             let queue_area = ui::layout::now_playing_queue_widget_rect(
                 center,
+                show_art,
+                app.config.nowplaying_art_width_percent,
+                app.config.nowplaying_art_position.trim().eq_ignore_ascii_case("right"),
                 app.lyrics_visible,
                 app.visualizer_visible,
+                visualizer_under_art,
+                boxed_np,
+                np_under_art,
             );
             if x < queue_area.x || x >= queue_area.x + queue_area.width {
                 return;

@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{HomeSection, HomeState, RecentAlbum};
+use crate::config::{Config, HomePanel};
 use crate::theme::Theme;
 use crate::ui::kitty_art::{art_strip_thumbnail_size, visible_thumbnail_count};
 
@@ -50,69 +51,73 @@ fn titled_block<'a>(title: &'a str, is_active: bool, accent: Color, theme: &Them
         .title(Span::styled(title, title_style))
 }
 
-// ── Top-level render ──────────────────────────────────────────────────────────
+// ── Layout (shared with mouse hit-testing in main.rs) ─────────────────────────
 
-#[allow(clippy::too_many_arguments)]
-pub fn render_home_tab(
-    f: &mut Frame,
-    area: Rect,
-    home: &HomeState,
-    accent: Color,
-    kitty_supported: bool,
-    help_visible: bool,
-    cell_px: Option<(u16, u16)>,
-    theme: &Theme,
-) {
-    if area.height == 0 {
-        return;
+/// Resolved rectangles for the three Home panels. `bottom_*` are only meaningful when
+/// `bottom_h > 0` (see [`compute_home_layout`]).
+pub struct HomeLayout {
+    pub top: Rect,
+    pub bottom_left: Rect,
+    pub bottom_right: Rect,
+    pub top_panel: HomePanel,
+    pub bottom_left_panel: HomePanel,
+    pub bottom_right_panel: HomePanel,
+    pub bottom_h: u16,
+}
+
+#[allow(dead_code)]
+pub fn home_panel_to_section(panel: HomePanel) -> HomeSection {
+    match panel {
+        HomePanel::RecentAlbums => HomeSection::RecentAlbums,
+        HomePanel::RecentTracks => HomeSection::RecentTracks,
+        HomePanel::Rediscover => HomeSection::Rediscover,
     }
+}
 
-    // Split content area: top 50% = Recently Played, bottom 50% = two side-by-side blocks.
-    let half = (area.height / 2).max(3);
-    let bottom_h = area.height.saturating_sub(half);
+/// Split the Home content area into a top band and two bottom columns, following `[ui.hometab].layout`.
+pub fn compute_home_layout(area: Rect, cfg: &Config) -> Option<HomeLayout> {
+    if area.height == 0 {
+        return None;
+    }
+    let top_pct = cfg.home_top_height_percent as u32;
+    let top_h = ((area.height as u32 * top_pct / 100).max(3) as u16).min(area.height);
+    let bottom_h = area.height.saturating_sub(top_h);
 
     let top_level = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(half),
+            Constraint::Length(top_h),
             Constraint::Length(bottom_h),
         ])
         .split(area);
 
-    let top_area    = top_level[0];
+    let top_area = top_level[0];
     let bottom_area = top_level[1];
+    let panels = cfg.home_panels;
+    let top_panel = panels[0];
+    let bottom_left_panel = panels[1];
+    let bottom_right_panel = panels[2];
 
-    // ── Top: Recently Played block ────────────────────────────────────────────
-    let is_albums_active = home.active_section == HomeSection::RecentAlbums;
-    let albums_block = titled_block(" Recently Played ", is_albums_active, accent, theme);
-    let albums_inner = albums_block.inner(top_area);
-    f.render_widget(albums_block, top_area);
-
-    if kitty_supported && !help_visible {
-        // NOTE: render_art_strip (heavy: decode + Lanczos3 resize + zlib + base64 + Kitty
-        // protocol write) is intentionally NOT called here on every frame.  Instead it is
-        // driven from main.rs only when `app.home_art_needs_redraw` is set, which happens:
-        //   • on tab entry (GoToHome / SwitchTab landing)
-        //   • when a HomeArt cache update arrives
-        //   • when the album scroll/selection changes
-        // This keeps the per-frame render budget well under 1 ms.
-
-        // Render album/artist name rows below where the thumbnails are placed.
-        render_art_strip_labels(f, albums_inner, home, accent, cell_px, is_albums_active);
-    } else {
-        render_art_strip_text_fallback(
-            f,
-            albums_inner,
-            &home.recent_albums,
-            home.album_selected_index,
-            accent,
-            is_albums_active,
-        );
-    }
-
-    // ── Bottom: two side-by-side blocks ──────────────────────────────────────
     if bottom_h == 0 {
-        return;
+        return Some(HomeLayout {
+            top: top_area,
+            bottom_left: Rect {
+                x: area.x,
+                y: area.y,
+                width: 0,
+                height: 0,
+            },
+            bottom_right: Rect {
+                x: area.x,
+                y: area.y,
+                width: 0,
+                height: 0,
+            },
+            top_panel,
+            bottom_left_panel,
+            bottom_right_panel,
+            bottom_h: 0,
+        });
     }
 
     let bottom_cols = Layout::default()
@@ -123,11 +128,113 @@ pub fn render_home_tab(
         ])
         .split(bottom_area);
 
-    let tracks_area   = bottom_cols[0];
-    let rediscover_area = bottom_cols[1];
+    Some(HomeLayout {
+        top: top_area,
+        bottom_left: bottom_cols[0],
+        bottom_right: bottom_cols[1],
+        top_panel,
+        bottom_left_panel,
+        bottom_right_panel,
+        bottom_h,
+    })
+}
 
-    render_recent_tracks_block(f, tracks_area, home, accent, theme);
-    render_rediscover_block(f, rediscover_area, home, accent, theme);
+// ── Top-level render ──────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+pub fn render_home_tab(
+    f: &mut Frame,
+    area: Rect,
+    home: &HomeState,
+    cfg: &Config,
+    accent: Color,
+    kitty_supported: bool,
+    help_visible: bool,
+    cell_px: Option<(u16, u16)>,
+    theme: &Theme,
+) {
+    let Some(layout) = compute_home_layout(area, cfg) else {
+        return;
+    };
+
+    let show_album_art = cfg.home_recent_albums_show_art;
+    let use_kitty_art = kitty_supported && !help_visible && show_album_art;
+
+    render_home_panel(
+        f,
+        layout.top,
+        layout.top_panel,
+        home,
+        accent,
+        use_kitty_art,
+        cell_px,
+        theme,
+    );
+
+    if layout.bottom_h == 0 {
+        return;
+    }
+
+    render_home_panel(
+        f,
+        layout.bottom_left,
+        layout.bottom_left_panel,
+        home,
+        accent,
+        use_kitty_art,
+        cell_px,
+        theme,
+    );
+    render_home_panel(
+        f,
+        layout.bottom_right,
+        layout.bottom_right_panel,
+        home,
+        accent,
+        use_kitty_art,
+        cell_px,
+        theme,
+    );
+}
+
+fn render_home_panel(
+    f: &mut Frame,
+    area: Rect,
+    panel: HomePanel,
+    home: &HomeState,
+    accent: Color,
+    use_kitty_art: bool,
+    cell_px: Option<(u16, u16)>,
+    theme: &Theme,
+) {
+    match panel {
+        HomePanel::RecentAlbums => {
+            let is_active = home.active_section == HomeSection::RecentAlbums;
+            let albums_block = titled_block(" Recently Played ", is_active, accent, theme);
+            let albums_inner = albums_block.inner(area);
+            f.render_widget(albums_block, area);
+
+            if use_kitty_art {
+                // NOTE: render_art_strip (heavy) is driven from main.rs via `home_art_needs_redraw`.
+                render_art_strip_labels(f, albums_inner, home, accent, cell_px, is_active);
+            } else {
+                render_art_strip_text_fallback(
+                    f,
+                    albums_inner,
+                    &home.recent_albums,
+                    home.album_selected_index,
+                    accent,
+                    is_active,
+                );
+            }
+        }
+        HomePanel::RecentTracks => {
+            render_recent_tracks_block(f, area, home, accent, theme);
+        }
+        HomePanel::Rediscover => {
+            render_rediscover_block(f, area, home, accent, theme);
+        }
+    }
 }
 
 // ── Art strip label rows (Kitty path) ─────────────────────────────────────────

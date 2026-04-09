@@ -10,6 +10,7 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 use ratatui::layout::Rect;
+use ratatui::widgets::{Block, BorderType, Borders};
 
 // ── Detection ──────────────────────────────────────────────────────────────────
 
@@ -179,39 +180,42 @@ fn placeholder_row(cols: u16, image_id: u32, row_index: usize) -> String {
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-/// Render image `bytes` (JPEG/PNG/etc.) into `area` using the Kitty graphics protocol.
+/// Same [`Block`] as `nowplaying_tab::render_art_placeholder` — use with [`album_art_placeholder_inner`].
+pub fn album_art_block() -> Block<'static> {
+    Block::default()
+        .title(" Album Art ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+}
+
+/// Content rectangle inside the "Album Art" bordered box (matches ratatui’s [`Block::inner`]).
+pub fn album_art_placeholder_inner(outer: Rect) -> Rect {
+    album_art_block().inner(outer)
+}
+
+/// Render image `bytes` (JPEG/PNG/etc.) into `placement` using the Kitty graphics protocol.
 ///
-/// `area` is the full widget rect (including borders); the image is placed in the
-/// inner area (1-cell border inset on all sides).  Writes directly to stdout.
+/// `placement` must be the **cell rectangle** where the image should appear — typically
+/// [`album_art_placeholder_inner`] applied to the same outer `Rect` as the ratatui placeholder.
+/// Coordinates are ratatui’s 0-based buffer positions; CSI cursor uses 1-based rows/cols.
 ///
-/// When `in_tmux` is `false`: uses direct APC placement (`a=T` with `c=`/`r=`
-/// coordinates) — unchanged from the original implementation.
+/// When `in_tmux` is `false`: direct APC placement (`a=T` with `c=`/`r=`).
 ///
-/// When `in_tmux` is `true`: uses the Unicode placeholder method so that tmux
-/// treats the image cells as normal text.  Transmits with `a=t` (store only),
-/// creates a virtual placement with `a=p,U=1`, then writes `U+10EEEE` placeholder
-/// characters row-by-row using absolute cursor positioning.
-pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool, tmux_status_offset: u16) -> Result<()> {
+/// When `in_tmux` is `true`: Unicode placeholder method (`a=t` + `a=p,U=1` + row diacritics).
+pub fn render_image(bytes: &[u8], placement: Rect, in_tmux: bool, tmux_status_offset: u16) -> Result<()> {
     use base64::Engine;
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
 
-    let inner_x = area.x + 1;
-    let inner_y = area.y + 1;
-    let inner_w = area.width.saturating_sub(2);
-    let inner_h = area.height.saturating_sub(2);
+    let inner_w = placement.width;
+    let inner_h = placement.height;
     if inner_w == 0 || inner_h == 0 {
         return Ok(());
     }
 
-    // In tmux mode the placeholder rows start at area.y + 1 + tmux_status_offset.
-    // Cap to inner_h so that when offset > 1 the last row never overruns the
-    // inner area's bottom.  For the common case (offset == 1) this equals inner_h.
-    // Also cap to ROW_DIACRITICS.len() — rows beyond that have no valid diacritic.
+    // Cap placeholder rows to ROW_DIACRITICS (tmux Unicode path only).
     let tmux_rows = if in_tmux {
-        inner_h
-            .min(area.height.saturating_sub(1 + tmux_status_offset))
-            .min(ROW_DIACRITICS.len() as u16)
+        inner_h.min(ROW_DIACRITICS.len() as u16)
     } else {
         inner_h
     };
@@ -277,18 +281,18 @@ pub fn render_image(bytes: &[u8], area: Rect, in_tmux: bool, tmux_status_offset:
         // These are normal terminal text cells — tmux can overwrite them on window
         // switch, which is exactly what prevents the bleed.
         for row in 0..tmux_rows {
+            // 1-based CSI; tmux_status_offset maps pane rows when status bar eats row 0.
             write!(
                 out,
                 "\x1b[{};{}H{}",
-                area.y + 1 + row + tmux_status_offset,
-                area.x + 1,
+                placement.y + row + tmux_status_offset + 1,
+                placement.x + 1,
                 placeholder_row(inner_w, 1, row as usize)
             )?;
         }
     } else {
-        // ── Direct placement path (non-tmux) — unchanged ──────────────────────
-        // Move cursor to the inner-area top-left (terminal coords are 1-based).
-        write!(out, "\x1b[{};{}H", inner_y + 1, inner_x + 1)?;
+        // ── Direct placement path (non-tmux) ──────────────────────────────────
+        write!(out, "\x1b[{};{}H", placement.y + 1, placement.x + 1)?;
 
         for (i, chunk) in chunks.iter().enumerate() {
             let is_last = i == n - 1;

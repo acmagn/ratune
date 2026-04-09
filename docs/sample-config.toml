@@ -1,0 +1,142 @@
+# Playterm — sample config with all recognized keys (reference / copy-paste).
+#
+# The app does NOT read this file automatically. Real config path:
+#   $XDG_CONFIG_HOME/playterm/config.toml
+#   or ~/.config/playterm/config.toml
+#
+# On first run, if that file is missing, playterm writes a smaller default file
+# there (see create_default in playterm/src/config.rs).
+#
+# Test with an isolated config directory (no need to touch your real one):
+#   mkdir -p /tmp/playterm-cfg/playterm
+#   cp docs/sample-config.toml /tmp/playterm-cfg/playterm/config.toml
+#   # edit url / username / password in that copy
+#   XDG_CONFIG_HOME=/tmp/playterm-cfg playterm
+#
+# Env overrides (still apply on top of file):
+#   TERMUSIC_SUBSONIC_URL or SUBSONIC_URL
+#   TERMUSIC_SUBSONIC_USER or SUBSONIC_USER
+#   TERMUSIC_SUBSONIC_PASS or SUBSONIC_PASS
+
+[server]
+url = ""
+username = ""
+password = ""
+
+[player]
+default_volume = 70
+max_bit_rate = 0
+mpris = true
+
+[keybinds]
+scroll_up = "k"
+scroll_down = "j"
+column_left = "h"
+column_right = "l"
+play_pause = "p"
+next_track = "n"
+prev_track = "N"
+seek_forward = "Right"
+seek_backward = "Left"
+add_track = "a"
+add_all = "Shift+a"
+shuffle = "x"
+unshuffle = "z"
+clear_queue = "D"
+search = "/"
+volume_up = "+"
+volume_down = "-"
+tab_switch = "Tab"
+tab_switch_reverse = "`"
+go_to_home = "1"
+go_to_browser = "2"
+go_to_nowplaying = "3"
+quit = "q"
+library_fzf = "Ctrl+f"
+library_refresh = "Ctrl+r"
+
+[theme]
+accent = "#ff8c00"
+background = "#1a1a1a"
+surface = "#161616"
+foreground = "#d4d0c8"
+dimmed = "#5a5858"
+border = "#252525"
+border_active = "#3a3a3a"
+dynamic = true
+
+[ui]
+
+[ui.general]
+tab_bar_position = "bottom"
+
+[ui.row_now_playing]
+bar_height = 4
+layout = "row"
+box_location = "queue"
+show_controls = true
+show_progress = true
+box_include_controls = false
+box_include_progress = false
+progress_style = "██░"
+# Row strip (Home + Browse + NP row footer). ncmpcpp-style; keep `bar_height` ≥ line count.
+lines = [
+  "$b$1%t$/b$9",
+  "$2%a$9",
+  "$3%b$9$7 · $9%y",
+  "$4%e$9/$4%l$9  $5%i$9/$5%j$9  $3%P$9  $7%q$9  vol $4%v$9%%",
+]
+
+[ui.hometab.recent_albums]
+show_art = true
+
+[ui.hometab.layout]
+top_height_percent = 50
+panels = ["recent_albums", "recent_tracks", "rediscover"]
+# panels = ["recent_albums", "rediscover", "recent_tracks"]
+
+[ui.browsetab]
+mode = "artists"
+
+[ui.nptab]
+lyrics = false
+lyrics_enabled = true
+queue_template = ""
+show_fzf_hint = false
+
+[ui.nptab.art]
+show = true
+position = "left"
+width_percent = 50
+
+[ui.nptab.visualizer_pane]
+enabled = true
+visible = false
+location = "queue"
+
+[ui.nptab.now_playing]
+# Overrides `[ui.row_now_playing]` on the Now Playing tab (strip layout + boxed pane `lines` / `progress_style`).
+# layout = "boxed"
+# lines = ["$b$1%t$/b$9", "$2%a$9", "$3%b$9"]
+
+[library]
+enabled = true
+index_path = ""
+max_age_secs = 86400
+fzf_binary = "fzf"
+fzf_args = [
+  "--delimiter=\t",
+  "--with-nth=2,3,4,5",
+  "--nth=1,2,3",
+  "--multi",
+  "--expect=ctrl-r",
+  "--border=rounded",
+]
+fetch_album_parallelism = 12
+fetch_artist_parallelism = 4
+navidrome_skip_unchanged_scan = false
+notify_on_forced_index_refresh = true
+
+[cache]
+enabled = true
+max_size_gb = 2.0

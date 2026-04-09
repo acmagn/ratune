@@ -5,6 +5,7 @@ pub mod home_tab;
 pub mod kitty_art;
 pub mod layout;
 pub mod now_playing;
+pub mod now_playing_format;
 pub mod nowplaying_tab;
 pub mod playlist_overlay;
 pub mod popup;
@@ -30,11 +31,12 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     match app.active_tab {
         Tab::Home => {
-            let areas = layout::build_layout(frame.area());
+            let areas = layout::build_layout(frame.area(), &layout::layout_options_for_app(app));
             render_home_tab(
                 frame,
                 areas.center,
                 &app.home,
+                &app.config,
                 app.accent(),
                 app.kitty_supported,
                 app.help_visible,
@@ -49,7 +51,7 @@ pub fn render(app: &App, frame: &mut Frame) {
             }
         }
         Tab::Browser => {
-            let areas = layout::build_layout(frame.area());
+            let areas = layout::build_layout(frame.area(), &layout::layout_options_for_app(app));
             browser::render(app, frame, areas.center);
             now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);
@@ -59,7 +61,7 @@ pub fn render(app: &App, frame: &mut Frame) {
             }
         }
         Tab::NowPlaying => {
-            let areas = layout::build_layout(frame.area());
+            let areas = layout::build_layout(frame.area(), &layout::layout_options_for_app(app));
             nowplaying_tab::render(app, frame, areas.center);
             now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);

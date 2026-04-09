@@ -1,10 +1,40 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{App, BrowserColumn};
+use crate::config::BrowseMode;
 use super::{artists, albums, playlist_overlay, tracks};
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
+    match app.config.browse_mode {
+        BrowseMode::Artists => {}
+        BrowseMode::Genre => {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "Genre browsing is not implemented yet.\n\
+                     Use [ui.browsetab] mode = \"artists\" for the artist/album/track browser.",
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                area,
+            );
+            return;
+        }
+        BrowseMode::Files => {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "File browsing is not implemented yet.\n\
+                     Use [ui.browsetab] mode = \"artists\" for the artist/album/track browser.",
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                area,
+            );
+            return;
+        }
+    }
+
     let cols = Layout::horizontal([
         Constraint::Percentage(30),
         Constraint::Percentage(35),

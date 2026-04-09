@@ -4,27 +4,126 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use super::now_playing;
 use super::queue;
 use super::visualizer::render_visualizer;
 
 use crate::app::App;
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
-    let (art_col, queue_col) = super::layout::now_playing_split_center(area);
+    let boxed = app
+        .config
+        .now_playing_layout
+        .trim()
+        .eq_ignore_ascii_case("boxed");
+    let show_art = app.config.nowplaying_show_art;
+    let vz_under_art = app.visualizer_visible
+        && app
+            .config
+            .visualizer_location
+            .trim()
+            .eq_ignore_ascii_case("art")
+        && show_art;
+    let np_under_art = boxed
+        && app
+            .config
+            .now_playing_box_location
+            .trim()
+            .eq_ignore_ascii_case("art")
+        && show_art;
 
-    render_art_placeholder(app, frame, art_col);
+    let (art_col, queue_col) = super::layout::now_playing_split_columns(
+        area,
+        show_art,
+        app.config.nowplaying_art_width_percent,
+        app.config
+            .nowplaying_art_position
+            .trim()
+            .eq_ignore_ascii_case("right"),
+    );
 
     if app.visualizer_visible {
-        // Split the queue column: top 75% = queue, bottom 25% = visualizer pane.
-        let rows = Layout::vertical([
-            Constraint::Percentage(75),
-            Constraint::Percentage(25),
-        ])
-        .split(queue_col);
-        queue::render(app, frame, rows[0], true);
-        render_visualizer_pane(app, frame, rows[1]);
+        if boxed {
+            if vz_under_art && np_under_art {
+                let rows = Layout::vertical([
+                    Constraint::Percentage(50),
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
+                ])
+                .split(art_col);
+                render_art_placeholder(app, frame, rows[0]);
+                queue::render(app, frame, queue_col, true);
+                render_visualizer_pane(app, frame, rows[1]);
+                now_playing::render_boxed_pane(app, frame, rows[2]);
+            } else if vz_under_art && !np_under_art {
+                let art_rows = Layout::vertical([
+                    Constraint::Percentage(75),
+                    Constraint::Percentage(25),
+                ])
+                .split(art_col);
+                let queue_rows = Layout::vertical([
+                    Constraint::Percentage(75),
+                    Constraint::Percentage(25),
+                ])
+                .split(queue_col);
+                render_art_placeholder(app, frame, art_rows[0]);
+                render_visualizer_pane(app, frame, art_rows[1]);
+                queue::render(app, frame, queue_rows[0], true);
+                now_playing::render_boxed_pane(app, frame, queue_rows[1]);
+            } else if !vz_under_art && np_under_art {
+                let art_rows = Layout::vertical([
+                    Constraint::Percentage(75),
+                    Constraint::Percentage(25),
+                ])
+                .split(art_col);
+                let queue_rows = Layout::vertical([
+                    Constraint::Percentage(75),
+                    Constraint::Percentage(25),
+                ])
+                .split(queue_col);
+                render_art_placeholder(app, frame, art_rows[0]);
+                now_playing::render_boxed_pane(app, frame, art_rows[1]);
+                queue::render(app, frame, queue_rows[0], true);
+                render_visualizer_pane(app, frame, queue_rows[1]);
+            } else {
+                let rows = Layout::vertical([
+                    Constraint::Percentage(50),
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
+                ])
+                .split(queue_col);
+                if show_art {
+                    render_art_placeholder(app, frame, art_col);
+                }
+                queue::render(app, frame, rows[0], true);
+                render_visualizer_pane(app, frame, rows[1]);
+                now_playing::render_boxed_pane(app, frame, rows[2]);
+            }
+        } else if vz_under_art && show_art {
+            let rows = Layout::vertical([
+                Constraint::Percentage(75),
+                Constraint::Percentage(25),
+            ])
+            .split(art_col);
+            render_art_placeholder(app, frame, rows[0]);
+            queue::render(app, frame, queue_col, true);
+            render_visualizer_pane(app, frame, rows[1]);
+        } else {
+            if show_art {
+                render_art_placeholder(app, frame, art_col);
+            }
+            let rows = Layout::vertical([
+                Constraint::Percentage(75),
+                Constraint::Percentage(25),
+            ])
+            .split(queue_col);
+            queue::render(app, frame, rows[0], true);
+            render_visualizer_pane(app, frame, rows[1]);
+        }
     } else if app.lyrics_visible {
-        // Split the queue column: top 75% = queue, bottom 25% = lyrics pane.
+        if show_art {
+            render_art_placeholder(app, frame, art_col);
+        }
         let rows = Layout::vertical([
             Constraint::Percentage(75),
             Constraint::Percentage(25),
@@ -32,18 +131,40 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .split(queue_col);
         queue::render(app, frame, rows[0], true);
         render_lyrics_pane(app, frame, rows[1]);
+    } else if boxed {
+        if np_under_art {
+            let rows = Layout::vertical([
+                Constraint::Percentage(75),
+                Constraint::Percentage(25),
+            ])
+            .split(art_col);
+            render_art_placeholder(app, frame, rows[0]);
+            now_playing::render_boxed_pane(app, frame, rows[1]);
+            queue::render(app, frame, queue_col, true);
+        } else {
+            let rows = Layout::vertical([
+                Constraint::Percentage(75),
+                Constraint::Percentage(25),
+            ])
+            .split(queue_col);
+            if show_art {
+                render_art_placeholder(app, frame, art_col);
+            }
+            queue::render(app, frame, rows[0], true);
+            now_playing::render_boxed_pane(app, frame, rows[1]);
+        }
     } else {
+        if show_art {
+            render_art_placeholder(app, frame, art_col);
+        }
         queue::render(app, frame, queue_col, true);
     }
 }
 
 fn render_art_placeholder(app: &App, frame: &mut Frame, area: Rect) {
     let t = &app.theme;
-    let block = Block::default()
-        .title(" Album Art ")
+    let block = crate::ui::kitty_art::album_art_block()
         .title_style(Style::default().fg(t.dimmed).add_modifier(Modifier::BOLD))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
         .border_style(Style::default().fg(t.border))
         .style(Style::default().bg(t.surface));
     frame.render_widget(block, area);
@@ -87,7 +208,6 @@ fn render_lyrics_pane(app: &App, frame: &mut Frame, area: Rect) {
         .border_style(Style::default().fg(accent))
         .style(Style::default().bg(t.surface));
 
-    // Inner area for text (inside borders).
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -98,23 +218,23 @@ fn render_lyrics_pane(app: &App, frame: &mut Frame, area: Rect) {
     let inner_h = inner.height as usize;
     let inner_w = inner.width as usize;
 
-    // Determine what to show.
     let current_song_id = app.playback.current_song.as_ref().map(|s| s.id.as_str());
 
-    // Check cache match.
     let cache_match = current_song_id.and_then(|sid| {
         app.lyrics_cache.as_ref().and_then(|(cached_id, lines)| {
-            if cached_id.as_str() == sid { Some(lines.as_slice()) } else { None }
+            if cached_id.as_str() == sid {
+                Some(lines.as_slice())
+            } else {
+                None
+            }
         })
     });
 
     match cache_match {
         None if app.lyrics_loading => {
-            // Fetch in flight.
             render_centered_msg(frame, inner, "Loading…", t.dimmed);
         }
         None => {
-            // No song playing, or cache not yet populated (and not loading).
             render_centered_msg(frame, inner, "Loading…", t.dimmed);
         }
         Some(lines) if lines.is_empty() => {
@@ -131,7 +251,6 @@ fn render_lyrics_pane(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
-/// Render a single centered message line.
 fn render_centered_msg(
     frame: &mut Frame,
     area: Rect,
@@ -143,8 +262,6 @@ fn render_centered_msg(
         .alignment(Alignment::Center);
     frame.render_widget(para, area);
 }
-
-// ── Synced lyrics ─────────────────────────────────────────────────────────────
 
 fn render_synced(
     app: &App,
@@ -158,25 +275,25 @@ fn render_synced(
     let t = &app.theme;
     let elapsed = app.playback.elapsed;
 
-    // Find the index of the last line whose timestamp ≤ elapsed.
-    let current_idx: Option<usize> = lines.iter().enumerate()
+    let current_idx: Option<usize> = lines
+        .iter()
+        .enumerate()
         .filter(|(_, l)| l.time.map(|ts| ts <= elapsed).unwrap_or(false))
         .map(|(i, _)| i)
         .last();
 
-    // Auto-scroll to keep current line vertically centred.
     let scroll: usize = current_idx
         .map(|ci| ci.saturating_sub(inner_h / 2))
         .unwrap_or(0);
 
-    let display: Vec<Line> = lines.iter().enumerate()
+    let display: Vec<Line> = lines
+        .iter()
+        .enumerate()
         .skip(scroll)
         .take(inner_h)
         .map(|(i, l)| {
             let style = match current_idx {
-                Some(ci) if i == ci => {
-                    Style::default().fg(accent).add_modifier(Modifier::BOLD)
-                }
+                Some(ci) if i == ci => Style::default().fg(accent).add_modifier(Modifier::BOLD),
                 Some(ci) if i < ci => Style::default().fg(t.dimmed),
                 _ => Style::default().fg(t.foreground),
             };
@@ -190,8 +307,6 @@ fn render_synced(
     frame.render_widget(para, area);
 }
 
-// ── Unsynced lyrics ───────────────────────────────────────────────────────────
-
 fn render_unsynced(
     app: &App,
     frame: &mut Frame,
@@ -202,26 +317,24 @@ fn render_unsynced(
 ) {
     let t = &app.theme;
 
-    // Word-wrap all lyric lines into display rows.
-    let wrapped: Vec<String> = lines.iter()
+    let wrapped: Vec<String> = lines
+        .iter()
         .flat_map(|l| wrap_text(&l.text, inner_w))
         .collect();
 
     let scroll = app.lyrics_scroll.min(wrapped.len().saturating_sub(1));
 
-    let display: Vec<Line> = wrapped.iter()
+    let display: Vec<Line> = wrapped
+        .iter()
         .skip(scroll)
         .take(inner_h)
         .map(|row| Line::from(Span::styled(row.as_str(), Style::default().fg(t.foreground))))
         .collect();
 
-    let para = Paragraph::new(display)
-        .style(Style::default().bg(t.surface));
+    let para = Paragraph::new(display).style(Style::default().bg(t.surface));
     frame.render_widget(para, area);
 }
 
-/// Word-wrap `text` to at most `width` visible characters per line.
-/// Returns at least one element (empty string for empty input).
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
@@ -239,7 +352,6 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     while start < chars.len() {
         let end = (start + width).min(chars.len());
-        // If we haven't reached the end, try to break on a space.
         let break_at = if end < chars.len() {
             chars[start..end]
                 .iter()
@@ -251,7 +363,6 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         };
         lines.push(chars[start..break_at].iter().collect());
         start = break_at;
-        // Skip the space we broke on.
         while start < chars.len() && chars[start] == ' ' {
             start += 1;
         }

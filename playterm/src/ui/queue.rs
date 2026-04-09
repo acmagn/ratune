@@ -5,6 +5,8 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 
 use crate::app::App;
 
+const DEFAULT_QUEUE_TEMPLATE: &str = "{n}  {title:<40}  {artist:<25}  {duration:>5}";
+
 pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
     let t = &app.theme;
     let border_color = if is_active { t.border_active } else { t.border };
@@ -26,31 +28,24 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
         .style(Style::default().bg(t.surface));
 
     if app.queue.songs.is_empty() {
-        let item = ListItem::new("Queue is empty — press 'a' to add tracks")
-            .style(Style::default().fg(t.dimmed));
+        let mut msg = "Queue is empty — press 'a' to add tracks".to_string();
+        if app.config.show_fzf_hint && app.config.library_index_enabled && app.keybinds.library_fzf.is_some() {
+            msg.push_str(" · Ctrl+f: library picker");
+        }
+        let item = ListItem::new(msg).style(Style::default().fg(t.dimmed));
         let list = List::new(vec![item]).block(block);
         frame.render_widget(list, area);
         return;
     }
 
+    let template = if app.config.queue_template.trim().is_empty() {
+        DEFAULT_QUEUE_TEMPLATE
+    } else {
+        app.config.queue_template.as_str()
+    };
+
     let items: Vec<ListItem> = app.queue.songs.iter().enumerate().map(|(i, s)| {
-        // Track number: 4 chars right-aligned ("  1.")
-        let num = s.track
-            .map(|n| format!("{n:>3}."))
-            .unwrap_or_else(|| "    ".to_string());
-
-        // Title: 40 chars, left-aligned, truncated with …
-        let title_col = format!("{:<40}", trunc(&s.title, 40));
-
-        // Artist: 25 chars, left-aligned, truncated with …
-        let artist_col = format!("{:<25}", trunc(s.artist.as_deref().unwrap_or(""), 25));
-
-        // Duration: 5 chars right-aligned (" 3:04")
-        let dur = s.duration
-            .map(|d| format!("{:>5}", format!("{}:{:02}", d / 60, d % 60)))
-            .unwrap_or_else(|| "     ".to_string());
-
-        let label = format!("{}  {}  {}  {}", num, title_col, artist_col, dur);
+        let label = format_queue_line(template, s);
 
         let style = if i == app.queue.cursor {
             Style::default().fg(app.accent()).add_modifier(Modifier::BOLD)
@@ -70,8 +65,101 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect, is_active: bool) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
+fn format_queue_line(template: &str, s: &playterm_subsonic::Song) -> String {
+    let n = s.track
+        .map(|n| format!("{n:>3}."))
+        .unwrap_or_else(|| "    ".to_string());
+    let title = s.title.as_str();
+    let artist = s.artist.as_deref().unwrap_or("");
+    let album = s.album.as_deref().unwrap_or("");
+    let duration = s.duration
+        .map(|d| format!("{}:{:02}", d / 60, d % 60))
+        .unwrap_or_else(|| "".to_string());
+
+    render_template(template, |name| match name {
+        "n" => Some(n.clone()),
+        "title" => Some(title.to_string()),
+        "artist" => Some(artist.to_string()),
+        "album" => Some(album.to_string()),
+        "duration" => Some(duration.clone()),
+        _ => None,
+    })
+}
+
+fn render_template<F>(template: &str, mut resolve: F) -> String
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let mut out = String::with_capacity(template.len().saturating_add(16));
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{' {
+            if let Some(end) = chars[i + 1..].iter().position(|&c| c == '}').map(|p| i + 1 + p) {
+                let inner: String = chars[i + 1..end].iter().collect();
+                if let Some((name, spec)) = inner.split_once(':') {
+                    out.push_str(&format_field(&mut resolve, name.trim(), Some(spec.trim())));
+                } else {
+                    out.push_str(&format_field(&mut resolve, inner.trim(), None));
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn format_field<F>(resolve: &mut F, name: &str, spec: Option<&str>) -> String
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let raw = match resolve(name) {
+        Some(v) => v,
+        None => return format!("{{{name}}}"),
+    };
+
+    let (align, width) = parse_spec(spec);
+    if let Some(w) = width {
+        let truncated = trunc(&raw, w);
+        match align {
+            Align::Right => format!("{:>width$}", truncated, width = w),
+            Align::Left => format!("{:<width$}", truncated, width = w),
+        }
+    } else {
+        raw
+    }
+}
+
+#[derive(Copy, Clone)]
+enum Align {
+    Left,
+    Right,
+}
+
+fn parse_spec(spec: Option<&str>) -> (Align, Option<usize>) {
+    let Some(spec) = spec else { return (Align::Left, None); };
+    if spec.is_empty() {
+        return (Align::Left, None);
+    }
+    let mut chars = spec.chars();
+    let first = chars.next().unwrap_or('<');
+    let (align, rest) = match first {
+        '>' => (Align::Right, chars.collect::<String>()),
+        '<' => (Align::Left, chars.collect::<String>()),
+        _ => (Align::Left, spec.to_string()),
+    };
+    let width = rest.trim().parse::<usize>().ok().filter(|w| *w > 0);
+    (align, width)
+}
+
 /// Truncate `s` to at most `max` Unicode characters, appending `…` if cut.
 fn trunc(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
     let mut chars = s.chars();
     let mut result = String::with_capacity(max);
     let mut count = 0;

@@ -445,6 +445,7 @@ impl App {
         let theme    = Theme::from_section(&config.theme);
         let static_accent = theme.accent;
         let lyrics_visible = config.lyrics_visible;
+        let visualizer_visible = config.visualizer_visible;
         let track_cache = crate::cache::TrackCache::load(config.cache_enabled, config.cache_max_size_gb);
         let index_path = config.resolved_library_index_path();
         let (library_index_tracks, library_index_refreshed_at) =
@@ -502,7 +503,7 @@ impl App {
             lyrics_loading: false,
             sample_buffer,
             spectrum_bands: vec![0.0; 32],
-            visualizer_visible: false,
+            visualizer_visible,
             fft_planner: rustfft::FftPlanner::new(),
             dynamic_accent: None,
             accent_current: static_accent,
@@ -1827,7 +1828,7 @@ impl App {
             }
             Action::ToggleLyrics => {
                 // Only active on NowPlaying tab; silently ignored on Browser.
-                if self.active_tab == Tab::NowPlaying {
+                if self.active_tab == Tab::NowPlaying && self.config.lyrics_enabled {
                     self.lyrics_visible = !self.lyrics_visible;
                     // Trigger a lyrics fetch if we just enabled the overlay and
                     // nothing is cached for the current song yet.
@@ -1850,7 +1851,7 @@ impl App {
                 }
             }
             Action::ToggleVisualizer => {
-                if self.active_tab == Tab::NowPlaying {
+                if self.active_tab == Tab::NowPlaying && self.config.visualizer_enabled {
                     self.visualizer_visible = !self.visualizer_visible;
                     if self.visualizer_visible {
                         self.lyrics_visible = false;
