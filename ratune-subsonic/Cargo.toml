@@ -1,0 +1,23 @@
+[package]
+name = "ratune-subsonic"
+version = "0.1.0"
+edition = "2021"
+description = "Subsonic API client for ratune"
+license = "MIT"
+repository = "https://github.com/acmagn/ratune"
+homepage = "https://github.com/acmagn/ratune"
+readme = "../README.md"
+keywords = ["subsonic", "navidrome", "api", "music"]
+categories = ["multimedia::audio", "api-bindings"]
+
+[dependencies]
+anyhow = "1"
+hex = "0.4"
+md5 = "0.7"
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+url = "2.5"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

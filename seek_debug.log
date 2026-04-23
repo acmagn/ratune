@@ -1,4 +1,0 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
-     Running `target/debug/playterm`
-Created default config: /home/docker-admin/.config/playterm/config.toml
-Error: No such device or address (os error 6)

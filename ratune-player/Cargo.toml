@@ -1,0 +1,16 @@
+[package]
+name = "ratune-player"
+version = "0.1.0"
+edition = "2021"
+description = "Audio playback engine for ratune"
+license = "MIT"
+repository = "https://github.com/acmagn/ratune"
+homepage = "https://github.com/acmagn/ratune"
+readme = "../README.md"
+keywords = ["audio", "playback", "music", "rodio"]
+categories = ["multimedia::audio"]
+
+[dependencies]
+anyhow = "1"
+reqwest = { version = "0.12", features = ["blocking"] }
+rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-all"] }

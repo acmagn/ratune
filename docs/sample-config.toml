@@ -1,98 +1,200 @@
-# Playterm — sample config with all recognized keys (reference / copy-paste).
+# =============================================================================
+# ratune — sample config (every recognized key + comments)
+# =============================================================================
 #
-# The app does NOT read this file automatically. Real config path:
-#   $XDG_CONFIG_HOME/playterm/config.toml
-#   or ~/.config/playterm/config.toml
+# This file is documentation only. The app does NOT read it from the repo.
 #
-# On first run, if that file is missing, playterm writes a smaller default file
-# there (see create_default in playterm/src/config.rs).
+# Installed config path (first match):
+#   $XDG_CONFIG_HOME/ratune/config.toml
+#   ~/.config/ratune/config.toml
 #
-# Test with an isolated config directory (no need to touch your real one):
-#   mkdir -p /tmp/playterm-cfg/playterm
-#   cp docs/sample-config.toml /tmp/playterm-cfg/playterm/config.toml
+# First run: if that file is missing, ratune writes a small starter config
+# (credentials + common UI). Copy sections from here when you need the full
+# menu; see `create_default` in `ratune/src/config.rs`.
+#
+# Quick test with an isolated config dir:
+#   mkdir -p /tmp/ratune-cfg/ratune
+#   cp docs/sample-config.toml /tmp/ratune-cfg/ratune/config.toml
 #   # edit url / username / password in that copy
-#   XDG_CONFIG_HOME=/tmp/playterm-cfg playterm
+#   XDG_CONFIG_HOME=/tmp/ratune-cfg ratune
 #
-# Env overrides (still apply on top of file):
-#   TERMUSIC_SUBSONIC_URL or SUBSONIC_URL
-#   TERMUSIC_SUBSONIC_USER or SUBSONIC_USER
-#   TERMUSIC_SUBSONIC_PASS or SUBSONIC_PASS
+# Environment overrides (applied after parsing the file):
+#   TERMUSIC_SUBSONIC_URL  or  SUBSONIC_URL
+#   TERMUSIC_SUBSONIC_USER or  SUBSONIC_USER
+#   TERMUSIC_SUBSONIC_PASS or  SUBSONIC_PASS
+#
+# -----------------------------------------------------------------------------
+# UI precedence
+# -----------------------------------------------------------------------------
+#
+# Root `[ui]` only has `album_art_backend`. Everything else is nested:
+#   `[ui.general]`, `[ui.row_now_playing]`, `[ui.nptab]`, `[ui.hometab]`, `[ui.browsetab]`.
+#
+# Bottom now-playing strip (Home, Browse, NP row mode), progress glyphs, bar height, etc.:
+#   [ui.nptab.now_playing]  >  [ui.row_now_playing]  >  built-in defaults
+#
+# Row strip `lines` (ncmpcpp-style `%` / `$`): only `[ui.row_now_playing].lines`.
+# Boxed pane text on the NP tab: `[ui.nptab.now_playing].lines` only; if unset/empty, reuses row strip lines.
+#
+# Tab bar: `[ui.general].tab_bar_position` (default bottom).
+# Status bar (bottom row): optional `N%` playback level via `[ui.general].show_volume_indicator`.
+#
+# Queue row template: `[ui.nptab.queue].queue_template` > `[ui.nptab].queue_template` > empty = built-in default.
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# [server] — Subsonic-compatible API endpoint
+# -----------------------------------------------------------------------------
+#
+# url       — Base URL of the server (no trailing path required in most setups).
+# username  — Subsonic username.
+# password  — Subsonic password or token (must be non-empty or the app exits
+#             at startup; use env override to avoid storing it in a file).
 
 [server]
 url = ""
 username = ""
 password = ""
 
+# -----------------------------------------------------------------------------
+# [player]
+# -----------------------------------------------------------------------------
+#
+# default_volume — In-app playback gain (0–100), applied in software before the
+#                  audio device. This is separate from OS / PipeWire / game volume:
+#                  lower this to duck music under a loud game without changing
+#                  system volume. Adjust live with + / − (saved in state.json).
+#                  Default: 70.
+# max_bit_rate   — Cap streaming bitrate in kbps. 0 = unlimited (server decides).
+# mpris          — Linux only: register an MPRIS player on the session bus so
+#                  media keys / playerctl work. Default: true.
+
 [player]
 default_volume = 70
 max_bit_rate = 0
 mpris = true
 
+# -----------------------------------------------------------------------------
+# [keybinds] — optional overrides
+# -----------------------------------------------------------------------------
+#
+# For library_fzf / library_refresh: empty string "" disables that action.
+#
+# Defaults shown in comments (omit the key to get the default).
+
 [keybinds]
-# Use "Shift+n" (or capital N — same meaning) for shift+letter keys so all terminals match.
-scroll_up = "k"
-scroll_down = "j"
-column_left = "h"
-column_right = "l"
-play_pause = "p"
-next_track = "n"
-prev_track = "Shift+n"
-seek_forward = "Right"
-seek_backward = "Left"
-add_track = "a"
-add_all = "Shift+a"
-add_all_replace_album = "Ctrl+r"
-add_all_replace_artist = "Ctrl+Shift+r"
-add_all_prepend = "Ctrl+Shift+p"
-shuffle = "x"
-unshuffle = "z"
-clear_queue = "Shift+d"
-search = "/"
-volume_up = "+"
-volume_down = "-"
-tab_switch = "Tab"
-tab_switch_reverse = "`"
-go_to_home = "1"
-go_to_browser = "2"
-go_to_nowplaying = "3"
-quit = "q"
-library_fzf = "Ctrl+f"
-library_refresh = "Ctrl+g"
-toggle_help = "i"
-toggle_dynamic_theme = "t"
-toggle_lyrics = "Shift+l"
-toggle_visualizer = "Shift+v"
-playlist_overlay = "Shift+p"
-browser_add_to_playlist = ">"
-home_section_next = "Shift+j"
-home_section_prev = "Shift+k"
-home_refresh = "r"
+# scroll_up          = "k"           # list / queue / home: move selection up
+# scroll_down        = "j"
+# column_left        = "h"           # browser: previous column; home art strip: previous thumb
+# column_right       = "l"
+# play_pause         = "p"
+# next_track          = "n"
+# prev_track          = "Shift+n"     # or "N" — same meaning
+# seek_forward        = "Right"
+# seek_backward       = "Left"
+# add_track           = "a"
+# add_all             = "Shift+a"
+# add_all_replace_album  = "Ctrl+r"   # browser: replace queue with current album
+# add_all_replace_artist = "Ctrl+Shift+r"  # browser: replace queue with all tracks for artist
+# add_all_prepend     = "Ctrl+Shift+p"     # browser: prepend artist/album tracks
+# shuffle             = "x"
+# unshuffle           = "z"
+# clear_queue         = "Shift+d"
+# search              = "/"           # filter lists where supported
+# volume_up           = "+"
+# volume_down         = "-"
+# tab_switch          = "Tab"
+# tab_switch_reverse  = "`"
+# go_to_home          = "1"
+# go_to_browser       = "2"
+# go_to_nowplaying    = "3"
+# quit                = "q"
+# library_fzf         = "Ctrl+f"      # "" disables fuzzy picker
+# library_refresh     = "Ctrl+g"      # "" disables; forced refresh if still Ctrl+g
+#                       # If you set library_refresh to Ctrl+r while album replace is also Ctrl+r,
+#                       # the app treats refresh as unset so Ctrl+g default wins.
+# toggle_help         = "i"
+# toggle_dynamic_theme = "t"          # cycles dynamic accent (ignored when theme preset is terminal)
+# toggle_lyrics       = "Shift+l"
+# toggle_visualizer   = "Shift+v"    # bare "V" is also accepted in the key mapper
+# playlist_overlay    = "Shift+p"    # browser: playlist overlay
+# browser_add_to_playlist = ">"
+# home_section_next   = "Shift+j"   # home: focus next panel block
+# home_section_prev   = "Shift+k"
+# home_refresh        = "r"          # home: refresh / re-roll where applicable
+
+# -----------------------------------------------------------------------------
+# [theme]
+# -----------------------------------------------------------------------------
+#
+# preset — Optional. Who drives colors:
+#   "dynamic" (default when omitted) — hex fields below + album-art accent extraction.
+#   "static"       — hex fields only; no album-art accent extraction.
+#   "terminal" / "os" / "term" — inherit terminal palette; hex fields below are ignored
+#                  for UI colors (accent uses ANSI index 4; fg/bg use terminal defaults).
+#
+# Hex fields — `#rrggbb` or `rrggbb`. Used for static and dynamic presets only.
+#   accent        — Base accent (highlights, progress, focused chrome when not terminal).
+#   background    — Status bar + outer chrome.
+#   surface       — Panel backgrounds (browser columns, queue, blocks).
+#   foreground    — Primary text.
+#   dimmed        — Secondary / muted text.
+#   border        — Inactive borders (some panes still use accent when focused).
+#   border_active — Reserved for themes; many panes now use accent for active frames.
 
 [theme]
-accent = "#ff8c00"
-background = "#1a1a1a"
-surface = "#161616"
-foreground = "#d4d0c8"
-dimmed = "#5a5858"
-border = "#252525"
-border_active = "#3a3a3a"
-dynamic = true
+preset = "dynamic"
+# accent = "#ff8c00"
+# background = "#1a1a1a"
+# surface = "#161616"
+# foreground = "#d4d0c8"
+# dimmed = "#5a5858"
+# border = "#252525"
+# border_active = "#3a3a3a"
+
+# -----------------------------------------------------------------------------
+# [ui] — global UI (only album backend here)
+# -----------------------------------------------------------------------------
+#
+# album_art_backend — "ratatui-image" (default) or "kitty-apc" (Kitty terminal APC + post-draw).
 
 [ui]
+# album_art_backend = "ratatui-image"
+
+# -----------------------------------------------------------------------------
+# [ui.general] — cross-tab chrome
+# -----------------------------------------------------------------------------
+#
+# tab_bar_position — "bottom" (default) or "top". Tab strip is always 1 row high;
+#                    status bar stays at the bottom of the terminal.
 
 [ui.general]
 tab_bar_position = "bottom"
+# show_volume_indicator = true   # false = hide N% in the bottom-right status bar (in-app level only)
+
+# -----------------------------------------------------------------------------
+# [ui.row_now_playing] — shared bottom strip defaults (Home + Browse + NP row mode)
+# -----------------------------------------------------------------------------
+#
+# bar_height — Must be ≥ number of `lines` rows you expect to draw.
+# layout     — Usually "row" here; NP tab can switch to "boxed" via `[ui.nptab.now_playing]`.
+# progress_style — Three chars: same first two (e.g. "██░") = block bar; different = playhead style.
+# lines — ncmpcpp-inspired `%` / `$` strings (one per strip row). Examples:
+#   %t title  %a artist  %b album  %y year  %n track#  %l track length
+#   %e elapsed  %E / %T total  %g genre  %f file  %D parent dir  %q quality
+#   %P queue total duration  %i %j queue index & length  %v volume  %K bitrate  %% literal %
+#   $1–$8 colors, $9 reset, $b$/b bold, $u$/u underline, $r$/r reverse.
 
 [ui.row_now_playing]
 bar_height = 4
 layout = "row"
-box_location = "queue"
+box_location = "right"
 show_controls = true
 show_progress = true
 box_include_controls = false
 box_include_progress = false
 progress_style = "██░"
-# Row strip (Home + Browse + NP row footer). ncmpcpp-style; keep `bar_height` ≥ line count.
 lines = [
   "$b$1%t$/b$9",
   "$2%a$9",
@@ -100,17 +202,48 @@ lines = [
   "$4%e$9/$4%l$9  $5%i$9/$5%j$9  $3%P$9  $7%q$9  vol $4%v$9%%",
 ]
 
+# -----------------------------------------------------------------------------
+# [ui.hometab] — Home tab
+# -----------------------------------------------------------------------------
+
+# [ui.hometab.recent_albums]
+# show_art — Thumbnail strip when the terminal backend supports it. Default: true.
+# cover_fetch_max_px — Subsonic getCoverArt max edge (px). 0 = full image (slow).
+#                       Omitted default 320; values clamped roughly 64–2048 when set.
+
 [ui.hometab.recent_albums]
 show_art = true
 cover_fetch_max_px = 320
+
+# [ui.hometab.layout]
+# top_height_percent — Top band height as percent of Home content (25–75). Default: 50.
+# panels — Exactly three entries, a permutation of:
+#   recent_albums | albums   (synonym)
+#   recent_tracks | tracks   (synonym)
+#   rediscover
 
 [ui.hometab.layout]
 top_height_percent = 50
 panels = ["recent_albums", "recent_tracks", "rediscover"]
 # panels = ["recent_albums", "rediscover", "recent_tracks"]
 
+# -----------------------------------------------------------------------------
+# [ui.browsetab]
+# -----------------------------------------------------------------------------
+#
+# mode — "artists" (implemented), "genre" / "files" (placeholders: use artists).
+
 [ui.browsetab]
 mode = "artists"
+
+# -----------------------------------------------------------------------------
+# [ui.nptab] — Now Playing tab overrides
+# -----------------------------------------------------------------------------
+#
+# lyrics / lyrics_enabled / visualizer — set here (NP tab). Defaults: lyrics off, lyrics_enabled on,
+#   visualizer flags under `[ui.nptab.visualizer_pane]`.
+# queue_template — Per-row queue format; prefer `[ui.nptab.queue].queue_template`.
+# show_fzf_hint  — Empty-queue hint mentioning library picker when enabled.
 
 [ui.nptab]
 lyrics = false
@@ -118,20 +251,90 @@ lyrics_enabled = true
 queue_template = ""
 show_fzf_hint = false
 
+# [ui.nptab.art]
+# show      — Album art column on NP tab. Default: true.
+# position  — "left" | "right"
+
 [ui.nptab.art]
 show = true
 position = "left"
-width_percent = 50
+
+# [ui.nptab.layout]
+# left_width_percent — When NP splits into two columns (1–99). Default: 50.
+# vertical_fill_top_percent — When exactly two panes stack in one column, percent height of the
+#   TOP pane (1–99). Default: 50.
+
+[ui.nptab.layout]
+left_width_percent = 50
+# vertical_fill_top_percent = 60
+
+# [ui.nptab.queue]
+# position      — "left" | "right" | "full". Omitted → opposite of art.position.
+# queue_template — Overrides `[ui.nptab].queue_template` when set.
+
+[ui.nptab.queue]
+position = "right"
+# queue_template = "{n}  {title:<40}  {artist:<25}  {duration:>5}"
+
+# [ui.nptab.visualizer_pane]
+# enabled — If false, visualizer cannot be opened. Default: true.
+# visible — Start visible. Default: false.
+# location — "left" | "right" | "full".
 
 [ui.nptab.visualizer_pane]
 enabled = true
 visible = false
-location = "queue"
+location = "right"
+#
+# type — "spectrum" (default) | "wave"
+# fps — update rate while visible (higher = smoother, more CPU). Default: 30.
+# fft_size — spectrum FFT window size: 1024 | 2048 (default) | 4096
+# gain_db — spectrum/waveform gain in dB. Default: 0.0.
+# color_mode — "accent" (default) | "fixed" | "gradient_height" | "gradient_theme"
+# colors — list of colors used by color_mode:
+#   - "accent" uses the current accent (dynamic accent if enabled).
+#   - "gradient_theme" ignores this list and uses theme dimmed→foreground→accent.
+#   - "#RRGGBB" uses truecolor.
+#   - "0".."255" uses 256-color indices.
+type = "spectrum"
+fps = 30
+fft_size = 2048
+gain_db = 0.0
+color_mode = "gradient_height"
+colors = ["#00aaff", "#00ff99", "#ffee55", "#ff3355"]
+
+# [ui.nptab.now_playing] — NP tab only: overrides [ui.row_now_playing] for strip + boxed pane
+#
+# lines here apply to the boxed pane text; omit or [] to reuse row strip lines.
+# bar_height / layout / box_location / progress_style / controls flags follow same meanings
+# as [ui.row_now_playing].
 
 [ui.nptab.now_playing]
-# Overrides `[ui.row_now_playing]` on the Now Playing tab (strip layout + boxed pane `lines` / `progress_style`).
 # layout = "boxed"
+# box_location = "right"
+# bar_height = 4
+# show_controls = true
+# show_progress = true
+# box_include_controls = false
+# box_include_progress = false
+# progress_style = "██░"
 # lines = ["$b$1%t$/b$9", "$2%a$9", "$3%b$9"]
+
+# -----------------------------------------------------------------------------
+# [library] — on-disk metadata index + fzf picker
+# -----------------------------------------------------------------------------
+#
+# enabled — Build/use index for Ctrl+f picker. Default: true.
+# index_path — JSON index file. Empty → ~/.cache/ratune/library_index.json (see code).
+# max_age_secs — Staleness threshold; background refresh when older. 0 = always stale at startup.
+# fzf_binary   — Executable name or path ("fzf", "sk", …). For `sk` (skim), ratune appends
+#                `--bind=ctrl-r:accept(ctrl-r)` so Ctrl+R replaces the queue; skim's default
+#                Ctrl+R is rotate mode, so `--expect=ctrl-r` alone would not fire.
+# fzf_args     — Extra argv merged with app defaults (delimiter/columns). The app may add
+#                its own headers unless you pass a custom --header=…
+# fetch_*_parallelism — Tunables for full index refresh (minimum 1 enforced at runtime).
+# navidrome_skip_unchanged_scan — Navidrome: skip full walk when lastScan unchanged.
+# notify_on_forced_index_refresh — Desktop notification when forced refresh completes.
 
 [library]
 enabled = true
@@ -150,6 +353,13 @@ fetch_album_parallelism = 12
 fetch_artist_parallelism = 4
 navidrome_skip_unchanged_scan = false
 notify_on_forced_index_refresh = true
+
+# -----------------------------------------------------------------------------
+# [cache] — offline streamed audio cache
+# -----------------------------------------------------------------------------
+#
+# enabled     — Master switch. Default: true.
+# max_size_gb — Total on-disk budget for cached audio. Default: 2.0.
 
 [cache]
 enabled = true
