@@ -15,7 +15,7 @@
 //! | `v`   | Subsonic API version (`1.16.1`) |
 //! | `c`   | client name (`ratune`) |
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use reqwest::{Client, ClientBuilder};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,10 +25,9 @@ use tokio::task::JoinSet;
 
 use crate::error::check_status;
 use crate::models::{
-    Album, AlbumEnvelope, Artist, ArtistEnvelope, Artists, ArtistsEnvelope,
-    PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope,
-    ScanStatus, ScanStatusEnvelope, SearchEnvelope, SearchResult3, Song, SongEnvelope,
-    SubsonicLibrary,
+    Album, AlbumEnvelope, Artist, ArtistEnvelope, Artists, ArtistsEnvelope, PingEnvelope, Playlist,
+    PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
+    SearchEnvelope, SearchResult3, Song, SongEnvelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -265,10 +264,7 @@ impl SubsonicClient {
     /// Pre-encoding fallback if `base_url` is not a valid URL prefix (should be rare).
     fn stream_url_fallback(&self, id: &str, max_bit_rate: u32) -> String {
         let params = self.auth_params();
-        let mut parts: Vec<String> = params
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect();
+        let mut parts: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
         parts.push(format!("id={id}"));
         parts.push(format!("maxBitRate={max_bit_rate}"));
         format!("{}/rest/stream?{}", self.base_url, parts.join("&"))
@@ -315,7 +311,8 @@ impl SubsonicClient {
     /// Navidrome and most servers return a smaller JPEG/PNG, which is faster to download and decode
     /// than full-resolution artwork.
     pub async fn get_cover_art_sized(&self, id: &str, size: u32) -> Result<Vec<u8>> {
-        self.get_cover_art_impl(id, Some(size.max(32).min(2048))).await
+        self.get_cover_art_impl(id, Some(size.max(32).min(2048)))
+            .await
     }
 
     async fn get_cover_art_impl(&self, id: &str, size: Option<u32>) -> Result<Vec<u8>> {
@@ -404,11 +401,7 @@ impl SubsonicClient {
     }
 
     /// Append a single track to a playlist (`updatePlaylist` + `songIdToAdd`).
-    pub async fn add_track_to_playlist(
-        &self,
-        playlist_id: &str,
-        song_id: &str,
-    ) -> Result<()> {
+    pub async fn add_track_to_playlist(&self, playlist_id: &str, song_id: &str) -> Result<()> {
         let mut params = self.auth_params();
         params.push(("playlistId", playlist_id.to_string()));
         params.push(("songIdToAdd", song_id.to_string()));
@@ -424,11 +417,7 @@ impl SubsonicClient {
     }
 
     /// Remove the track at `index` from a playlist (`updatePlaylist` + `songIndexToRemove`).
-    pub async fn remove_track_from_playlist(
-        &self,
-        playlist_id: &str,
-        index: usize,
-    ) -> Result<()> {
+    pub async fn remove_track_from_playlist(&self, playlist_id: &str, index: usize) -> Result<()> {
         let mut params = self.auth_params();
         params.push(("playlistId", playlist_id.to_string()));
         params.push(("songIndexToRemove", index.to_string()));
@@ -508,7 +497,11 @@ pub async fn fetch_library(client: &SubsonicClient) -> Result<SubsonicLibrary> {
 /// Many servers (including Navidrome) omit `artist` on each `Song` in `getAlbum`
 /// even when the album has `artist` set. Fill from album, then the library artist
 /// name, so UIs and indexes (e.g. fzf) can search by performer name.
-fn apply_album_artist_fallback(song: &mut Song, album_artist: Option<&str>, library_artist_name: &str) {
+fn apply_album_artist_fallback(
+    song: &mut Song,
+    album_artist: Option<&str>,
+    library_artist_name: &str,
+) {
     let track_has_artist = song
         .artist
         .as_deref()
@@ -605,7 +598,12 @@ async fn fetch_songs_for_artist_inner(
 /// Uses the same default album concurrency as [`FetchLibraryOptions::default`].
 /// Returns a flat, disc+track-number-sorted `Vec<Song>` across all albums.
 pub async fn fetch_songs_for_artist(client: &SubsonicClient, artist: &Artist) -> Vec<Song> {
-    fetch_songs_for_artist_inner(client, artist, FetchLibraryOptions::default().album_parallelism).await
+    fetch_songs_for_artist_inner(
+        client,
+        artist,
+        FetchLibraryOptions::default().album_parallelism,
+    )
+    .await
 }
 
 /// Fetch metadata for every track in the library: `getArtists`, then for each
@@ -626,10 +624,7 @@ pub async fn fetch_all_library_songs_with_options(
         let client = client.clone();
         let sem = sem.clone();
         set.spawn(async move {
-            let _permit = sem
-                .acquire()
-                .await
-                .expect("library index artist semaphore");
+            let _permit = sem.acquire().await.expect("library index artist semaphore");
             fetch_songs_for_artist_inner(&client, &artist, album_p).await
         });
     }
@@ -722,21 +717,56 @@ mod tests {
     ///   cargo test -p ratune-subsonic -- --nocapture
     /// ```
     fn test_client() -> SubsonicClient {
-        let url  = std::env::var("SUBSONIC_URL").expect("set SUBSONIC_URL to run integration tests");
-        let user = std::env::var("SUBSONIC_USER").expect("set SUBSONIC_USER to run integration tests");
-        let pass = std::env::var("SUBSONIC_PASS").expect("set SUBSONIC_PASS to run integration tests");
+        let url = std::env::var("SUBSONIC_URL").expect("set SUBSONIC_URL to run integration tests");
+        let user =
+            std::env::var("SUBSONIC_USER").expect("set SUBSONIC_USER to run integration tests");
+        let pass =
+            std::env::var("SUBSONIC_PASS").expect("set SUBSONIC_PASS to run integration tests");
         SubsonicClient::new(&url, &user, &pass).expect("client construction must not fail")
     }
 
-    /// Live integration test — pings the Navidrome instance to verify that
-    /// MD5 token auth is wired up correctly.
+    /// Live integration test — pings a real Subsonic server. Requires
+    /// `SUBSONIC_URL`, `SUBSONIC_USER`, `SUBSONIC_PASS`. Run with:
+    /// `cargo test -p ratune-subsonic ping_live_navidrome -- --ignored --nocapture`
     #[tokio::test]
+    #[ignore = "requires SUBSONIC_URL, SUBSONIC_USER, SUBSONIC_PASS"]
     async fn ping_live_navidrome() {
         let client = test_client();
-        client
-            .ping()
-            .await
-            .expect("ping must succeed against live Navidrome — check credentials and connectivity");
+        client.ping().await.expect(
+            "ping must succeed against live Navidrome — check credentials and connectivity",
+        );
         println!("ping OK");
+    }
+
+    #[test]
+    fn stream_url_contains_auth_and_track_params() {
+        let client = SubsonicClient::new("http://127.0.0.1:4533/", "alice", "secret").unwrap();
+        let url_s = client.stream_url("track-99", 320);
+        let url = url::Url::parse(&url_s).expect("stream URL must parse");
+        assert_eq!(url.scheme(), "http");
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
+        assert_eq!(url.port(), Some(4533));
+        assert_eq!(url.path(), "/rest/stream");
+
+        let q: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
+        assert_eq!(q.get("id").map(String::as_str), Some("track-99"));
+        assert_eq!(q.get("maxBitRate").map(String::as_str), Some("320"));
+        assert_eq!(q.get("u").map(String::as_str), Some("alice"));
+        assert_eq!(q.get("v").map(String::as_str), Some(API_VERSION));
+        assert_eq!(q.get("c").map(String::as_str), Some(CLIENT_NAME));
+        assert_eq!(q.get("f").map(String::as_str), Some("json"));
+        assert!(q.contains_key("t"), "token param");
+        assert!(q.contains_key("s"), "salt param");
+        assert!(
+            q.get("t").map(|t| t.len()) == Some(32),
+            "MD5 hex token length"
+        );
+    }
+
+    #[test]
+    fn fetch_library_options_default_parallelism_positive() {
+        let o = FetchLibraryOptions::default();
+        assert!(o.album_parallelism >= 1);
+        assert!(o.artist_parallelism >= 1);
     }
 }

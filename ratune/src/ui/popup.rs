@@ -1,10 +1,10 @@
 //! Floating keybind reference popup.
 
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use ratatui::Frame;
 
 use crate::app::App;
 
@@ -13,67 +13,89 @@ const KEY_COL_W: usize = 12;
 
 fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     vec![
-        ("Navigation", vec![
-            ("j / k",       "Scroll up / down"),
-            ("h / l",       "Previous / next column (Browser)"),
-            ("1 / 2 / 3",   "Go to Home / Browse / Now Playing"),
-            ("Tab",         "Next tab"),
-            ("Shift-Tab",   "Previous tab"),
-            ("/",           "Search current column"),
-            ("Enter",       "Select / expand"),
-        ]),
-        ("Home Tab", vec![
-            ("h / l",   "Select album"),
-            ("j / k",   "Navigate list"),
-            ("J / K",   "Switch section"),
-            ("r",       "Re-roll rediscover"),
-            ("Enter",   "Go to artist in Browse"),
-        ]),
-        ("Playback", vec![
-            ("p / Space", "Play / pause"),
-            ("n / N",     "Next / previous track"),
-            ("x / Z",     "Shuffle / unshuffle"),
-            ("\u{2190} / \u{2192}", "Seek \u{b1}10s"),
-        ]),
-        ("Queue", vec![
-            ("a",       "Add track to queue"),
-            ("A",       "On artist / album add to queue"),
-            ("D",       "Clear queue"),
-        ]),
-        ("Library (fzf)", vec![
-            ("Ctrl+f", "Open picker (Tab multi-select)"),
-            ("Enter", "Append picks to queue"),
-            ("Ctrl+r", "In picker: replace queue · else: refresh index"),
-        ]),
-        ("Volume & Display", vec![
-            ("+ / -", "In-app level (duck music under games); saved on quit"),
-            ("t",     "Toggle dynamic theme"),
-            ("L",     "Toggle lyrics"),
-            ("V",     "Toggle visualizer"),
-        ]),
-        ("App", vec![
-            ("i", "Toggle this help"),
-            ("q", "Quit (or close help)"),
-        ]),
+        (
+            "Navigation",
+            vec![
+                ("j / k", "Scroll up / down"),
+                ("h / l", "Previous / next column (Browser)"),
+                ("1 / 2 / 3", "Go to Home / Browse / Now Playing"),
+                ("Tab", "Next tab"),
+                ("Shift-Tab", "Previous tab"),
+                ("/", "Search current column"),
+                ("Enter", "Select / expand"),
+            ],
+        ),
+        (
+            "Home Tab",
+            vec![
+                ("h / l", "Select album"),
+                ("j / k", "Navigate list"),
+                ("J / K", "Switch section"),
+                ("r", "Re-roll rediscover"),
+                ("Enter", "Go to artist in Browse"),
+            ],
+        ),
+        (
+            "Playback",
+            vec![
+                ("p / Space", "Play / pause"),
+                ("n / N", "Next / previous track"),
+                ("x / Z", "Shuffle / unshuffle"),
+                ("\u{2190} / \u{2192}", "Seek \u{b1}10s"),
+            ],
+        ),
+        (
+            "Queue",
+            vec![
+                ("a", "Add track to queue"),
+                ("A", "On artist / album add to queue"),
+                ("D", "Clear queue"),
+            ],
+        ),
+        (
+            "Library (fzf)",
+            vec![
+                ("Ctrl+f", "Open picker (Tab multi-select)"),
+                ("Enter", "Append picks to queue"),
+                ("Ctrl+r", "In picker: replace queue · else: refresh index"),
+            ],
+        ),
+        (
+            "Volume & Display",
+            vec![
+                (
+                    "+ / -",
+                    "In-app level (duck music under games); saved on quit",
+                ),
+                ("t", "Toggle dynamic theme"),
+                ("L", "Toggle lyrics"),
+                ("V", "Toggle visualizer"),
+            ],
+        ),
+        (
+            "App",
+            vec![("i", "Toggle this help"), ("q", "Quit (or close help)")],
+        ),
     ]
 }
 
 fn playlist_sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
-    vec![
-        ("Playlists", vec![
-            ("Shift+P",    "Open / close playlist panel"),
-            ("j / k",      "Scroll playlist / track list"),
-            ("h / l",      "Switch between lists"),
-            ("Enter",      "Play playlist / track"),
-            ("Shift+A",    "Append playlist to queue"),
-            (">",          "Add track to playlist (Browser)"),
-            ("c",          "Create playlist"),
-            ("r",          "Rename playlist"),
-            ("X",          "Delete playlist (with confirm)"),
-            ("<",          "Remove track from playlist"),
+    vec![(
+        "Playlists",
+        vec![
+            ("Shift+P", "Open / close playlist panel"),
+            ("j / k", "Scroll playlist / track list"),
+            ("h / l", "Switch between lists"),
+            ("Enter", "Play playlist / track"),
+            ("Shift+A", "Append playlist to queue"),
+            (">", "Add track to playlist (Browser)"),
+            ("c", "Create playlist"),
+            ("r", "Rename playlist"),
+            ("X", "Delete playlist (with confirm)"),
+            ("<", "Remove track from playlist"),
             ("Escape / q", "Close panel"),
-        ]),
-    ]
+        ],
+    )]
 }
 
 fn build_blocks(
@@ -138,9 +160,9 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
     let t = &app.theme;
 
     let accent = app.accent();
-    let fg     = t.foreground;
-    let dim    = t.dimmed;
-    let bg     = t.background;
+    let fg = t.foreground;
+    let dim = t.dimmed;
+    let bg = t.background;
 
     // ── Build content as section blocks, pack into two columns ────────────────
     // Keep each category within one column where possible, while aiming for
@@ -156,8 +178,8 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
     // Size to fit the taller column, but clamp to a percentage of the terminal.
     let required_inner_h = left_all.len().max(right_all.len()).max(1) as u16;
     let content_h = required_inner_h + 2; // +2 for border
-    let max_h     = (area.height * 80 / 100).max(10);
-    let popup_h   = content_h.min(max_h);
+    let max_h = (area.height * 80 / 100).max(10);
+    let popup_h = content_h.min(max_h);
 
     // Wide enough to comfortably hold two KEY_COL_W + desc columns side by side.
     let popup_w = (area.width * 70 / 100).max(80).min(area.width);
@@ -212,30 +234,17 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let cols = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(inner);
+    let cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
 
-    let left_lines: Vec<Line<'static>> = left_all
-        .iter()
-        .skip(scroll)
-        .take(col_h)
-        .cloned()
-        .collect();
-    let right_lines: Vec<Line<'static>> = right_all
-        .iter()
-        .skip(scroll)
-        .take(col_h)
-        .cloned()
-        .collect();
+    let left_lines: Vec<Line<'static>> =
+        left_all.iter().skip(scroll).take(col_h).cloned().collect();
+    let right_lines: Vec<Line<'static>> =
+        right_all.iter().skip(scroll).take(col_h).cloned().collect();
 
-    let left_para = Paragraph::new(Text::from(left_lines))
-        .style(Style::default().bg(bg));
+    let left_para = Paragraph::new(Text::from(left_lines)).style(Style::default().bg(bg));
     frame.render_widget(left_para, cols[0]);
 
-    let right_para = Paragraph::new(Text::from(right_lines))
-        .style(Style::default().bg(bg));
+    let right_para = Paragraph::new(Text::from(right_lines)).style(Style::default().bg(bg));
     frame.render_widget(right_para, cols[1]);
 }

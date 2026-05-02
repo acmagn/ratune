@@ -5,7 +5,10 @@
 //! (“black bands”). We **center-crop** the cover to the cell aspect ratio first, then scale down
 //! inside the 1024 px budget, so the bitmap matches the widget area more closely.
 
-use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage, imageops::{self, FilterType}};
+use image::{
+    imageops::{self, FilterType},
+    DynamicImage, ImageBuffer, Rgba, RgbaImage,
+};
 use ratatui::layout::Rect;
 use ratatui_image::FontSize;
 
@@ -160,8 +163,12 @@ pub fn prepare_art_image_for_rect_contain_centered(
 pub fn prepare_art_image_for_strip(img: DynamicImage, rect: Rect, font: FontSize) -> DynamicImage {
     let img = crop_center_to_cell_aspect(img, rect, font);
     let (bw, bh) = pixel_budget_for_rect(rect, font);
-    let max_w = (bw.saturating_mul(STRIP_ENCODE_SUPERRES)).min(MAX_ART_EDGE_PX).max(1);
-    let max_h = (bh.saturating_mul(STRIP_ENCODE_SUPERRES)).min(MAX_ART_EDGE_PX).max(1);
+    let max_w = (bw.saturating_mul(STRIP_ENCODE_SUPERRES))
+        .min(MAX_ART_EDGE_PX)
+        .max(1);
+    let max_h = (bh.saturating_mul(STRIP_ENCODE_SUPERRES))
+        .min(MAX_ART_EDGE_PX)
+        .max(1);
     let (iw, ih) = (img.width(), img.height());
     if iw == 0 || ih == 0 {
         return img;

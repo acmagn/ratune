@@ -10,6 +10,10 @@ readme = "../README.md"
 keywords = ["music", "tui", "subsonic", "navidrome", "terminal"]
 categories = ["command-line-utilities", "multimedia::audio"]
 
+[lib]
+name = "ratune"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ratune"
 path = "src/main.rs"
@@ -39,8 +43,6 @@ keyring-core = "1"
 
 # Platform credential stores for keyring-core — see https://crates.io/crates/keyring-core
 [target.'cfg(target_os = "linux")'.dependencies]
-# Kernel keyutils — always available on Linux; no Secret Service / D-Bus / gnome-keyring required.
-# See https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/
 linux-keyutils-keyring-store = "1"
 mpris-server = "0.9"
 

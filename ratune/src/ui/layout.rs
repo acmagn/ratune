@@ -329,10 +329,10 @@ impl Default for LayoutOptions {
 
 /// Unified areas struct used by `build_layout` (all three tabs).
 pub struct LayoutAreas {
-    pub center:     Rect,
+    pub center: Rect,
     pub now_playing: Rect,
     /// Tab indicator bar — height 1.
-    pub tab_bar:    Rect,
+    pub tab_bar: Rect,
     pub status_bar: Rect,
 }
 
@@ -363,10 +363,10 @@ pub fn build_layout(area: Rect, opts: &LayoutOptions) -> LayoutAreas {
             .split(area);
 
         LayoutAreas {
-            tab_bar:     chunks[0],
-            center:      chunks[1],
+            tab_bar: chunks[0],
+            center: chunks[1],
             now_playing: chunks[2],
-            status_bar:  chunks[3],
+            status_bar: chunks[3],
         }
     } else {
         let chunks = Layout::default()
@@ -380,10 +380,10 @@ pub fn build_layout(area: Rect, opts: &LayoutOptions) -> LayoutAreas {
             .split(area);
 
         LayoutAreas {
-            center:      chunks[0],
+            center: chunks[0],
             now_playing: chunks[1],
-            tab_bar:     chunks[2],
-            status_bar:  chunks[3],
+            tab_bar: chunks[2],
+            status_bar: chunks[3],
         }
     }
 }
@@ -391,8 +391,10 @@ pub fn build_layout(area: Rect, opts: &LayoutOptions) -> LayoutAreas {
 /// Rows needed for boxed-mode footer (controls / progress outside the center pane), plus one blank
 /// row between them when both are shown so they are not stacked flush.
 fn boxed_np_footer_row_count(app: &App) -> u16 {
-    let c_out = app.config.now_playing_show_controls && !app.config.now_playing_box_include_controls;
-    let p_out = app.config.now_playing_show_progress && !app.config.now_playing_box_include_progress;
+    let c_out =
+        app.config.now_playing_show_controls && !app.config.now_playing_box_include_controls;
+    let p_out =
+        app.config.now_playing_show_progress && !app.config.now_playing_box_include_progress;
     let mut n = u16::from(c_out) + u16::from(p_out);
     if c_out && p_out {
         n += 1;
@@ -413,11 +415,7 @@ pub fn layout_options_for_app(app: &App) -> LayoutOptions {
         && !app.lyrics_visible
     {
         let fh = boxed_np_footer_row_count(app);
-        let need = if fh == 0 {
-            2u16
-        } else {
-            fh.max(2)
-        };
+        let need = if fh == 0 { 2u16 } else { fh.max(2) };
         // Shrink below [ui].now_playing_bar_height when the footer is smaller; grow if the footer
         // needs more rows than the config minimum.
         let h = if need > base.now_playing_bar_height {

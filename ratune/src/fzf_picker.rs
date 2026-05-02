@@ -6,15 +6,15 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
-use crossterm::ExecutableCommand;
 use crossterm::event::{
     DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
 };
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
+use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 
 /// Key name fzf prints when using `--expect=ctrl-r` and the user accepts with that key.
 pub const FZF_EXPECT_REPLACE_QUEUE: &str = "ctrl-r";
@@ -85,11 +85,16 @@ pub fn prepare_library_fuzzy_picker_args(binary: &str, mut args: Vec<String>) ->
 }
 
 /// Suspend the TUI so a subprocess can use the terminal normally.
-pub fn suspend_tui<W: Write>(terminal: &mut Terminal<CrosstermBackend<W>>, in_tmux: bool) -> Result<()> {
+pub fn suspend_tui<W: Write>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    in_tmux: bool,
+) -> Result<()> {
     disable_raw_mode().context("disable_raw_mode")?;
     terminal.backend_mut().execute(DisableMouseCapture)?;
     if in_tmux {
-        terminal.backend_mut().write_all(b"\x1bPtmux;\x1b\x1b[?1004l\x1b\\")?;
+        terminal
+            .backend_mut()
+            .write_all(b"\x1bPtmux;\x1b\x1b[?1004l\x1b\\")?;
         terminal.backend_mut().flush()?;
     } else {
         terminal.backend_mut().execute(DisableFocusChange)?;
@@ -101,12 +106,17 @@ pub fn suspend_tui<W: Write>(terminal: &mut Terminal<CrosstermBackend<W>>, in_tm
 }
 
 /// Restore raw mode + alternate screen after a subprocess exits.
-pub fn resume_tui<W: Write>(terminal: &mut Terminal<CrosstermBackend<W>>, in_tmux: bool) -> Result<()> {
+pub fn resume_tui<W: Write>(
+    terminal: &mut Terminal<CrosstermBackend<W>>,
+    in_tmux: bool,
+) -> Result<()> {
     enable_raw_mode().context("enable_raw_mode")?;
     terminal.backend_mut().execute(EnterAlternateScreen)?;
     terminal.backend_mut().execute(EnableMouseCapture)?;
     if in_tmux {
-        terminal.backend_mut().write_all(b"\x1bPtmux;\x1b\x1b[?1004h\x1b\\")?;
+        terminal
+            .backend_mut()
+            .write_all(b"\x1bPtmux;\x1b\x1b[?1004h\x1b\\")?;
         terminal.backend_mut().flush()?;
     } else {
         terminal.backend_mut().execute(EnableFocusChange)?;
@@ -131,10 +141,7 @@ pub fn run_fzf(binary: &str, args: &[String], input: &str) -> Result<Option<Vec<
         stdin.write_all(input.as_bytes())?;
     }
 
-    let mut stdout = child
-        .stdout
-        .take()
-        .context("fzf stdout")?;
+    let mut stdout = child.stdout.take().context("fzf stdout")?;
     let status = child.wait().context("wait fzf")?;
 
     let mut out = String::new();
@@ -161,11 +168,7 @@ mod tests {
 
     #[test]
     fn parse_expect_enter_then_rows() {
-        let lines = vec![
-            String::new(),
-            "id1\ta\tb".into(),
-            "id2\ta\tb".into(),
-        ];
+        let lines = vec![String::new(), "id1\ta\tb".into(), "id2\ta\tb".into()];
         let (replace, rows) = parse_fzf_output_lines(&lines);
         assert!(!replace);
         assert_eq!(rows.len(), 2);
@@ -173,10 +176,7 @@ mod tests {
 
     #[test]
     fn parse_expect_ctrl_r() {
-        let lines = vec![
-            "ctrl-r".into(),
-            "id1\tx".into(),
-        ];
+        let lines = vec!["ctrl-r".into(), "id1\tx".into()];
         let (replace, rows) = parse_fzf_output_lines(&lines);
         assert!(replace);
         assert_eq!(rows.len(), 1);
@@ -218,10 +218,7 @@ mod tests {
 
     #[test]
     fn prepare_sk_skips_when_ctrl_r_already_bound() {
-        let args = vec![
-            "--bind=ctrl-r:ignore".into(),
-            "--multi".into(),
-        ];
+        let args = vec!["--bind=ctrl-r:ignore".into(), "--multi".into()];
         let out = prepare_library_fuzzy_picker_args("sk", args.clone());
         assert_eq!(out, args);
         let args = vec!["--bind".into(), "ctrl-r:accept(ctrl-alt-m)".into()];

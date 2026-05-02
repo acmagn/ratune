@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use serde::Deserialize;
 
 /// An application-level error returned by the Subsonic server (HTTP 200, status `"failed"`).
@@ -27,4 +27,40 @@ pub(crate) fn check_status(status: &str, error: Option<&SubsonicError>) -> Resul
         bail!("{e}");
     }
     bail!("Subsonic returned non-ok status: {status}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_status_ok() {
+        assert!(check_status("ok", None).is_ok());
+    }
+
+    #[test]
+    fn check_status_failed_with_error() {
+        let err = SubsonicError {
+            code: 40,
+            message: "not found".into(),
+        };
+        let r = check_status("failed", Some(&err));
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("40"));
+    }
+
+    #[test]
+    fn check_status_failed_without_error_bails() {
+        let r = check_status("failed", None);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn display_formats_code_and_message() {
+        let e = SubsonicError {
+            code: 0,
+            message: "x".into(),
+        };
+        assert_eq!(e.to_string(), "Subsonic error 0: x");
+    }
 }

@@ -1,10 +1,10 @@
 use std::time::Instant;
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use ratatui::Frame;
 
 use crate::app::App;
 
@@ -33,7 +33,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let line = if app.search_mode.active {
         Line::from(vec![
             Span::styled("/ ", Style::default().fg(app.accent())),
-            Span::styled(app.search_mode.query.as_str(), Style::default().fg(t.foreground)),
+            Span::styled(
+                app.search_mode.query.as_str(),
+                Style::default().fg(t.foreground),
+            ),
             Span::styled("_", Style::default().fg(app.accent())),
             Span::raw("   "),
             Span::styled("Enter", Style::default().fg(t.dimmed)),
@@ -47,21 +50,17 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     } else if app.library_index_refreshing {
         let w = area.width as usize;
         let shown = fit_status_bar_text(&library_index_refresh_status_text(app), w);
-        Line::from(vec![Span::styled(
-            shown,
-            Style::default().fg(app.accent()),
-        )])
+        Line::from(vec![Span::styled(shown, Style::default().fg(app.accent()))])
     } else if let Some((msg, _)) = &app.status_flash {
         // Flash message: left-aligned, truncated to the bar width (centred long
         // strings overflow and corrupt the TUI layout).
         let w = area.width as usize;
         let shown = fit_status_bar_text(msg, w);
-        Line::from(vec![Span::styled(
-            shown,
-            Style::default().fg(app.accent()),
-        )])
+        Line::from(vec![Span::styled(shown, Style::default().fg(app.accent()))])
     } else {
-        let host = app.config.subsonic_url
+        let host = app
+            .config
+            .subsonic_url
             .trim_start_matches("http://")
             .trim_start_matches("https://");
 

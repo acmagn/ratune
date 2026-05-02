@@ -54,9 +54,15 @@ fn placeholder_value(key: char, ctx: &NowPlayingContext<'_>) -> String {
     let s = ctx.song;
     match key {
         't' => s.map(|x| x.title.as_str()).unwrap_or("").to_string(),
-        'a' => s.and_then(|x| x.artist.as_deref()).unwrap_or("").to_string(),
+        'a' => s
+            .and_then(|x| x.artist.as_deref())
+            .unwrap_or("")
+            .to_string(),
         'b' => s.and_then(|x| x.album.as_deref()).unwrap_or("").to_string(),
-        'y' => s.and_then(|x| x.year).map(|y| y.to_string()).unwrap_or_default(),
+        'y' => s
+            .and_then(|x| x.year)
+            .map(|y| y.to_string())
+            .unwrap_or_default(),
         'n' => s
             .and_then(|x| x.track)
             .map(|n| format!("{n:02}"))
@@ -174,7 +180,8 @@ pub fn format_now_playing_line(
                                 style = style.remove_modifier(Modifier::REVERSED);
                             }
                             _ => {
-                                spans.push(Span::styled("$/".to_string() + &end.to_string(), style));
+                                spans
+                                    .push(Span::styled("$/".to_string() + &end.to_string(), style));
                             }
                         }
                     }
@@ -218,6 +225,13 @@ pub fn format_now_playing_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_clock_duration_secs_hours_and_minutes() {
+        assert_eq!(format_clock_duration_secs(125), "2:05");
+        assert_eq!(format_clock_duration_secs(3600), "1:00:00");
+        assert_eq!(format_clock_duration_secs(3725), "1:02:05");
+    }
 
     #[test]
     fn percent_title() {

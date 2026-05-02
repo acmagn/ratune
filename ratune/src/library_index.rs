@@ -70,8 +70,7 @@ pub fn save(
     navidrome_last_scan: Option<&str>,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     let file = LibraryIndexFile::new(
         tracks.to_vec(),
@@ -113,7 +112,10 @@ fn truncate_display(s: &str, max_chars: usize) -> String {
     if max_chars <= 1 {
         return "…".to_string();
     }
-    t.chars().take(max_chars.saturating_sub(1)).chain(Some('…')).collect()
+    t.chars()
+        .take(max_chars.saturating_sub(1))
+        .chain(Some('…'))
+        .collect()
 }
 
 /// Truncate then pad with spaces so columns line up in a monospace terminal.
@@ -191,7 +193,11 @@ mod tests {
     #[test]
     fn fzf_header_matches_column_widths() {
         let h = fzf_header_line();
-        assert_eq!(h.matches('\t').count(), 3, "four columns: Artist | Album | Title | Time");
+        assert_eq!(
+            h.matches('\t').count(),
+            3,
+            "four columns: Artist | Album | Title | Time"
+        );
         let cols: Vec<&str> = h.split('\t').collect();
         assert_eq!(cols.len(), 4);
         assert_eq!(cols[0].chars().count(), 26);
@@ -223,6 +229,10 @@ mod tests {
             starred: None,
         };
         let line = fzf_input_lines(std::slice::from_ref(&s));
-        assert_eq!(line.matches('\t').count(), 4, "exactly 4 tabs as delimiters");
+        assert_eq!(
+            line.matches('\t').count(),
+            4,
+            "exactly 4 tabs as delimiters"
+        );
     }
 }

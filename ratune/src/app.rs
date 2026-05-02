@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, mpsc as std_mpsc};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{mpsc as std_mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -10,7 +10,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use tokio::sync::mpsc;
 
-use ratune_player::{PlayerCommand, PlayerEvent, SampleBuffer, spawn_player};
+use ratune_player::{spawn_player, PlayerCommand, PlayerEvent, SampleBuffer};
 use ratune_subsonic::SubsonicClient;
 
 use serde::{Deserialize, Serialize};
@@ -18,10 +18,6 @@ use serde::{Deserialize, Serialize};
 use crate::action::{Action, Direction};
 use crate::color::{extract_accent, lerp_color};
 use crate::config::{AlbumArtBackend, Config};
-use image::{DynamicImage, imageops::FilterType};
-use ratatui_image::picker::ProtocolType;
-use ratatui_image::Resize;
-use ratatui_image::thread::{ResizeRequest, ResizeResponse, ThreadProtocol};
 use crate::history::PlayRecord;
 use crate::keybinds::Keybinds;
 use crate::state::{
@@ -29,6 +25,10 @@ use crate::state::{
     PlaylistInputMode, PlaylistOverlay, QueueState,
 };
 use crate::theme::Theme;
+use image::{imageops::FilterType, DynamicImage};
+use ratatui_image::picker::ProtocolType;
+use ratatui_image::thread::{ResizeRequest, ResizeResponse, ThreadProtocol};
+use ratatui_image::Resize;
 use ratune_subsonic::LyricLine;
 
 // ── Sizing helper (used in dispatch for scroll clamping) ──────────────────────
@@ -102,8 +102,8 @@ impl Tab {
     /// Cycle forward: Home → Browser → NowPlaying → Home
     pub fn next(self) -> Self {
         match self {
-            Tab::Home       => Tab::Browser,
-            Tab::Browser    => Tab::NowPlaying,
+            Tab::Home => Tab::Browser,
+            Tab::Browser => Tab::NowPlaying,
             Tab::NowPlaying => Tab::Home,
         }
     }
@@ -111,8 +111,8 @@ impl Tab {
     /// Cycle backward: Home → NowPlaying → Browser → Home
     pub fn prev(self) -> Self {
         match self {
-            Tab::Home       => Tab::NowPlaying,
-            Tab::Browser    => Tab::Home,
+            Tab::Home => Tab::NowPlaying,
+            Tab::Browser => Tab::Home,
             Tab::NowPlaying => Tab::Browser,
         }
     }
@@ -187,8 +187,8 @@ impl HomeSection {
         match self {
             HomeSection::RecentAlbums => HomeSection::RecentTracks,
             HomeSection::RecentTracks => HomeSection::Rediscover,
-            HomeSection::TopArtists  => HomeSection::Rediscover,
-            HomeSection::Rediscover  => HomeSection::RecentAlbums,
+            HomeSection::TopArtists => HomeSection::Rediscover,
+            HomeSection::Rediscover => HomeSection::RecentAlbums,
         }
     }
 
@@ -196,8 +196,8 @@ impl HomeSection {
         match self {
             HomeSection::RecentAlbums => HomeSection::Rediscover,
             HomeSection::RecentTracks => HomeSection::RecentAlbums,
-            HomeSection::TopArtists  => HomeSection::RecentAlbums,
-            HomeSection::Rediscover  => HomeSection::RecentTracks,
+            HomeSection::TopArtists => HomeSection::RecentAlbums,
+            HomeSection::Rediscover => HomeSection::RecentTracks,
         }
     }
 }
@@ -243,29 +243,56 @@ pub enum LibraryUpdate {
         prepend: bool,
     },
     /// Raw image bytes for a cover art ID fetched from Navidrome.
-    CoverArt { cover_id: String, bytes: Vec<u8> },
+    CoverArt {
+        cover_id: String,
+        bytes: Vec<u8>,
+    },
     /// Lyrics fetched for a song; `lines` is empty when the track has no lyrics.
-    Lyrics { song_id: String, lines: Vec<LyricLine> },
+    Lyrics {
+        song_id: String,
+        lines: Vec<LyricLine>,
+    },
     /// Track bytes downloaded for offline caching.
-    CacheTrack { song_id: String, album_id: String, bytes: Vec<u8> },
+    CacheTrack {
+        song_id: String,
+        album_id: String,
+        bytes: Vec<u8>,
+    },
     /// Cover art fetched for a home-tab album strip thumbnail.
-    HomeArt { album_id: String, bytes: Vec<u8> },
+    HomeArt {
+        album_id: String,
+        bytes: Vec<u8>,
+    },
     /// Home strip cover fetch failed — release loading slot so more fetches can run.
-    HomeArtFetchFailed { album_id: String },
+    HomeArtFetchFailed {
+        album_id: String,
+    },
     /// All playlists fetched from `getPlaylists`.
     Playlists(Vec<ratune_subsonic::Playlist>),
     /// Full track list for a single playlist fetched from `getPlaylist`.
-    PlaylistTracks { playlist_id: String, songs: Vec<ratune_subsonic::Song> },
+    PlaylistTracks {
+        playlist_id: String,
+        songs: Vec<ratune_subsonic::Song>,
+    },
     /// A new playlist was successfully created.
     PlaylistCreated(ratune_subsonic::Playlist),
     /// A playlist was successfully deleted (carries the deleted ID).
     PlaylistDeleted(String),
     /// A playlist was successfully renamed.
-    PlaylistRenamed { id: String, new_name: String },
+    PlaylistRenamed {
+        id: String,
+        new_name: String,
+    },
     /// A track was successfully added to a playlist.
-    PlaylistTrackAdded { _playlist_id: String, playlist_name: String },
+    PlaylistTrackAdded {
+        _playlist_id: String,
+        playlist_name: String,
+    },
     /// A track was successfully removed from a playlist.
-    PlaylistTrackRemoved { _playlist_id: String, index: usize },
+    PlaylistTrackRemoved {
+        _playlist_id: String,
+        index: usize,
+    },
     /// Playlist list fetched for the picker (separate from the overlay's list).
     PlaylistsForPicker(Vec<ratune_subsonic::Playlist>),
     /// Full library metadata index finished refreshing (background task).
@@ -476,8 +503,7 @@ pub struct App {
     pub np_art_state: Option<ThreadProtocol>,
     /// Worker queue for `ResizeRequest` (Now Playing only; home strip stays on-thread for now).
     pub ratatui_resize_tx: Option<Sender<ResizeRequest>>,
-    pub ratatui_resize_rx:
-        Option<Receiver<Result<ResizeResponse, ratatui_image::errors::Errors>>>,
+    pub ratatui_resize_rx: Option<Receiver<Result<ResizeResponse, ratatui_image::errors::Errors>>>,
     /// `(bytes_digest, inner_w, inner_h)` — rebuild when pixels or art `Rect` change.
     pub np_art_prep_key: Option<(u64, u16, u16)>,
     /// Home art strip: one protocol state per `album_id`.
@@ -488,18 +514,24 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
-        let subsonic =
-            SubsonicClient::new(&config.subsonic_url, &config.subsonic_user, &config.subsonic_pass)?;
+        let subsonic = SubsonicClient::new(
+            &config.subsonic_url,
+            &config.subsonic_user,
+            &config.subsonic_pass,
+        )?;
         let (library_tx, library_rx) = mpsc::channel(64);
         let (player_tx, player_rx, player_join, sample_buffer) = spawn_player();
         // Apply configured default volume immediately.
-        let _ = player_tx.send(PlayerCommand::SetVolume(config.default_volume as f32 / 100.0));
+        let _ = player_tx.send(PlayerCommand::SetVolume(
+            config.default_volume as f32 / 100.0,
+        ));
         let keybinds = Keybinds::from_section(&config.keybinds);
-        let theme    = Theme::from_section(&config.theme);
+        let theme = Theme::from_section(&config.theme);
         let static_accent = theme.accent;
         let lyrics_visible = config.lyrics_visible;
         let visualizer_visible = config.visualizer_visible;
-        let track_cache = crate::cache::TrackCache::load(config.cache_enabled, config.cache_max_size_gb);
+        let track_cache =
+            crate::cache::TrackCache::load(config.cache_enabled, config.cache_max_size_gb);
         let index_path = config.resolved_library_index_path();
         let (library_index_tracks, library_index_refreshed_at) =
             match crate::library_index::load(&index_path) {
@@ -595,7 +627,8 @@ impl App {
 
     /// `ratatui-image` picker initialized (terminal query succeeded).
     pub fn ratatui_art_ready(&self) -> bool {
-        matches!(self.config.album_art_backend, AlbumArtBackend::RatatuiImage) && self.art_picker.is_some()
+        matches!(self.config.album_art_backend, AlbumArtBackend::RatatuiImage)
+            && self.art_picker.is_some()
     }
 
     /// Picker chose Kitty graphics — use the same post-draw APC path as `kitty_art`, not `StatefulImage`.
@@ -635,7 +668,11 @@ impl App {
         use crate::ui::kitty_art::art_strip_layout;
         const FALLBACK: usize = 12;
         self.home_recent_albums_inner
-            .map(|inner| art_strip_layout(inner.width, inner.height).total_visible.max(1))
+            .map(|inner| {
+                art_strip_layout(inner.width, inner.height)
+                    .total_visible
+                    .max(1)
+            })
             .unwrap_or(FALLBACK)
     }
 
@@ -829,7 +866,9 @@ impl App {
             .collect();
 
         // Recent albums: up to 20 unique albums for the art strip.
-        self.home.recent_albums = self.history.recent_albums(20)
+        self.home.recent_albums = self
+            .history
+            .recent_albums(20)
             .into_iter()
             .map(|(album_id, album_name, artist_name)| RecentAlbum {
                 album_id,
@@ -860,14 +899,23 @@ impl App {
 
         // Drop prepared thumbs for albums no longer in the strip (never blanket-clear:
         // that forced a full decode pipeline on every Home visit).
-        let keep_ids: HashSet<String> =
-            self.home.recent_albums.iter().map(|a| a.album_id.clone()).collect();
-        self.home_strip_thumb_prepared.retain(|id, _| keep_ids.contains(id));
+        let keep_ids: HashSet<String> = self
+            .home
+            .recent_albums
+            .iter()
+            .map(|a| a.album_id.clone())
+            .collect();
+        self.home_strip_thumb_prepared
+            .retain(|id, _| keep_ids.contains(id));
 
         // Recent tracks: last 15 from history (most recent first).
         let total = self.history.records.len();
         let start = total.saturating_sub(15);
-        self.home.recent_tracks = self.history.records[start..].iter().cloned().rev().collect();
+        self.home.recent_tracks = self.history.records[start..]
+            .iter()
+            .cloned()
+            .rev()
+            .collect();
 
         // Top 15 artists by play count.
         self.home.top_artists = self.history.top_artists(15);
@@ -875,7 +923,10 @@ impl App {
         // Rediscover: build library artist pairs from loaded state.
         let library_artist_pairs: Vec<(String, String)> =
             if let LoadingState::Loaded(artists) = &self.library.artists {
-                artists.iter().map(|a| (a.id.clone(), a.name.clone())).collect()
+                artists
+                    .iter()
+                    .map(|a| (a.id.clone(), a.name.clone()))
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -923,7 +974,9 @@ impl App {
     /// up to a maximum of concurrent in-flight fetches (see `MAX_CONCURRENT` below).
     fn spawn_pending_home_art_fetches(&mut self) {
         const MAX_CONCURRENT: usize = 8;
-        let album_ids: Vec<String> = self.home.recent_albums
+        let album_ids: Vec<String> = self
+            .home
+            .recent_albums
             .iter()
             .map(|a| a.album_id.clone())
             .collect();
@@ -1014,40 +1067,48 @@ impl App {
         let album_p = self.config.library_fetch_album_parallelism;
         let artist_p = self.config.library_fetch_artist_parallelism;
         tokio::spawn(async move {
-            let result: Result<(Vec<ratune_subsonic::Song>, Option<String>, bool), String> = async {
-                if nav_skip && !force {
-                    if let Some(file) = crate::library_index::load(&index_path) {
-                        if let Some(ref tok) = file.navidrome_last_scan {
-                            if let Ok(status) = client.get_scan_status().await {
-                                if !status.scanning {
-                                    if status.last_scan.as_deref() == Some(tok.as_str()) {
-                                        return Ok((file.tracks.clone(), Some(tok.clone()), false));
+            let result: Result<(Vec<ratune_subsonic::Song>, Option<String>, bool), String> =
+                async {
+                    if nav_skip && !force {
+                        if let Some(file) = crate::library_index::load(&index_path) {
+                            if let Some(ref tok) = file.navidrome_last_scan {
+                                if let Ok(status) = client.get_scan_status().await {
+                                    if !status.scanning {
+                                        if status.last_scan.as_deref() == Some(tok.as_str()) {
+                                            return Ok((
+                                                file.tracks.clone(),
+                                                Some(tok.clone()),
+                                                false,
+                                            ));
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    let opts = ratune_subsonic::FetchLibraryOptions {
+                        album_parallelism: album_p,
+                        artist_parallelism: artist_p,
+                    };
+                    let tracks =
+                        ratune_subsonic::fetch_all_library_songs_with_options(&client, opts)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                    let scan_tok = if nav_skip {
+                        client
+                            .get_scan_status()
+                            .await
+                            .ok()
+                            .and_then(|s| s.last_scan)
+                    } else {
+                        None
+                    };
+                    Ok((tracks, scan_tok, force))
                 }
-                let opts = ratune_subsonic::FetchLibraryOptions {
-                    album_parallelism: album_p,
-                    artist_parallelism: artist_p,
-                };
-                let tracks = ratune_subsonic::fetch_all_library_songs_with_options(&client, opts)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let scan_tok = if nav_skip {
-                    client
-                        .get_scan_status()
-                        .await
-                        .ok()
-                        .and_then(|s| s.last_scan)
-                } else {
-                    None
-                };
-                Ok((tracks, scan_tok, force))
-            }
-            .await;
-            let _ = tx.send(LibraryUpdate::LibraryIndexRefreshComplete { result }).await;
+                .await;
+            let _ = tx
+                .send(LibraryUpdate::LibraryIndexRefreshComplete { result })
+                .await;
         });
     }
 
@@ -1158,13 +1219,7 @@ impl App {
     ///
     /// Soft-fails silently — on any error an empty `lines` vec is delivered so
     /// the UI shows "No lyrics available" rather than a loading spinner forever.
-    pub fn fetch_lyrics(
-        &mut self,
-        song_id: String,
-        artist: String,
-        title: String,
-        album: String,
-    ) {
+    pub fn fetch_lyrics(&mut self, song_id: String, artist: String, title: String, album: String) {
         self.lyrics_loading = true;
         self.lyrics_scroll = 0;
         let tx = self.library_tx.clone();
@@ -1180,9 +1235,7 @@ impl App {
     pub fn lyrics_are_unsynced(&self) -> bool {
         self.lyrics_cache
             .as_ref()
-            .map(|(_, lines)| {
-                !lines.is_empty() && lines.iter().all(|l| l.time.is_none())
-            })
+            .map(|(_, lines)| !lines.is_empty() && lines.iter().all(|l| l.time.is_none()))
             .unwrap_or(false)
     }
 
@@ -1233,7 +1286,12 @@ impl App {
 
     /// Spawn a task that fetches every album + every track for the given artist,
     /// then delivers them as a flat sorted `AllTracksForArtist` update.
-    pub fn fetch_all_tracks_for_artist(&self, artist_id: String, start_playing: bool, prepend: bool) {
+    pub fn fetch_all_tracks_for_artist(
+        &self,
+        artist_id: String,
+        start_playing: bool,
+        prepend: bool,
+    ) {
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1244,13 +1302,11 @@ impl App {
                     return;
                 }
             };
-            artist.album.sort_by(|a, b| {
-                match (a.year, b.year) {
-                    (Some(ya), Some(yb)) => ya.cmp(&yb).then_with(|| a.name.cmp(&b.name)),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => a.name.cmp(&b.name),
-                }
+            artist.album.sort_by(|a, b| match (a.year, b.year) {
+                (Some(ya), Some(yb)) => ya.cmp(&yb).then_with(|| a.name.cmp(&b.name)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.name.cmp(&b.name),
             });
             let mut songs = Vec::new();
             for album in &artist.album {
@@ -1286,13 +1342,14 @@ impl App {
                                 self.library.selected_artist = Some(0);
                             }
                             // Clamp restored index to actual list size.
-                            let idx = self.library.selected_artist.unwrap()
-                                .min(artists.len() - 1);
+                            let idx = self.library.selected_artist.unwrap().min(artists.len() - 1);
                             self.library.selected_artist = Some(idx);
                             // Fetch albums for the selected (or restored) artist.
                             let artist_id = artists[idx].id.clone();
                             if !self.library.albums.contains_key(&artist_id) {
-                                self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+                                self.library
+                                    .albums
+                                    .insert(artist_id.clone(), LoadingState::Loading);
                                 self.fetch_albums(artist_id);
                             }
                         }
@@ -1303,7 +1360,9 @@ impl App {
             }
             LibraryUpdate::Albums { artist_id, result } => {
                 // Is this update for the currently-selected artist?
-                let is_selected_artist = self.library.selected_artist
+                let is_selected_artist = self
+                    .library
+                    .selected_artist
                     .and_then(|idx| {
                         if let LoadingState::Loaded(artists) = &self.library.artists {
                             artists.get(idx).map(|a| a.id == artist_id)
@@ -1322,12 +1381,14 @@ impl App {
                                 if self.library.selected_album.is_none() {
                                     self.library.selected_album = Some(0);
                                 }
-                                let idx = self.library.selected_album.unwrap()
-                                    .min(albums.len() - 1);
+                                let idx =
+                                    self.library.selected_album.unwrap().min(albums.len() - 1);
                                 self.library.selected_album = Some(idx);
                                 let album_id = albums[idx].id.clone();
                                 if !self.library.tracks.contains_key(&album_id) {
-                                    self.library.tracks.insert(album_id.clone(), LoadingState::Loading);
+                                    self.library
+                                        .tracks
+                                        .insert(album_id.clone(), LoadingState::Loading);
                                     self.fetch_tracks(album_id);
                                 }
                             } else {
@@ -1337,7 +1398,9 @@ impl App {
                                 }
                                 let first_id = albums[0].id.clone();
                                 if !self.library.tracks.contains_key(&first_id) {
-                                    self.library.tracks.insert(first_id.clone(), LoadingState::Loading);
+                                    self.library
+                                        .tracks
+                                        .insert(first_id.clone(), LoadingState::Loading);
                                     self.fetch_tracks(first_id);
                                 }
                             }
@@ -1350,7 +1413,9 @@ impl App {
             }
             LibraryUpdate::Tracks { album_id, result } => {
                 // Is this update for the currently-selected album?
-                let is_current_album = self.library.current_album()
+                let is_current_album = self
+                    .library
+                    .current_album()
                     .map(|a| a.id == album_id)
                     .unwrap_or(false);
                 let loaded = match result {
@@ -1360,8 +1425,7 @@ impl App {
                             if self.library.selected_track.is_none() {
                                 self.library.selected_track = Some(0);
                             }
-                            let idx = self.library.selected_track.unwrap()
-                                .min(songs.len() - 1);
+                            let idx = self.library.selected_track.unwrap().min(songs.len() - 1);
                             self.library.selected_track = Some(idx);
                         } else if self.library.selected_track.is_none() {
                             self.library.selected_track = Some(0);
@@ -1415,7 +1479,11 @@ impl App {
                 self.lyrics_cache = Some((song_id, lines));
                 self.lyrics_scroll = 0;
             }
-            LibraryUpdate::CacheTrack { song_id, album_id, bytes } => {
+            LibraryUpdate::CacheTrack {
+                song_id,
+                album_id,
+                bytes,
+            } => {
                 let _ = self.cache.put(&song_id, &album_id, &bytes);
             }
             LibraryUpdate::HomeArt { album_id, bytes } => {
@@ -1497,7 +1565,10 @@ impl App {
                     Instant::now() + Duration::from_secs(2),
                 ));
             }
-            LibraryUpdate::PlaylistTrackRemoved { _playlist_id: _, index } => {
+            LibraryUpdate::PlaylistTrackRemoved {
+                _playlist_id: _,
+                index,
+            } => {
                 if let LoadingState::Loaded(ref mut songs) = self.playlist_overlay.tracks {
                     if index < songs.len() {
                         songs.remove(index);
@@ -1525,9 +1596,7 @@ impl App {
                     Ok((tracks, navidrome_last_scan, forced)) => {
                         let path = self.config.resolved_library_index_path();
                         let scan_save = navidrome_last_scan.as_deref();
-                        if let Err(e) =
-                            crate::library_index::save(&path, &tracks, now, scan_save)
-                        {
+                        if let Err(e) = crate::library_index::save(&path, &tracks, now, scan_save) {
                             eprintln!("library index save: {e}");
                         }
                         self.library_index_refreshed_at = Some(now);
@@ -1539,10 +1608,8 @@ impl App {
                         } else {
                             "Library index updated"
                         };
-                        self.status_flash = Some((
-                            msg.into(),
-                            Instant::now() + Duration::from_secs(2),
-                        ));
+                        self.status_flash =
+                            Some((msg.into(), Instant::now() + Duration::from_secs(2)));
                         if forced && self.config.library_notify_on_forced_index_refresh {
                             crate::desktop_notify::spawn_forced_library_index_complete();
                         }
@@ -1571,7 +1638,8 @@ impl App {
                     // Fetch cover art when the track has one and it differs from cache.
                     let cover_id = song.cover_art.clone();
                     if let Some(ref cid) = cover_id {
-                        let needs_fetch = self.art_cache
+                        let needs_fetch = self
+                            .art_cache
                             .as_ref()
                             .map(|(cached_id, _)| cached_id != cid)
                             .unwrap_or(true);
@@ -1590,7 +1658,8 @@ impl App {
                         self.apply_dynamic_accent(None);
                     }
                     // Fetch lyrics if not already cached for this song.
-                    let cached_for_song = self.lyrics_cache
+                    let cached_for_song = self
+                        .lyrics_cache
                         .as_ref()
                         .map(|(id, _)| id == &song.id)
                         .unwrap_or(false);
@@ -1609,7 +1678,8 @@ impl App {
                         let mut to_download: Vec<(String, String)> = Vec::new();
                         // Current track.
                         if !self.cache.get_const(&song.id) {
-                            to_download.push((song.id.clone(), song.album_id.clone().unwrap_or_default()));
+                            to_download
+                                .push((song.id.clone(), song.album_id.clone().unwrap_or_default()));
                         }
                         // Next 2 tracks.
                         let cursor = self.queue.cursor;
@@ -1617,7 +1687,8 @@ impl App {
                             let idx = cursor + offset;
                             if idx < self.queue.songs.len() {
                                 let s_id = self.queue.songs[idx].id.clone();
-                                let a_id = self.queue.songs[idx].album_id.clone().unwrap_or_default();
+                                let a_id =
+                                    self.queue.songs[idx].album_id.clone().unwrap_or_default();
                                 if !self.cache.get_const(&s_id) {
                                     to_download.push((s_id, a_id));
                                 }
@@ -1652,10 +1723,7 @@ impl App {
                                 album_name: song.album.clone().unwrap_or_default(),
                                 track_name: song.title.clone(),
                                 played_at: crate::history::PlayRecord::now_secs(),
-                                duration_secs: song
-                                    .duration
-                                    .map(|d| d as u64)
-                                    .unwrap_or(0),
+                                duration_secs: song.duration.map(|d| d as u64).unwrap_or(0),
                             };
                             self.history.record_play(record);
                         }
@@ -1666,8 +1734,9 @@ impl App {
             PlayerEvent::AboutToFinish => {
                 // Pre-load the next track for gapless playback.
                 if let Some(next) = self.queue.peek_next().cloned() {
-                    let duration =
-                        next.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
+                    let duration = next
+                        .duration
+                        .map(|s| std::time::Duration::from_secs(u64::from(s)));
                     match self.resolve_playback(&next) {
                         ResolvedPlayback::Cached(path) => {
                             let _ = self
@@ -1690,7 +1759,8 @@ impl App {
                 if let Some(song) = self.queue.current().cloned() {
                     let cover_id = song.cover_art.clone();
                     if let Some(ref cid) = cover_id {
-                        let needs_fetch = self.art_cache
+                        let needs_fetch = self
+                            .art_cache
                             .as_ref()
                             .map(|(cached_id, _)| cached_id != cid)
                             .unwrap_or(true);
@@ -1705,7 +1775,8 @@ impl App {
                         self.apply_dynamic_accent(None);
                     }
                     // Fetch lyrics if not already cached for this song.
-                    let cached_for_song = self.lyrics_cache
+                    let cached_for_song = self
+                        .lyrics_cache
                         .as_ref()
                         .map(|(id, _)| id == &song.id)
                         .unwrap_or(false);
@@ -1797,8 +1868,13 @@ impl App {
         // Search dispatches per keystroke — skip D-Bus work for those.
         if matches!(
             action,
-            SearchStart | SearchInput(_) | SearchBackspace | SearchConfirm | SearchCancel
-                | HelpScrollUp | HelpScrollDown
+            SearchStart
+                | SearchInput(_)
+                | SearchBackspace
+                | SearchConfirm
+                | SearchCancel
+                | HelpScrollUp
+                | HelpScrollDown
         ) {
             return;
         }
@@ -1893,9 +1969,9 @@ impl App {
             SetVolume(v) => {
                 let pct = (v.clamp(0.0, 1.0) * 100.0).round() as u8;
                 self.config.default_volume = pct;
-                let _ = self
-                    .player_tx
-                    .send(PlayerCommand::SetVolume(self.config.default_volume as f32 / 100.0));
+                let _ = self.player_tx.send(PlayerCommand::SetVolume(
+                    self.config.default_volume as f32 / 100.0,
+                ));
             }
             Quit => {
                 self.dispatch(Action::Quit);
@@ -1914,17 +1990,25 @@ impl App {
             self.play_gen += 1;
             // Advance the prefetch gen so stale background downloads are discarded.
             self.prefetch_gen.fetch_add(1, Ordering::Release);
-            let duration = song.duration.map(|s| std::time::Duration::from_secs(u64::from(s)));
+            let duration = song
+                .duration
+                .map(|s| std::time::Duration::from_secs(u64::from(s)));
             let resolved = self.resolve_playback(&song);
             self.playback.current_song = Some(song);
             self.playback.player_loaded = true;
             let gen = self.play_gen;
             match resolved {
                 ResolvedPlayback::Cached(path) => {
-                    let _ = self.player_tx.send(PlayerCommand::PlayCached { path, duration, gen });
+                    let _ = self.player_tx.send(PlayerCommand::PlayCached {
+                        path,
+                        duration,
+                        gen,
+                    });
                 }
                 ResolvedPlayback::Url(url) => {
-                    let _ = self.player_tx.send(PlayerCommand::PlayUrl { url, duration, gen });
+                    let _ = self
+                        .player_tx
+                        .send(PlayerCommand::PlayUrl { url, duration, gen });
                 }
             }
         }
@@ -1948,20 +2032,22 @@ impl App {
     /// (from rapid skips or queue changes since spawn time).
     fn spawn_cache_download(&self, song_id: &str, album_id: &str) {
         let url = self.subsonic.stream_url(song_id, self.config.max_bit_rate);
-        let song_id  = song_id.to_string();
+        let song_id = song_id.to_string();
         let album_id = album_id.to_string();
-        let tx       = self.library_tx.clone();
-        let gen_arc  = self.prefetch_gen.clone();
+        let tx = self.library_tx.clone();
+        let gen_arc = self.prefetch_gen.clone();
         let expected = gen_arc.load(Ordering::Acquire);
         tokio::spawn(async move {
             if let Ok(resp) = reqwest::Client::new().get(&url).send().await {
                 if let Ok(bytes) = resp.bytes().await {
                     if gen_arc.load(Ordering::Acquire) == expected {
-                        let _ = tx.send(LibraryUpdate::CacheTrack {
-                            song_id,
-                            album_id,
-                            bytes: bytes.to_vec(),
-                        }).await;
+                        let _ = tx
+                            .send(LibraryUpdate::CacheTrack {
+                                song_id,
+                                album_id,
+                                bytes: bytes.to_vec(),
+                            })
+                            .await;
                     }
                 }
             }
@@ -2105,8 +2191,12 @@ impl App {
             Action::Back => self.handle_focus_left(),
             Action::AddToQueue => self.handle_add_to_queue(),
             Action::AddAllToQueue => self.handle_add_all_to_queue(AddAllMode::Append),
-            Action::AddAllToQueueReplaceAlbum => self.handle_add_all_to_queue(AddAllMode::ReplaceAlbum),
-            Action::AddAllToQueueReplaceArtist => self.handle_add_all_to_queue(AddAllMode::ReplaceArtist),
+            Action::AddAllToQueueReplaceAlbum => {
+                self.handle_add_all_to_queue(AddAllMode::ReplaceAlbum)
+            }
+            Action::AddAllToQueueReplaceArtist => {
+                self.handle_add_all_to_queue(AddAllMode::ReplaceArtist)
+            }
             Action::AddAllToQueuePrepend => self.handle_add_all_to_queue(AddAllMode::Prepend),
             Action::PlayPause => {
                 if !self.playback.player_loaded && self.queue.current().is_some() {
@@ -2132,11 +2222,15 @@ impl App {
             }
             Action::VolumeUp => {
                 self.config.default_volume = self.config.default_volume.saturating_add(5).min(100);
-                let _ = self.player_tx.send(PlayerCommand::SetVolume(self.config.default_volume as f32 / 100.0));
+                let _ = self.player_tx.send(PlayerCommand::SetVolume(
+                    self.config.default_volume as f32 / 100.0,
+                ));
             }
             Action::VolumeDown => {
                 self.config.default_volume = self.config.default_volume.saturating_sub(5);
-                let _ = self.player_tx.send(PlayerCommand::SetVolume(self.config.default_volume as f32 / 100.0));
+                let _ = self.player_tx.send(PlayerCommand::SetVolume(
+                    self.config.default_volume as f32 / 100.0,
+                ));
             }
             Action::ClearQueue => self.handle_clear_queue(),
             Action::Shuffle => self.handle_shuffle(),
@@ -2151,7 +2245,10 @@ impl App {
                 self.playback.elapsed = new_pos;
             }
             Action::SeekBackward => {
-                let new_pos = self.playback.elapsed.saturating_sub(std::time::Duration::from_secs(10));
+                let new_pos = self
+                    .playback
+                    .elapsed
+                    .saturating_sub(std::time::Duration::from_secs(10));
                 let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
                 self.playback.elapsed = new_pos;
             }
@@ -2212,7 +2309,8 @@ impl App {
                     // nothing is cached for the current song yet.
                     if self.lyrics_visible {
                         if let Some(song) = self.playback.current_song.clone() {
-                            let cached = self.lyrics_cache
+                            let cached = self
+                                .lyrics_cache
                                 .as_ref()
                                 .map(|(id, _)| id == &song.id)
                                 .unwrap_or(false);
@@ -2267,7 +2365,8 @@ impl App {
                     if self.home.active_section == HomeSection::RecentAlbums {
                         if !self.config.home_recent_albums_show_art {
                             // No-art list mode: h = up.
-                            self.home.album_selected_index = self.home.album_selected_index.saturating_sub(1);
+                            self.home.album_selected_index =
+                                self.home.album_selected_index.saturating_sub(1);
                             if self.home.album_selected_index < self.home.album_scroll_offset {
                                 self.home.album_scroll_offset = self.home.album_selected_index;
                             }
@@ -2279,21 +2378,29 @@ impl App {
                         let max_idx = self.home.recent_albums.len().saturating_sub(1);
                         let per_row = self
                             .home_recent_albums_inner
-                            .map(|inner| crate::ui::kitty_art::art_strip_layout(inner.width, inner.height).per_row)
+                            .map(|inner| {
+                                crate::ui::kitty_art::art_strip_layout(inner.width, inner.height)
+                                    .per_row
+                            })
                             .unwrap_or(1)
                             .max(1);
 
                         // Only move within the current visible row (no wrapping).
-                        let rel = self.home.album_selected_index.saturating_sub(self.home.album_scroll_offset);
+                        let rel = self
+                            .home
+                            .album_selected_index
+                            .saturating_sub(self.home.album_scroll_offset);
                         let col = rel % per_row;
                         if col == 0 {
                             return;
                         }
-                        self.home.album_selected_index = self.home.album_selected_index.saturating_sub(1);
+                        self.home.album_selected_index =
+                            self.home.album_selected_index.saturating_sub(1);
 
                         // Ensure still visible (row-step scroll).
                         if self.home.album_selected_index < self.home.album_scroll_offset {
-                            let diff = self.home.album_scroll_offset - self.home.album_selected_index;
+                            let diff =
+                                self.home.album_scroll_offset - self.home.album_selected_index;
                             let rows = (diff + per_row - 1) / per_row;
                             self.home.album_scroll_offset =
                                 self.home.album_scroll_offset.saturating_sub(rows * per_row);
@@ -2337,12 +2444,18 @@ impl App {
                         }
                         let per_row = self
                             .home_recent_albums_inner
-                            .map(|inner| crate::ui::kitty_art::art_strip_layout(inner.width, inner.height).per_row)
+                            .map(|inner| {
+                                crate::ui::kitty_art::art_strip_layout(inner.width, inner.height)
+                                    .per_row
+                            })
                             .unwrap_or(1)
                             .max(1);
                         let visible_count = self.home_album_strip_visible_count().max(1);
 
-                        let rel = self.home.album_selected_index.saturating_sub(self.home.album_scroll_offset);
+                        let rel = self
+                            .home
+                            .album_selected_index
+                            .saturating_sub(self.home.album_scroll_offset);
                         let row = rel / per_row;
                         let col = rel % per_row;
                         let row_end_rel = row * per_row + (per_row - 1);
@@ -2414,14 +2527,14 @@ impl App {
                     // Disable: instant snap back to static accent.
                     self.theme.dynamic = false;
                     self.accent_current = self.theme.accent;
-                    self.accent_target  = self.theme.accent;
+                    self.accent_target = self.theme.accent;
                     self.accent_transition_start = None;
                 } else {
                     // Enable: start transition from current to dynamic accent (if any).
                     self.theme.dynamic = true;
                     let target = self.dynamic_accent.unwrap_or(self.theme.accent);
                     self.accent_lerp_from = self.accent_current;
-                    self.accent_target    = target;
+                    self.accent_target = target;
                     self.accent_transition_start = Some(Instant::now());
                 }
             }
@@ -2473,7 +2586,9 @@ impl App {
                     self.library.selected_track = Some(0);
                     self.browser_focus = BrowserColumn::Artists;
                     if !self.library.albums.contains_key(&artist_id) {
-                        self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+                        self.library
+                            .albums
+                            .insert(artist_id.clone(), LoadingState::Loading);
                         self.fetch_albums(artist_id);
                     }
                 }
@@ -2495,7 +2610,9 @@ impl App {
                 if let Some(artist) = self.library.current_artist() {
                     let artist_id = artist.id.clone();
                     if !self.library.albums.contains_key(&artist_id) {
-                        self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+                        self.library
+                            .albums
+                            .insert(artist_id.clone(), LoadingState::Loading);
                         self.fetch_albums(artist_id);
                     }
                 }
@@ -2505,7 +2622,9 @@ impl App {
                 if let Some(album) = self.library.current_album() {
                     let album_id = album.id.clone();
                     if !self.library.tracks.contains_key(&album_id) {
-                        self.library.tracks.insert(album_id.clone(), LoadingState::Loading);
+                        self.library
+                            .tracks
+                            .insert(album_id.clone(), LoadingState::Loading);
                         self.fetch_tracks(album_id);
                     }
                 }
@@ -2527,8 +2646,8 @@ impl App {
 
     fn handle_navigate(&mut self, dir: Direction) {
         match self.active_tab {
-            Tab::Home       => self.handle_navigate_home(dir),
-            Tab::Browser    => self.handle_navigate_browser(dir),
+            Tab::Home => self.handle_navigate_home(dir),
+            Tab::Browser => self.handle_navigate_browser(dir),
             Tab::NowPlaying => self.handle_navigate_queue(dir),
         }
     }
@@ -2567,8 +2686,10 @@ impl App {
                     Direction::PageUp => {
                         self.home.album_selected_index =
                             self.home.album_selected_index.saturating_sub(visible_rows);
-                        self.home.album_scroll_offset =
-                            self.home.album_scroll_offset.min(self.home.album_selected_index);
+                        self.home.album_scroll_offset = self
+                            .home
+                            .album_scroll_offset
+                            .min(self.home.album_selected_index);
                     }
                     Direction::PageDown => {
                         self.home.album_selected_index =
@@ -2577,7 +2698,8 @@ impl App {
                             self.home.album_scroll_offset + visible_rows.saturating_sub(1);
                         if self.home.album_selected_index > scroll_end {
                             self.home.album_scroll_offset = self
-                                .home.album_selected_index
+                                .home
+                                .album_selected_index
                                 .saturating_sub(visible_rows.saturating_sub(1));
                         }
                     }
@@ -2594,7 +2716,9 @@ impl App {
             }
             let per_row = self
                 .home_recent_albums_inner
-                .map(|inner| crate::ui::kitty_art::art_strip_layout(inner.width, inner.height).per_row)
+                .map(|inner| {
+                    crate::ui::kitty_art::art_strip_layout(inner.width, inner.height).per_row
+                })
                 .unwrap_or(1)
                 .max(1);
             let visible_count = self.home_album_strip_visible_count().max(1);
@@ -2640,14 +2764,18 @@ impl App {
         let section_len = match self.home.active_section {
             HomeSection::RecentAlbums => 0,
             HomeSection::RecentTracks => self.home.recent_tracks.len(),
-            HomeSection::TopArtists  => self.home.top_artists.len(),
-            HomeSection::Rediscover  => self.home.rediscover.len(),
+            HomeSection::TopArtists => self.home.top_artists.len(),
+            HomeSection::Rediscover => self.home.rediscover.len(),
         };
-        if section_len == 0 { return; }
+        if section_len == 0 {
+            return;
+        }
         const HOME_PAGE: usize = 8;
         self.home.selected_index = match dir {
-            Direction::Up | Direction::Top    => self.home.selected_index.saturating_sub(1),
-            Direction::Down | Direction::Bottom => (self.home.selected_index + 1).min(section_len - 1),
+            Direction::Up | Direction::Top => self.home.selected_index.saturating_sub(1),
+            Direction::Down | Direction::Bottom => {
+                (self.home.selected_index + 1).min(section_len - 1)
+            }
             Direction::PageUp => self.home.selected_index.saturating_sub(HOME_PAGE),
             Direction::PageDown => (self.home.selected_index + HOME_PAGE).min(section_len - 1),
         };
@@ -2659,15 +2787,21 @@ impl App {
                 let result = if let LoadingState::Loaded(artists) = &self.library.artists {
                     // Build navigable index set — filtered or full.
                     let indices: Vec<usize> = if let Some(q) = &self.search_filter {
-                        artists.iter().enumerate()
+                        artists
+                            .iter()
+                            .enumerate()
                             .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
                             .map(|(i, _)| i)
                             .collect()
                     } else {
                         (0..artists.len()).collect()
                     };
-                    if indices.is_empty() { return; }
-                    let cur_pos = self.library.selected_artist
+                    if indices.is_empty() {
+                        return;
+                    }
+                    let cur_pos = self
+                        .library
+                        .selected_artist
                         .and_then(|sel| indices.iter().position(|&i| i == sel))
                         .unwrap_or(0);
                     let page = self.browser_list_viewport_rows.max(1);
@@ -2689,7 +2823,9 @@ impl App {
                     self.library.selected_album = Some(0);
                     self.library.selected_track = Some(0);
                     if !self.library.albums.contains_key(&artist_id) {
-                        self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+                        self.library
+                            .albums
+                            .insert(artist_id.clone(), LoadingState::Loading);
                         self.fetch_albums(artist_id);
                     }
                 }
@@ -2700,17 +2836,24 @@ impl App {
                         Some(a) => a.id.clone(),
                         None => return,
                     };
-                    if let Some(LoadingState::Loaded(albums)) = self.library.albums.get(&artist_id) {
+                    if let Some(LoadingState::Loaded(albums)) = self.library.albums.get(&artist_id)
+                    {
                         let indices: Vec<usize> = if let Some(q) = &self.search_filter {
-                            albums.iter().enumerate()
+                            albums
+                                .iter()
+                                .enumerate()
                                 .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
                                 .map(|(i, _)| i)
                                 .collect()
                         } else {
                             (0..albums.len()).collect()
                         };
-                        if indices.is_empty() { return; }
-                        let cur_pos = self.library.selected_album
+                        if indices.is_empty() {
+                            return;
+                        }
+                        let cur_pos = self
+                            .library
+                            .selected_album
                             .and_then(|sel| indices.iter().position(|&i| i == sel))
                             .unwrap_or(0);
                         let page = self.browser_list_viewport_rows.max(1);
@@ -2732,7 +2875,9 @@ impl App {
                     self.library.selected_album = Some(new_idx);
                     self.library.selected_track = Some(0);
                     if !self.library.tracks.contains_key(&album_id) {
-                        self.library.tracks.insert(album_id.clone(), LoadingState::Loading);
+                        self.library
+                            .tracks
+                            .insert(album_id.clone(), LoadingState::Loading);
                         self.fetch_tracks(album_id);
                     }
                 }
@@ -2744,15 +2889,21 @@ impl App {
                 };
                 if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
                     let indices: Vec<usize> = if let Some(q) = &self.search_filter {
-                        songs.iter().enumerate()
+                        songs
+                            .iter()
+                            .enumerate()
                             .filter(|(_, s)| s.title.to_lowercase().contains(q.as_str()))
                             .map(|(i, _)| i)
                             .collect()
                     } else {
                         (0..songs.len()).collect()
                     };
-                    if indices.is_empty() { return; }
-                    let cur_pos = self.library.selected_track
+                    if indices.is_empty() {
+                        return;
+                    }
+                    let cur_pos = self
+                        .library
+                        .selected_track
                         .and_then(|sel| indices.iter().position(|&i| i == sel))
                         .unwrap_or(0);
                     let page = self.browser_list_viewport_rows.max(1);
@@ -2881,11 +3032,13 @@ impl App {
                     let gen = self.play_gen;
                     match resolved {
                         ResolvedPlayback::Cached(path) => {
-                            let _ = self.player_tx.send(ratune_player::PlayerCommand::PlayCached {
-                                path,
-                                duration: dur,
-                                gen,
-                            });
+                            let _ = self
+                                .player_tx
+                                .send(ratune_player::PlayerCommand::PlayCached {
+                                    path,
+                                    duration: dur,
+                                    gen,
+                                });
                         }
                         ResolvedPlayback::Url(url) => {
                             let _ = self.player_tx.send(ratune_player::PlayerCommand::PlayUrl {
@@ -2960,9 +3113,13 @@ impl App {
                             Some(a) => a.id.clone(),
                             None => return,
                         };
-                        if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
+                        if let Some(LoadingState::Loaded(songs)) =
+                            self.library.tracks.get(&album_id)
+                        {
                             let mut sorted = songs.clone();
-                            sorted.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
+                            sorted.sort_by_key(|s| {
+                                (s.disc_number.unwrap_or(1), s.track.unwrap_or(0))
+                            });
                             let was_empty = self.queue.songs.is_empty();
                             if prepend {
                                 self.queue.prepend_songs(sorted);
@@ -3009,7 +3166,9 @@ impl App {
                 None | Some(LoadingState::NotLoaded | LoadingState::Error(_))
             );
             if needs_fetch {
-                self.library.tracks.insert(album_id.clone(), LoadingState::Loading);
+                self.library
+                    .tracks
+                    .insert(album_id.clone(), LoadingState::Loading);
                 self.fetch_tracks(album_id);
             }
             self.flash_status("Loading album tracks… press again when ready");
@@ -3041,10 +3200,14 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(12345) as u64;
-        let mut rng = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mut rng = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
 
         let next_lcg = |state: &mut u64| -> usize {
-            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (*state >> 33) as usize
         };
 
@@ -3078,7 +3241,10 @@ impl App {
             Tab::Browser => match self.browser_focus {
                 BrowserColumn::Artists => {
                     if let crate::state::LoadingState::Loaded(artists) = &self.library.artists {
-                        if let Some(idx) = artists.iter().position(|a| a.name.to_lowercase().contains(&q)) {
+                        if let Some(idx) = artists
+                            .iter()
+                            .position(|a| a.name.to_lowercase().contains(&q))
+                        {
                             self.library.selected_artist = Some(idx);
                         }
                     }
@@ -3088,8 +3254,13 @@ impl App {
                         Some(a) => a.id.clone(),
                         None => return,
                     };
-                    if let Some(crate::state::LoadingState::Loaded(albums)) = self.library.albums.get(&artist_id) {
-                        if let Some(idx) = albums.iter().position(|a| a.name.to_lowercase().contains(&q)) {
+                    if let Some(crate::state::LoadingState::Loaded(albums)) =
+                        self.library.albums.get(&artist_id)
+                    {
+                        if let Some(idx) = albums
+                            .iter()
+                            .position(|a| a.name.to_lowercase().contains(&q))
+                        {
                             self.library.selected_album = Some(idx);
                         }
                     }
@@ -3099,15 +3270,25 @@ impl App {
                         Some(a) => a.id.clone(),
                         None => return,
                     };
-                    if let Some(crate::state::LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
-                        if let Some(idx) = songs.iter().position(|s| s.title.to_lowercase().contains(&q)) {
+                    if let Some(crate::state::LoadingState::Loaded(songs)) =
+                        self.library.tracks.get(&album_id)
+                    {
+                        if let Some(idx) = songs
+                            .iter()
+                            .position(|s| s.title.to_lowercase().contains(&q))
+                        {
                             self.library.selected_track = Some(idx);
                         }
                     }
                 }
             },
             Tab::NowPlaying => {
-                if let Some(idx) = self.queue.songs.iter().position(|s| s.title.to_lowercase().contains(&q)) {
+                if let Some(idx) = self
+                    .queue
+                    .songs
+                    .iter()
+                    .position(|s| s.title.to_lowercase().contains(&q))
+                {
                     self.queue.cursor = idx;
                     self.queue
                         .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
@@ -3165,7 +3346,9 @@ impl App {
             return;
         };
         if !self.library.albums.contains_key(&artist_id) {
-            self.library.albums.insert(artist_id.clone(), LoadingState::Loading);
+            self.library
+                .albums
+                .insert(artist_id.clone(), LoadingState::Loading);
             self.fetch_albums(artist_id);
         }
     }
@@ -3188,7 +3371,9 @@ impl App {
         self.library.selected_album = Some(orig_idx);
         self.library.selected_track = Some(0);
         if !self.library.tracks.contains_key(&album_id) {
-            self.library.tracks.insert(album_id.clone(), LoadingState::Loading);
+            self.library
+                .tracks
+                .insert(album_id.clone(), LoadingState::Loading);
             self.fetch_tracks(album_id);
         }
     }
@@ -3278,8 +3463,10 @@ impl App {
             }
             Action::PlaylistScrollUp => match self.playlist_overlay.focus {
                 PlaylistFocus::List => {
-                    self.playlist_overlay.selected_playlist_index =
-                        self.playlist_overlay.selected_playlist_index.saturating_sub(1);
+                    self.playlist_overlay.selected_playlist_index = self
+                        .playlist_overlay
+                        .selected_playlist_index
+                        .saturating_sub(1);
                 }
                 PlaylistFocus::Tracks => {
                     self.playlist_overlay.selected_track_index =
@@ -3355,8 +3542,9 @@ impl App {
             }
             Action::PlaylistPlayTrack => {
                 if let LoadingState::Loaded(ref songs) = self.playlist_overlay.tracks {
-                    if let Some(song) =
-                        songs.get(self.playlist_overlay.selected_track_index).cloned()
+                    if let Some(song) = songs
+                        .get(self.playlist_overlay.selected_track_index)
+                        .cloned()
                     {
                         self.queue.songs.clear();
                         self.queue.cursor = 0;
@@ -3372,8 +3560,9 @@ impl App {
             }
             Action::PlaylistAppendTrack => {
                 if let LoadingState::Loaded(ref songs) = self.playlist_overlay.tracks {
-                    if let Some(song) =
-                        songs.get(self.playlist_overlay.selected_track_index).cloned()
+                    if let Some(song) = songs
+                        .get(self.playlist_overlay.selected_track_index)
+                        .cloned()
                     {
                         let was_empty = self.queue.songs.is_empty();
                         self.queue.push(song);
@@ -3395,14 +3584,13 @@ impl App {
     pub fn handle_playlist_mutation(&mut self, action: Action) {
         match action {
             Action::PlaylistCreate => {
-                self.playlist_overlay.input_mode =
-                    PlaylistInputMode::Creating { buffer: String::new() };
+                self.playlist_overlay.input_mode = PlaylistInputMode::Creating {
+                    buffer: String::new(),
+                };
             }
             Action::PlaylistRename => {
                 if let LoadingState::Loaded(ref playlists) = self.playlist_overlay.playlists {
-                    if let Some(p) =
-                        playlists.get(self.playlist_overlay.selected_playlist_index)
-                    {
+                    if let Some(p) = playlists.get(self.playlist_overlay.selected_playlist_index) {
                         self.playlist_overlay.input_mode = PlaylistInputMode::Renaming {
                             buffer: p.name.clone(),
                             playlist_id: p.id.clone(),
@@ -3412,40 +3600,36 @@ impl App {
             }
             Action::PlaylistDelete => {
                 if let LoadingState::Loaded(ref playlists) = self.playlist_overlay.playlists {
-                    if let Some(p) =
-                        playlists.get(self.playlist_overlay.selected_playlist_index)
-                    {
-                        self.playlist_overlay.input_mode =
-                            PlaylistInputMode::Confirming {
-                                action: ConfirmAction::DeletePlaylist {
-                                    id: p.id.clone(),
-                                    name: p.name.clone(),
-                                },
-                            };
+                    if let Some(p) = playlists.get(self.playlist_overlay.selected_playlist_index) {
+                        self.playlist_overlay.input_mode = PlaylistInputMode::Confirming {
+                            action: ConfirmAction::DeletePlaylist {
+                                id: p.id.clone(),
+                                name: p.name.clone(),
+                            },
+                        };
                     }
                 }
             }
-            Action::PlaylistInputChar(c) => {
-                match &mut self.playlist_overlay.input_mode {
-                    PlaylistInputMode::Creating { buffer }
-                    | PlaylistInputMode::Renaming { buffer, .. } => {
-                        if c == '\x08' {
-                            buffer.pop();
-                        } else {
-                            buffer.push(c);
-                        }
+            Action::PlaylistInputChar(c) => match &mut self.playlist_overlay.input_mode {
+                PlaylistInputMode::Creating { buffer }
+                | PlaylistInputMode::Renaming { buffer, .. } => {
+                    if c == '\x08' {
+                        buffer.pop();
+                    } else {
+                        buffer.push(c);
                     }
-                    _ => {}
                 }
-            }
+                _ => {}
+            },
             Action::PlaylistInputConfirm => {
                 match self.playlist_overlay.input_mode.clone() {
                     PlaylistInputMode::Creating { buffer } if !buffer.is_empty() => {
                         self.spawn_create_playlist(buffer);
                     }
-                    PlaylistInputMode::Renaming { buffer, playlist_id }
-                        if !buffer.is_empty() =>
-                    {
+                    PlaylistInputMode::Renaming {
+                        buffer,
+                        playlist_id,
+                    } if !buffer.is_empty() => {
                         self.spawn_rename_playlist(playlist_id, buffer);
                     }
                     _ => {}
@@ -3505,9 +3689,9 @@ impl App {
             Action::PlaylistPickerSelect => {
                 if let Some(ref picker) = self.playlist_picker {
                     if let Some(playlist) = picker.playlists.get(picker.selected_index) {
-                        let playlist_id   = playlist.id.clone();
+                        let playlist_id = playlist.id.clone();
                         let playlist_name = playlist.name.clone();
-                        let song_id       = picker.song_id.clone();
+                        let song_id = picker.song_id.clone();
                         self.spawn_add_track_to_playlist(playlist_id, playlist_name, song_id);
                     }
                 }
@@ -3533,10 +3717,12 @@ impl App {
 
     fn spawn_create_playlist(&self, name: String) {
         let client = self.subsonic.clone();
-        let tx     = self.library_tx.clone();
+        let tx = self.library_tx.clone();
         tokio::spawn(async move {
             match client.create_playlist(&name).await {
-                Ok(p)  => { let _ = tx.send(LibraryUpdate::PlaylistCreated(p)).await; }
+                Ok(p) => {
+                    let _ = tx.send(LibraryUpdate::PlaylistCreated(p)).await;
+                }
                 Err(e) => eprintln!("create_playlist failed: {e}"),
             }
         });
@@ -3544,12 +3730,15 @@ impl App {
 
     fn spawn_rename_playlist(&self, playlist_id: String, new_name: String) {
         let client = self.subsonic.clone();
-        let tx     = self.library_tx.clone();
+        let tx = self.library_tx.clone();
         tokio::spawn(async move {
             match client.rename_playlist(&playlist_id, &new_name).await {
                 Ok(()) => {
                     let _ = tx
-                        .send(LibraryUpdate::PlaylistRenamed { id: playlist_id, new_name })
+                        .send(LibraryUpdate::PlaylistRenamed {
+                            id: playlist_id,
+                            new_name,
+                        })
                         .await;
                 }
                 Err(e) => eprintln!("rename_playlist failed: {e}"),
@@ -3559,10 +3748,12 @@ impl App {
 
     fn spawn_delete_playlist(&self, id: String) {
         let client = self.subsonic.clone();
-        let tx     = self.library_tx.clone();
+        let tx = self.library_tx.clone();
         tokio::spawn(async move {
             match client.delete_playlist(&id).await {
-                Ok(()) => { let _ = tx.send(LibraryUpdate::PlaylistDeleted(id)).await; }
+                Ok(()) => {
+                    let _ = tx.send(LibraryUpdate::PlaylistDeleted(id)).await;
+                }
                 Err(e) => eprintln!("delete_playlist failed: {e}"),
             }
         });
@@ -3570,12 +3761,15 @@ impl App {
 
     fn spawn_remove_track(&self, playlist_id: String, index: usize) {
         let client = self.subsonic.clone();
-        let tx     = self.library_tx.clone();
+        let tx = self.library_tx.clone();
         tokio::spawn(async move {
             match client.remove_track_from_playlist(&playlist_id, index).await {
                 Ok(()) => {
                     let _ = tx
-                        .send(LibraryUpdate::PlaylistTrackRemoved { _playlist_id: playlist_id, index })
+                        .send(LibraryUpdate::PlaylistTrackRemoved {
+                            _playlist_id: playlist_id,
+                            index,
+                        })
                         .await;
                 }
                 Err(e) => eprintln!("remove_track_from_playlist failed: {e}"),
@@ -3585,11 +3779,13 @@ impl App {
 
     fn spawn_fetch_playlists_for_picker(&self) {
         let client = self.subsonic.clone();
-        let tx     = self.library_tx.clone();
+        let tx = self.library_tx.clone();
         tokio::spawn(async move {
             match client.get_playlists().await {
-                Ok(list) => { let _ = tx.send(LibraryUpdate::PlaylistsForPicker(list)).await; }
-                Err(e)   => eprintln!("get_playlists for picker failed: {e}"),
+                Ok(list) => {
+                    let _ = tx.send(LibraryUpdate::PlaylistsForPicker(list)).await;
+                }
+                Err(e) => eprintln!("get_playlists for picker failed: {e}"),
             }
         });
     }
@@ -3601,7 +3797,7 @@ impl App {
         song_id: String,
     ) {
         let client = self.subsonic.clone();
-        let tx     = self.library_tx.clone();
+        let tx = self.library_tx.clone();
         tokio::spawn(async move {
             match client.add_track_to_playlist(&playlist_id, &song_id).await {
                 Ok(()) => {

@@ -184,9 +184,8 @@ impl QueueState {
                 }
             }
             None => {
-                self.pre_shuffle_order = Some(
-                    incoming.iter().chain(self.songs.iter()).cloned().collect(),
-                );
+                self.pre_shuffle_order =
+                    Some(incoming.iter().chain(self.songs.iter()).cloned().collect());
             }
         }
         for s in incoming.into_iter().rev() {
@@ -220,9 +219,16 @@ pub enum ConfirmAction {
 pub enum PlaylistInputMode {
     #[default]
     Normal,
-    Creating { buffer: String },
-    Renaming { buffer: String, playlist_id: String },
-    Confirming { action: ConfirmAction },
+    Creating {
+        buffer: String,
+    },
+    Renaming {
+        buffer: String,
+        playlist_id: String,
+    },
+    Confirming {
+        action: ConfirmAction,
+    },
 }
 
 #[derive(Debug)]

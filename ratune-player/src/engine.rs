@@ -9,8 +9,8 @@
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, mpsc};
 use std::sync::OnceLock;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -31,16 +31,30 @@ pub enum PlayerCommand {
     /// duration (from Subsonic metadata), used for progress display.
     /// `gen` is a monotonically increasing counter from the TUI; the engine
     /// uses it to discard stale downloads when multiple skips arrive quickly.
-    PlayUrl { url: String, duration: Option<Duration>, gen: u64 },
+    PlayUrl {
+        url: String,
+        duration: Option<Duration>,
+        gen: u64,
+    },
     /// Same semantics as [`PlayUrl`](Self::PlayUrl), but reads audio from a local cache file.
-    PlayCached { path: PathBuf, duration: Option<Duration>, gen: u64 },
+    PlayCached {
+        path: PathBuf,
+        duration: Option<Duration>,
+        gen: u64,
+    },
     /// Append the next track to the player queue for gapless playback.
     ///
     /// Must only be sent in response to `PlayerEvent::AboutToFinish`.
     /// Does NOT stop current playback.
-    EnqueueNext { url: String, duration: Option<Duration> },
+    EnqueueNext {
+        url: String,
+        duration: Option<Duration>,
+    },
     /// Gapless prefetch for an offline-cached next track (see [`PlayCached`](Self::PlayCached)).
-    EnqueueNextCached { path: PathBuf, duration: Option<Duration> },
+    EnqueueNextCached {
+        path: PathBuf,
+        duration: Option<Duration>,
+    },
     Pause,
     Resume,
     Stop,
@@ -56,7 +70,10 @@ pub enum PlayerCommand {
 pub enum PlayerEvent {
     TrackStarted,
     /// Fired every ~500 ms. `total` is `None` when unknown.
-    Progress { elapsed: Duration, total: Option<Duration> },
+    Progress {
+        elapsed: Duration,
+        total: Option<Duration>,
+    },
     /// Fired ~5 s before the current track ends. The TUI should respond with
     /// `PlayerCommand::EnqueueNext` to enable gapless playback.
     AboutToFinish,
@@ -98,7 +115,11 @@ pub fn spawn_player() -> (
 
 // ── Player thread ─────────────────────────────────────────────────────────────
 
-fn player_thread(cmd_rx: mpsc::Receiver<PlayerCommand>, evt_tx: mpsc::Sender<PlayerEvent>, sample_buffer: SampleBuffer) {
+fn player_thread(
+    cmd_rx: mpsc::Receiver<PlayerCommand>,
+    evt_tx: mpsc::Sender<PlayerEvent>,
+    sample_buffer: SampleBuffer,
+) {
     // MixerDeviceSink must live for the duration of playback.
     let mut device = match DeviceSinkBuilder::open_default_sink() {
         Ok(d) => d,
@@ -149,7 +170,11 @@ fn player_thread(cmd_rx: mpsc::Receiver<PlayerCommand>, evt_tx: mpsc::Sender<Pla
                         &sample_buffer,
                     );
                 }
-                Ok(PlayerCommand::PlayCached { path, duration, gen }) => {
+                Ok(PlayerCommand::PlayCached {
+                    path,
+                    duration,
+                    gen,
+                }) => {
                     play_payload(
                         PlayPayload::Cached(path),
                         duration,
@@ -400,19 +425,17 @@ fn handle_command(
         PlayerCommand::PlayUrl { .. } | PlayerCommand::PlayCached { .. } => {
             unreachable!("PlayUrl / PlayCached must be dispatched via play_payload()");
         }
-        PlayerCommand::EnqueueNext { url, duration } => {
-            match download_and_decode(&url) {
-                Ok(source) => {
-                    *next_total = duration;
-                    *next_queued = true;
-                    let tapped = SampleTap::new(source, sample_buffer.clone());
-                    player.append(tapped);
-                }
-                Err(e) => {
-                    let _ = evt_tx.send(PlayerEvent::Error(format!("enqueue error: {e}")));
-                }
+        PlayerCommand::EnqueueNext { url, duration } => match download_and_decode(&url) {
+            Ok(source) => {
+                *next_total = duration;
+                *next_queued = true;
+                let tapped = SampleTap::new(source, sample_buffer.clone());
+                player.append(tapped);
             }
-        }
+            Err(e) => {
+                let _ = evt_tx.send(PlayerEvent::Error(format!("enqueue error: {e}")));
+            }
+        },
         PlayerCommand::EnqueueNextCached { path, duration } => {
             match read_cached_and_decode(&path) {
                 Ok(source) => {
@@ -489,8 +512,8 @@ fn fetch_track_bytes(url: &str, accept_identity: bool) -> Result<Vec<u8>> {
 }
 
 fn read_cached_and_decode(path: &std::path::Path) -> Result<Decoder<Cursor<Vec<u8>>>> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("reading cached track {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("reading cached track {}", path.display()))?;
     build_symphonia_decoder(bytes)
 }
 

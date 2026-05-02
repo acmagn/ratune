@@ -1,8 +1,8 @@
-use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::Frame;
 
 use super::now_playing_format::{format_now_playing_line, NowPlayingContext};
 
@@ -86,16 +86,14 @@ fn chrome_rects_row(app: &App, area: Rect) -> NowPlayingChromeRects {
     let cols = split_row_columns(area, show_c, show_p);
 
     let controls = if show_c {
-        cols
-            .controls
+        cols.controls
             .map(|r| Rect::new(r.x, area.y + 1, r.width, 1))
     } else {
         None
     };
 
     let progress = if show_p {
-        cols
-            .progress
+        cols.progress
             .map(|r| Rect::new(r.x, area.y + 2, r.width, 1))
     } else {
         None
@@ -486,8 +484,7 @@ fn render_row(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     frame.render_widget(
-        Paragraph::new(padded)
-            .style(Style::default().bg(t.surface)),
+        Paragraph::new(padded).style(Style::default().bg(t.surface)),
         cols.info,
     );
 
@@ -548,12 +545,7 @@ fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let lines = vec![
-        Line::from(""),
-        controls,
-        Line::from(""),
-        Line::from(""),
-    ];
+    let lines = vec![Line::from(""), controls, Line::from(""), Line::from("")];
 
     frame.render_widget(
         Paragraph::new(lines)
@@ -595,7 +587,11 @@ fn parse_progress_style(raw: &str) -> ProgressStyleSpec {
     default_fractional_spec()
 }
 
-fn build_progress_bar(spec: ProgressStyleSpec, ratio: f64, bar_w: usize) -> (String, String, String) {
+fn build_progress_bar(
+    spec: ProgressStyleSpec,
+    ratio: f64,
+    bar_w: usize,
+) -> (String, String, String) {
     if bar_w == 0 {
         return (String::new(), String::new(), String::new());
     }
@@ -622,7 +618,11 @@ fn build_progress_bar(spec: ProgressStyleSpec, ratio: f64, bar_w: usize) -> (Str
             let filled_n = (ratio * bar_w as f64).floor() as usize;
             let filled_n = filled_n.min(bar_w);
             if filled_n >= bar_w {
-                (std::iter::repeat(f).take(bar_w).collect(), String::new(), String::new())
+                (
+                    std::iter::repeat(f).take(bar_w).collect(),
+                    String::new(),
+                    String::new(),
+                )
             } else {
                 let rest = bar_w - filled_n - 1;
                 (
@@ -683,12 +683,7 @@ fn render_progress_widget(app: &App, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let lines = vec![
-        Line::from(""),
-        Line::from(""),
-        progress,
-        Line::from(""),
-    ];
+    let lines = vec![Line::from(""), Line::from(""), progress, Line::from("")];
 
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(t.surface)),

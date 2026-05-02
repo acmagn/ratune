@@ -17,11 +17,11 @@
 //!   n=3 → 0x46 → U+2846
 //!   n=4 → 0x47 → U+2847   (fully filled left column)
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use ratatui::Frame;
 
 use crate::theme::Theme;
 
@@ -89,7 +89,11 @@ pub fn render_visualizer_ex(
 
         let total_dots = ((band_val * max_dots as f32) as usize).min(max_dots);
         let full_cells = (total_dots / 4).min(area.height as usize);
-        let partial_dots = if full_cells < area.height as usize { total_dots % 4 } else { 0 };
+        let partial_dots = if full_cells < area.height as usize {
+            total_dots % 4
+        } else {
+            0
+        };
         let has_partial = partial_dots > 0;
         let bar_rows = full_cells + usize::from(has_partial);
 
@@ -206,7 +210,10 @@ fn color_for_row(
 ) -> Color {
     let mode = color_mode.trim().to_lowercase();
     match mode.as_str() {
-        "fixed" => parse_color_spec(colors.first().map(|s| s.as_str()).unwrap_or("accent"), accent),
+        "fixed" => parse_color_spec(
+            colors.first().map(|s| s.as_str()).unwrap_or("accent"),
+            accent,
+        ),
         "gradient_theme" => {
             // Theme palette gradient: dimmed → foreground → accent (top).
             // This stays "in theme" and works well with dynamic accent mode.
@@ -220,10 +227,7 @@ fn color_for_row(
             if colors.len() == 1 {
                 return parse_color_spec(&colors[0], accent);
             }
-            let parsed: Vec<Color> = colors
-                .iter()
-                .map(|c| parse_color_spec(c, accent))
-                .collect();
+            let parsed: Vec<Color> = colors.iter().map(|c| parse_color_spec(c, accent)).collect();
             gradient_color(&parsed, row, height)
         }
         _ => accent, // "accent"
@@ -252,12 +256,20 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     match (a, b) {
         (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => {
             let lerp = |x: u8, y: u8| -> u8 {
-                (x as f32 + (y as f32 - x as f32) * t).round().clamp(0.0, 255.0) as u8
+                (x as f32 + (y as f32 - x as f32) * t)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
             };
             Color::Rgb(lerp(ar, br), lerp(ag, bg), lerp(ab, bb))
         }
         // For indexed/other color types, fall back to nearest stop (discrete gradient).
-        _ => if t < 0.5 { a } else { b },
+        _ => {
+            if t < 0.5 {
+                a
+            } else {
+                b
+            }
+        }
     }
 }
 

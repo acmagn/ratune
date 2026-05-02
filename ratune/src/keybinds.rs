@@ -11,13 +11,16 @@ use crate::config::KeybindsSection;
 /// A single key combination (code + optional modifiers).
 #[derive(Debug, Clone)]
 pub struct KeySpec {
-    pub code:      KeyCode,
+    pub code: KeyCode,
     pub modifiers: KeyModifiers,
 }
 
 impl KeySpec {
     fn new(code: KeyCode) -> Self {
-        Self { code, modifiers: KeyModifiers::empty() }
+        Self {
+            code,
+            modifiers: KeyModifiers::empty(),
+        }
     }
 
     /// Returns true when `(code, mods)` matches this spec.
@@ -129,52 +132,52 @@ pub fn format_optional(spec: &Option<KeySpec>) -> String {
 
 #[derive(Debug, Clone)]
 pub struct Keybinds {
-    pub scroll_up:          KeySpec,
-    pub scroll_down:        KeySpec,
-    pub column_left:        KeySpec,
-    pub column_right:       KeySpec,
-    pub play_pause:         KeySpec,
-    pub next_track:         KeySpec,
-    pub prev_track:         KeySpec,
-    pub seek_forward:       KeySpec,
-    pub seek_backward:      KeySpec,
-    pub add_track:          KeySpec,
-    pub add_all:                 KeySpec,
-    pub add_all_replace_album:   Option<KeySpec>,
-    pub add_all_replace_artist:  Option<KeySpec>,
-    pub add_all_prepend:         Option<KeySpec>,
-    pub shuffle:            KeySpec,
-    pub unshuffle:          KeySpec,
-    pub clear_queue:        KeySpec,
-    pub search:             KeySpec,
-    pub volume_up:          KeySpec,
-    pub volume_down:        KeySpec,
-    pub tab_switch:         KeySpec,
+    pub scroll_up: KeySpec,
+    pub scroll_down: KeySpec,
+    pub column_left: KeySpec,
+    pub column_right: KeySpec,
+    pub play_pause: KeySpec,
+    pub next_track: KeySpec,
+    pub prev_track: KeySpec,
+    pub seek_forward: KeySpec,
+    pub seek_backward: KeySpec,
+    pub add_track: KeySpec,
+    pub add_all: KeySpec,
+    pub add_all_replace_album: Option<KeySpec>,
+    pub add_all_replace_artist: Option<KeySpec>,
+    pub add_all_prepend: Option<KeySpec>,
+    pub shuffle: KeySpec,
+    pub unshuffle: KeySpec,
+    pub clear_queue: KeySpec,
+    pub search: KeySpec,
+    pub volume_up: KeySpec,
+    pub volume_down: KeySpec,
+    pub tab_switch: KeySpec,
     /// Reverse tab cycle (Backtick by default)
     pub tab_switch_reverse: KeySpec,
     /// Jump to Home tab (default: '1')
-    pub go_to_home:         KeySpec,
+    pub go_to_home: KeySpec,
     /// Jump to Browser tab (default: '2')
-    pub go_to_browser:      KeySpec,
+    pub go_to_browser: KeySpec,
     /// Jump to NowPlaying tab (default: '3')
-    pub go_to_nowplaying:   KeySpec,
-    pub quit:               KeySpec,
+    pub go_to_nowplaying: KeySpec,
+    pub quit: KeySpec,
     /// Fuzzy library picker (`None` = disabled).
-    pub library_fzf:        Option<KeySpec>,
+    pub library_fzf: Option<KeySpec>,
     /// Force library index refresh (`None` = disabled).
-    pub library_refresh:    Option<KeySpec>,
-    pub toggle_help:          KeySpec,
+    pub library_refresh: Option<KeySpec>,
+    pub toggle_help: KeySpec,
     pub toggle_dynamic_theme: KeySpec,
-    pub toggle_lyrics:        KeySpec,
+    pub toggle_lyrics: KeySpec,
     /// Primary visualizer toggle (default Shift+v). Bare `V` is still accepted in `map_key`.
-    pub toggle_visualizer:    KeySpec,
+    pub toggle_visualizer: KeySpec,
     /// Browser: open/close playlist overlay (default Shift+p).
-    pub playlist_overlay:     KeySpec,
+    pub playlist_overlay: KeySpec,
     /// Browser: add focused track to playlist (`>`).
     pub browser_add_to_playlist: KeySpec,
-    pub home_section_next:    KeySpec,
-    pub home_section_prev:    KeySpec,
-    pub home_refresh:         KeySpec,
+    pub home_section_next: KeySpec,
+    pub home_section_prev: KeySpec,
+    pub home_refresh: KeySpec,
 }
 
 impl Keybinds {
@@ -206,7 +209,10 @@ impl Keybinds {
                 None => None,
                 Some("") => Some(""),
                 Some(s) if s.eq_ignore_ascii_case("ctrl+space") => None,
-                Some(s) if s.eq_ignore_ascii_case("ctrl+r") && album_is_ctrl_r(add_all_replace_album) => {
+                Some(s)
+                    if s.eq_ignore_ascii_case("ctrl+r")
+                        && album_is_ctrl_r(add_all_replace_album) =>
+                {
                     None
                 }
                 Some(s) => Some(s),
@@ -250,23 +256,26 @@ impl Keybinds {
         );
 
         Self {
-            scroll_up:          resolve(sec.scroll_up.as_deref(),          KeySpec::new(KeyCode::Char('k'))),
-            scroll_down:        resolve(sec.scroll_down.as_deref(),         KeySpec::new(KeyCode::Char('j'))),
-            column_left:        resolve(sec.column_left.as_deref(),         KeySpec::new(KeyCode::Char('h'))),
-            column_right:       resolve(sec.column_right.as_deref(),        KeySpec::new(KeyCode::Char('l'))),
-            play_pause:         resolve(sec.play_pause.as_deref(),          KeySpec::new(KeyCode::Char('p'))),
-            next_track:         resolve(sec.next_track.as_deref(),          KeySpec::new(KeyCode::Char('n'))),
-            prev_track:         resolve(
+            scroll_up: resolve(sec.scroll_up.as_deref(), KeySpec::new(KeyCode::Char('k'))),
+            scroll_down: resolve(sec.scroll_down.as_deref(), KeySpec::new(KeyCode::Char('j'))),
+            column_left: resolve(sec.column_left.as_deref(), KeySpec::new(KeyCode::Char('h'))),
+            column_right: resolve(
+                sec.column_right.as_deref(),
+                KeySpec::new(KeyCode::Char('l')),
+            ),
+            play_pause: resolve(sec.play_pause.as_deref(), KeySpec::new(KeyCode::Char('p'))),
+            next_track: resolve(sec.next_track.as_deref(), KeySpec::new(KeyCode::Char('n'))),
+            prev_track: resolve(
                 sec.prev_track.as_deref(),
                 KeySpec {
                     code: KeyCode::Char('n'),
                     modifiers: KeyModifiers::SHIFT,
                 },
             ),
-            seek_forward:       resolve(sec.seek_forward.as_deref(),        KeySpec::new(KeyCode::Right)),
-            seek_backward:      resolve(sec.seek_backward.as_deref(),       KeySpec::new(KeyCode::Left)),
-            add_track:          resolve(sec.add_track.as_deref(),           KeySpec::new(KeyCode::Char('a'))),
-            add_all:            resolve(
+            seek_forward: resolve(sec.seek_forward.as_deref(), KeySpec::new(KeyCode::Right)),
+            seek_backward: resolve(sec.seek_backward.as_deref(), KeySpec::new(KeyCode::Left)),
+            add_track: resolve(sec.add_track.as_deref(), KeySpec::new(KeyCode::Char('a'))),
+            add_all: resolve(
                 sec.add_all.as_deref(),
                 KeySpec {
                     code: KeyCode::Char('a'),
@@ -276,24 +285,33 @@ impl Keybinds {
             add_all_replace_album,
             add_all_replace_artist,
             add_all_prepend,
-            shuffle:            resolve(sec.shuffle.as_deref(),             KeySpec::new(KeyCode::Char('x'))),
-            unshuffle:          resolve(sec.unshuffle.as_deref(),           KeySpec::new(KeyCode::Char('z'))),
-            clear_queue:        resolve(
+            shuffle: resolve(sec.shuffle.as_deref(), KeySpec::new(KeyCode::Char('x'))),
+            unshuffle: resolve(sec.unshuffle.as_deref(), KeySpec::new(KeyCode::Char('z'))),
+            clear_queue: resolve(
                 sec.clear_queue.as_deref(),
                 KeySpec {
                     code: KeyCode::Char('d'),
                     modifiers: KeyModifiers::SHIFT,
                 },
             ),
-            search:             resolve(sec.search.as_deref(),              KeySpec::new(KeyCode::Char('/'))),
-            volume_up:          resolve(sec.volume_up.as_deref(),           KeySpec::new(KeyCode::Char('+'))),
-            volume_down:        resolve(sec.volume_down.as_deref(),         KeySpec::new(KeyCode::Char('-'))),
-            tab_switch:         resolve(sec.tab_switch.as_deref(),          KeySpec::new(KeyCode::Tab)),
-            tab_switch_reverse: resolve(sec.tab_switch_reverse.as_deref(),  KeySpec::new(KeyCode::Char('`'))),
-            go_to_home:         resolve(sec.go_to_home.as_deref(),          KeySpec::new(KeyCode::Char('1'))),
-            go_to_browser:      resolve(sec.go_to_browser.as_deref(),       KeySpec::new(KeyCode::Char('2'))),
-            go_to_nowplaying:   resolve(sec.go_to_nowplaying.as_deref(),    KeySpec::new(KeyCode::Char('3'))),
-            quit:               resolve(sec.quit.as_deref(),                KeySpec::new(KeyCode::Char('q'))),
+            search: resolve(sec.search.as_deref(), KeySpec::new(KeyCode::Char('/'))),
+            volume_up: resolve(sec.volume_up.as_deref(), KeySpec::new(KeyCode::Char('+'))),
+            volume_down: resolve(sec.volume_down.as_deref(), KeySpec::new(KeyCode::Char('-'))),
+            tab_switch: resolve(sec.tab_switch.as_deref(), KeySpec::new(KeyCode::Tab)),
+            tab_switch_reverse: resolve(
+                sec.tab_switch_reverse.as_deref(),
+                KeySpec::new(KeyCode::Char('`')),
+            ),
+            go_to_home: resolve(sec.go_to_home.as_deref(), KeySpec::new(KeyCode::Char('1'))),
+            go_to_browser: resolve(
+                sec.go_to_browser.as_deref(),
+                KeySpec::new(KeyCode::Char('2')),
+            ),
+            go_to_nowplaying: resolve(
+                sec.go_to_nowplaying.as_deref(),
+                KeySpec::new(KeyCode::Char('3')),
+            ),
+            quit: resolve(sec.quit.as_deref(), KeySpec::new(KeyCode::Char('q'))),
             library_fzf,
             library_refresh,
             toggle_help: resolve(sec.toggle_help.as_deref(), KeySpec::new(KeyCode::Char('i'))),
@@ -340,7 +358,10 @@ impl Keybinds {
                     modifiers: KeyModifiers::SHIFT,
                 },
             ),
-            home_refresh: resolve(sec.home_refresh.as_deref(), KeySpec::new(KeyCode::Char('r'))),
+            home_refresh: resolve(
+                sec.home_refresh.as_deref(),
+                KeySpec::new(KeyCode::Char('r')),
+            ),
         }
     }
 }
@@ -352,7 +373,10 @@ fn parse_key(s: &str) -> Option<KeySpec> {
     let s = s.trim();
 
     // "Shift+x" — lowercase letter + SHIFT (canonical; matches Ghostty / kitty protocols).
-    if let Some(rest) = s.strip_prefix("Shift+").or_else(|| s.strip_prefix("shift+")) {
+    if let Some(rest) = s
+        .strip_prefix("Shift+")
+        .or_else(|| s.strip_prefix("shift+"))
+    {
         if rest.len() == 1 {
             let c = rest.chars().next()?.to_ascii_lowercase();
             return Some(KeySpec {
@@ -377,7 +401,10 @@ fn parse_key(s: &str) -> Option<KeySpec> {
     }
 
     // Ctrl+Shift+x
-    if let Some(rest) = s.strip_prefix("Ctrl+Shift+").or_else(|| s.strip_prefix("ctrl+shift+")) {
+    if let Some(rest) = s
+        .strip_prefix("Ctrl+Shift+")
+        .or_else(|| s.strip_prefix("ctrl+shift+"))
+    {
         let mut it = rest.chars();
         if let Some(c) = it.next() {
             if it.next().is_none() {
@@ -412,16 +439,16 @@ fn parse_key(s: &str) -> Option<KeySpec> {
 
     // Named special keys.
     match s {
-        "Tab"       => Some(KeySpec::new(KeyCode::Tab)),
-        "Enter"     => Some(KeySpec::new(KeyCode::Enter)),
-        "Esc"       => Some(KeySpec::new(KeyCode::Esc)),
-        "Left"      => Some(KeySpec::new(KeyCode::Left)),
-        "Right"     => Some(KeySpec::new(KeyCode::Right)),
-        "Up"        => Some(KeySpec::new(KeyCode::Up)),
-        "Down"      => Some(KeySpec::new(KeyCode::Down)),
-        "Space"     => Some(KeySpec::new(KeyCode::Char(' '))),
+        "Tab" => Some(KeySpec::new(KeyCode::Tab)),
+        "Enter" => Some(KeySpec::new(KeyCode::Enter)),
+        "Esc" => Some(KeySpec::new(KeyCode::Esc)),
+        "Left" => Some(KeySpec::new(KeyCode::Left)),
+        "Right" => Some(KeySpec::new(KeyCode::Right)),
+        "Up" => Some(KeySpec::new(KeyCode::Up)),
+        "Down" => Some(KeySpec::new(KeyCode::Down)),
+        "Space" => Some(KeySpec::new(KeyCode::Char(' '))),
         "Backspace" => Some(KeySpec::new(KeyCode::Backspace)),
-        _           => None,
+        _ => None,
     }
 }
 

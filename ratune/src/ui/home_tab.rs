@@ -12,9 +12,7 @@ use ratatui_image::StatefulImage;
 use crate::app::{App, HomeSection, HomeState, RecentAlbum};
 use crate::config::{Config, HomePanel};
 use crate::theme::Theme;
-use crate::ui::kitty_art::{
-    art_strip_layout, KITTY_STRIP_MAX_SLOTS, STRIP_GAP_COLS,
-};
+use crate::ui::kitty_art::{art_strip_layout, KITTY_STRIP_MAX_SLOTS, STRIP_GAP_COLS};
 
 // ── Relative time formatting ──────────────────────────────────────────────────
 
@@ -41,7 +39,9 @@ fn titled_block<'a>(title: &'a str, is_active: bool, accent: Color, theme: &Them
     let (title_style, border_style) = if is_active {
         (
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
-            Style::default().fg(theme.border_active).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.border_active)
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         (
@@ -91,10 +91,7 @@ pub fn compute_home_layout(area: Rect, cfg: &Config) -> Option<HomeLayout> {
 
     let top_level = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(top_h),
-            Constraint::Length(bottom_h),
-        ])
+        .constraints([Constraint::Length(top_h), Constraint::Length(bottom_h)])
         .split(area);
 
     let top_area = top_level[0];
@@ -128,10 +125,7 @@ pub fn compute_home_layout(area: Rect, cfg: &Config) -> Option<HomeLayout> {
 
     let bottom_cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(bottom_area);
 
     Some(HomeLayout {
@@ -281,9 +275,7 @@ fn render_recent_albums_list(
 
     // Recent-Tracks-like list, with the same scroll model as the strip (album_scroll_offset).
     let artist_w = ((area.width as usize).saturating_sub(8) * 35 / 100).max(10);
-    let album_w = (area.width as usize)
-        .saturating_sub(8 + artist_w)
-        .max(10);
+    let album_w = (area.width as usize).saturating_sub(8 + artist_w).max(10);
 
     let max_items = (area.height as usize).min(albums.len().saturating_sub(scroll_offset));
     let mut lines: Vec<Line> = Vec::new();
@@ -310,12 +302,7 @@ fn render_recent_albums_list(
     f.render_widget(Paragraph::new(lines), area);
 }
 
-fn render_art_strip_ratatui(
-    f: &mut Frame,
-    albums_inner: Rect,
-    app: &mut App,
-    _is_active: bool,
-) {
+fn render_art_strip_ratatui(f: &mut Frame, albums_inner: Rect, app: &mut App, _is_active: bool) {
     // Keep ratatui-image pad color aligned with panel bg (ImageSource copies this at `new_resize_protocol`).
     // If a rare cover still shows wrong matte vs panel: often PNG alpha / encoder quantization — revisit with a sample file.
     if let Some(p) = app.art_picker.as_mut() {
@@ -445,7 +432,9 @@ fn render_art_strip_labels(
     let thumb_cols = layout.thumb_cols;
 
     for row_in_grid in 0u16..layout.grid_rows {
-        let name_row_y = inner.y.saturating_add(layout.album_label_top_dy(row_in_grid));
+        let name_row_y = inner
+            .y
+            .saturating_add(layout.album_label_top_dy(row_in_grid));
         let artist_row_y = name_row_y + 1;
         if name_row_y >= inner.y + inner.height {
             break;
@@ -529,10 +518,7 @@ pub fn render_art_strip_text_fallback(
             "  No album history yet",
             Style::default().fg(Color::DarkGray),
         ));
-        f.render_widget(
-            Paragraph::new(hint),
-            Rect { height: 1, ..area },
-        );
+        f.render_widget(Paragraph::new(hint), Rect { height: 1, ..area });
         return;
     }
 
@@ -560,7 +546,11 @@ pub fn render_art_strip_text_fallback(
             let info = format!("  {} — {}", album.album_name, album.artist_name);
             f.render_widget(
                 Paragraph::new(Line::from(Span::raw(info))),
-                Rect { y: area.y + 1, height: 1, ..area },
+                Rect {
+                    y: area.y + 1,
+                    height: 1,
+                    ..area
+                },
             );
         }
     }
@@ -572,14 +562,24 @@ pub fn render_art_strip_text_fallback(
                 "  h/l navigate  Enter play  a add to queue",
                 Style::default().fg(Color::DarkGray),
             ))),
-            Rect { y: area.y + area.height.saturating_sub(1), height: 1, ..area },
+            Rect {
+                y: area.y + area.height.saturating_sub(1),
+                height: 1,
+                ..area
+            },
         );
     }
 }
 
 // ── Section block renderers ───────────────────────────────────────────────────
 
-fn render_recent_tracks_block(f: &mut Frame, area: Rect, home: &HomeState, accent: Color, theme: &Theme) {
+fn render_recent_tracks_block(
+    f: &mut Frame,
+    area: Rect,
+    home: &HomeState,
+    accent: Color,
+    theme: &Theme,
+) {
     let is_active = home.active_section == HomeSection::RecentTracks;
     let block = titled_block(" Recent Tracks ", is_active, accent, theme);
     let inner = block.inner(area);
@@ -625,7 +625,13 @@ fn render_recent_tracks_block(f: &mut Frame, area: Rect, home: &HomeState, accen
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_rediscover_block(f: &mut Frame, area: Rect, home: &HomeState, accent: Color, theme: &Theme) {
+fn render_rediscover_block(
+    f: &mut Frame,
+    area: Rect,
+    home: &HomeState,
+    accent: Color,
+    theme: &Theme,
+) {
     let is_active = home.active_section == HomeSection::Rediscover;
     let block = titled_block(" Rediscover ", is_active, accent, theme);
     let inner = block.inner(area);
@@ -643,9 +649,15 @@ fn render_rediscover_block(f: &mut Frame, area: Rect, home: &HomeState, accent: 
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        let max_items = (inner.height as usize).saturating_sub(1).min(home.rediscover.len());
+        let max_items = (inner.height as usize)
+            .saturating_sub(1)
+            .min(home.rediscover.len());
         for (i, (_, name)) in home.rediscover.iter().enumerate().take(max_items) {
-            let text = format!(" {:>2}. {}", i + 1, truncate(name, inner.width as usize - 6));
+            let text = format!(
+                " {:>2}. {}",
+                i + 1,
+                truncate(name, inner.width as usize - 6)
+            );
             let selected = is_active && home.selected_index == i;
             let style = if selected {
                 Style::default().bg(accent).fg(Color::Black)
@@ -675,7 +687,9 @@ fn render_rediscover_block(f: &mut Frame, area: Rect, home: &HomeState, accent: 
 
 /// Truncate `s` to at most `max` characters, adding `…` if truncated.
 fn truncate(s: &str, max: usize) -> String {
-    if max == 0 { return String::new(); }
+    if max == 0 {
+        return String::new();
+    }
     if s.chars().count() <= max {
         s.to_string()
     } else {
@@ -687,7 +701,9 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Pad `s` to exactly `width` chars, or truncate with `…` if longer.
 fn pad_or_truncate(s: &str, width: usize) -> String {
-    if width == 0 { return String::new(); }
+    if width == 0 {
+        return String::new();
+    }
     let count = s.chars().count();
     if count == width {
         s.to_string()

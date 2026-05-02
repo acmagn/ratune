@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use crate::error::SubsonicError;
+use serde::{Deserialize, Serialize};
 
 // ── Public domain types ───────────────────────────────────────────────────────
 
@@ -292,4 +292,51 @@ pub(crate) struct ScanStatusBody {
     pub error: Option<SubsonicError>,
     #[serde(rename = "scanStatus")]
     pub scan_status: Option<ScanStatus>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_ping_ok_envelope() {
+        let j = r#"{"subsonic-response":{"status":"ok"}}"#;
+        let env: PingEnvelope = serde_json::from_str(j).unwrap();
+        assert_eq!(env.response.status, "ok");
+        assert!(env.response.error.is_none());
+    }
+
+    #[test]
+    fn deserialize_song_camel_case() {
+        let j = r#"{"id":"42","title":"Track","albumId":"al1","discNumber":1,"track":3}"#;
+        let s: Song = serde_json::from_str(j).unwrap();
+        assert_eq!(s.id, "42");
+        assert_eq!(s.title, "Track");
+        assert_eq!(s.album_id.as_deref(), Some("al1"));
+        assert_eq!(s.disc_number, Some(1));
+        assert_eq!(s.track, Some(3));
+    }
+
+    #[test]
+    fn deserialize_playlist_detail_entry_songs() {
+        let j = r#"{"id":"p1","name":"Mix","entry":[{"id":"1","title":"A"}]}"#;
+        let d: PlaylistDetail = serde_json::from_str(j).unwrap();
+        assert_eq!(d.songs.len(), 1);
+        assert_eq!(d.songs[0].title, "A");
+    }
+
+    #[test]
+    fn subsonic_library_roundtrip_debug() {
+        let lib = SubsonicLibrary {
+            artists: vec![Artist {
+                id: "a".into(),
+                name: "Artist".into(),
+                album_count: None,
+                cover_art: None,
+                starred: None,
+                album: vec![],
+            }],
+        };
+        let _ = format!("{lib:?}");
+    }
 }

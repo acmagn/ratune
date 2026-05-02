@@ -88,7 +88,8 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut picker = Picker::from_query_stdio().context("terminal capability query (ratatui-image)")?;
+    let mut picker =
+        Picker::from_query_stdio().context("terminal capability query (ratatui-image)")?;
     picker.set_background_color(SURFACE);
 
     let protocol_str = format!("{:?}", picker.protocol_type());
@@ -101,7 +102,8 @@ fn main() -> Result<()> {
         .join(", ");
 
     let (tx_job, rx_job) = mpsc::channel::<ResizeRequest>();
-    let (tx_done, rx_done) = mpsc::channel::<Result<ResizeResponse, ratatui_image::errors::Errors>>();
+    let (tx_done, rx_done) =
+        mpsc::channel::<Result<ResizeResponse, ratatui_image::errors::Errors>>();
     thread::spawn(move || {
         while let Ok(req) = rx_job.recv() {
             let _ = tx_done.send(req.resize_encode());
@@ -150,7 +152,9 @@ fn main() -> Result<()> {
 
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     if in_tmux {
-        terminal.backend_mut().write_all(b"\x1bPtmux;\x1b\x1b[?1004l\x1b\\")?;
+        terminal
+            .backend_mut()
+            .write_all(b"\x1bPtmux;\x1b\x1b[?1004l\x1b\\")?;
         terminal.backend_mut().flush()?;
     }
     disable_raw_mode()?;

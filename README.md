@@ -204,7 +204,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 
 Full-library fzf (or sk) flow.
 
-**Library metadata required for fuzzy finding to work properly.** Enable it and configure refresh/arguments under `[library]` in [`docs/sample-config.toml`](docs/sample-config.toml).
+**Library metadata required for fuzzy finding to work properly.** Enable it and configure refresh/arguments under `[library]` in [`docs/sample-config.toml`](docs/sample-config.toml). Ratune will then fill the library metadata. It can take a few minutes and fuzzy finding will be unavailble during that time, please be patient!
 
 <p align="center">
   <img src="docs/screenshots/fzf.png" alt="Fuzzy library picker" width="90%" />

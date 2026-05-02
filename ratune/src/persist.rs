@@ -64,8 +64,7 @@ pub fn save_state(app: &App) -> Result<()> {
             .with_context(|| format!("creating state dir {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(&state)?;
-    std::fs::write(&path, json)
-        .with_context(|| format!("writing state to {}", path.display()))?;
+    std::fs::write(&path, json).with_context(|| format!("writing state to {}", path.display()))?;
     Ok(())
 }
 
@@ -77,10 +76,10 @@ pub fn restore_state(app: &mut App) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let state: SavedState = serde_json::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let state: SavedState =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
 
     app.active_tab = state.active_tab;
     app.browser_focus = state.browser_focus;
@@ -88,7 +87,9 @@ pub fn restore_state(app: &mut App) -> Result<()> {
     app.library.selected_album = state.selected_album;
     app.library.selected_track = state.selected_track;
     app.queue.songs = state.queue;
-    app.queue.cursor = state.queue_cursor.min(app.queue.songs.len().saturating_sub(1));
+    app.queue.cursor = state
+        .queue_cursor
+        .min(app.queue.songs.len().saturating_sub(1));
     app.queue.scroll = app.queue.cursor;
 
     if let Some(vol) = state.player_volume {
@@ -103,7 +104,8 @@ pub fn restore_state(app: &mut App) -> Result<()> {
     // restored track immediately. `player_loaded` stays false — the engine gets
     // the actual URL only when the user presses play for the first time.
     if let Some(song) = app.queue.current().cloned() {
-        let duration = song.duration
+        let duration = song
+            .duration
             .map(|s| std::time::Duration::from_secs(u64::from(s)));
         // Prefetch album art so it's ready when the NowPlaying tab is shown.
         if let Some(cover_id) = &song.cover_art {

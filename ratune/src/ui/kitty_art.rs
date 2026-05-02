@@ -65,9 +65,7 @@ pub fn detect_kitty_support() -> bool {
                 Ok(1) => {
                     response.push(byte[0]);
                     // DA1 response format: \x1b[?{digits}c  — stop on 'c' after \x1b[?
-                    if byte[0] == b'c'
-                        && response.windows(3).any(|w| w == b"\x1b[?")
-                    {
+                    if byte[0] == b'c' && response.windows(3).any(|w| w == b"\x1b[?") {
                         break;
                     }
                     if response.len() >= 256 {
@@ -113,43 +111,302 @@ fn apc(payload: &str, in_tmux: bool) -> String {
 /// graphics protocol spec (gen/rowcolumn-diacritics.txt in the kitty repo):
 /// https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
 const ROW_DIACRITICS: &[char] = &[
-    '\u{0305}', '\u{030D}', '\u{030E}', '\u{0310}', '\u{0312}', '\u{033D}', '\u{033E}', '\u{033F}',
-    '\u{0346}', '\u{034A}', '\u{034B}', '\u{034C}', '\u{0350}', '\u{0351}', '\u{0352}', '\u{0357}',
-    '\u{035B}', '\u{0363}', '\u{0364}', '\u{0365}', '\u{0366}', '\u{0367}', '\u{0368}', '\u{0369}',
-    '\u{036A}', '\u{036B}', '\u{036C}', '\u{036D}', '\u{036E}', '\u{036F}', '\u{0483}', '\u{0484}',
-    '\u{0485}', '\u{0486}', '\u{0487}', '\u{0592}', '\u{0593}', '\u{0594}', '\u{0595}', '\u{0597}',
-    '\u{0598}', '\u{0599}', '\u{059C}', '\u{059D}', '\u{059E}', '\u{059F}', '\u{05A0}', '\u{05A1}',
-    '\u{05A8}', '\u{05A9}', '\u{05AB}', '\u{05AC}', '\u{05AF}', '\u{05C4}', '\u{0610}', '\u{0611}',
-    '\u{0612}', '\u{0613}', '\u{0614}', '\u{0615}', '\u{0616}', '\u{0617}', '\u{0657}', '\u{0658}',
-    '\u{0659}', '\u{065A}', '\u{065B}', '\u{065D}', '\u{065E}', '\u{06D6}', '\u{06D7}', '\u{06D8}',
-    '\u{06D9}', '\u{06DA}', '\u{06DB}', '\u{06DC}', '\u{06DF}', '\u{06E0}', '\u{06E1}', '\u{06E2}',
-    '\u{06E4}', '\u{06E7}', '\u{06E8}', '\u{06EB}', '\u{06EC}', '\u{0730}', '\u{0732}', '\u{0733}',
-    '\u{0735}', '\u{0736}', '\u{073A}', '\u{073D}', '\u{073F}', '\u{0740}', '\u{0741}', '\u{0743}',
-    '\u{0745}', '\u{0747}', '\u{0749}', '\u{074A}', '\u{07EB}', '\u{07EC}', '\u{07ED}', '\u{07EE}',
-    '\u{07EF}', '\u{07F0}', '\u{07F1}', '\u{07F3}', '\u{0816}', '\u{0817}', '\u{0818}', '\u{0819}',
-    '\u{081B}', '\u{081C}', '\u{081D}', '\u{081E}', '\u{081F}', '\u{0820}', '\u{0821}', '\u{0822}',
-    '\u{0823}', '\u{0825}', '\u{0826}', '\u{0827}', '\u{0829}', '\u{082A}', '\u{082B}', '\u{082C}',
-    '\u{082D}', '\u{0951}', '\u{0953}', '\u{0954}', '\u{0F82}', '\u{0F83}', '\u{0F86}', '\u{0F87}',
-    '\u{135D}', '\u{135E}', '\u{135F}', '\u{17DD}', '\u{193A}', '\u{1A17}', '\u{1A75}', '\u{1A76}',
-    '\u{1A77}', '\u{1A78}', '\u{1A79}', '\u{1A7A}', '\u{1A7B}', '\u{1A7C}', '\u{1B6B}', '\u{1B6D}',
-    '\u{1B6E}', '\u{1B6F}', '\u{1B70}', '\u{1B71}', '\u{1B72}', '\u{1B73}', '\u{1CD0}', '\u{1CD1}',
-    '\u{1CD2}', '\u{1CDA}', '\u{1CDB}', '\u{1CE0}', '\u{1DC0}', '\u{1DC1}', '\u{1DC3}', '\u{1DC4}',
-    '\u{1DC5}', '\u{1DC6}', '\u{1DC7}', '\u{1DC8}', '\u{1DC9}', '\u{1DCB}', '\u{1DCC}', '\u{1DD1}',
-    '\u{1DD2}', '\u{1DD3}', '\u{1DD4}', '\u{1DD5}', '\u{1DD6}', '\u{1DD7}', '\u{1DD8}', '\u{1DD9}',
-    '\u{1DDA}', '\u{1DDB}', '\u{1DDC}', '\u{1DDD}', '\u{1DDE}', '\u{1DDF}', '\u{1DE0}', '\u{1DE1}',
-    '\u{1DE2}', '\u{1DE3}', '\u{1DE4}', '\u{1DE5}', '\u{1DE6}', '\u{1DFE}', '\u{20D0}', '\u{20D1}',
-    '\u{20D4}', '\u{20D5}', '\u{20D6}', '\u{20D7}', '\u{20DB}', '\u{20DC}', '\u{20E1}', '\u{20E7}',
-    '\u{20E9}', '\u{20F0}', '\u{2CEF}', '\u{2CF0}', '\u{2CF1}', '\u{2DE0}', '\u{2DE1}', '\u{2DE2}',
-    '\u{2DE3}', '\u{2DE4}', '\u{2DE5}', '\u{2DE6}', '\u{2DE7}', '\u{2DE8}', '\u{2DE9}', '\u{2DEA}',
-    '\u{2DEB}', '\u{2DEC}', '\u{2DED}', '\u{2DEE}', '\u{2DEF}', '\u{2DF0}', '\u{2DF1}', '\u{2DF2}',
-    '\u{2DF3}', '\u{2DF4}', '\u{2DF5}', '\u{2DF6}', '\u{2DF7}', '\u{2DF8}', '\u{2DF9}', '\u{2DFA}',
-    '\u{2DFB}', '\u{2DFC}', '\u{2DFD}', '\u{2DFE}', '\u{2DFF}', '\u{A66F}', '\u{A67C}', '\u{A67D}',
-    '\u{A6F0}', '\u{A6F1}', '\u{A8E0}', '\u{A8E1}', '\u{A8E2}', '\u{A8E3}', '\u{A8E4}', '\u{A8E5}',
-    '\u{A8E6}', '\u{A8E7}', '\u{A8E8}', '\u{A8E9}', '\u{A8EA}', '\u{A8EB}', '\u{A8EC}', '\u{A8ED}',
-    '\u{A8EE}', '\u{A8EF}', '\u{A8F0}', '\u{A8F1}', '\u{AAB0}', '\u{AAB2}', '\u{AAB3}', '\u{AAB7}',
-    '\u{AAB8}', '\u{AABE}', '\u{AABF}', '\u{AAC1}', '\u{FE20}', '\u{FE21}', '\u{FE22}', '\u{FE23}',
-    '\u{FE24}', '\u{FE25}', '\u{FE26}', '\u{10A0F}', '\u{10A38}', '\u{1D185}', '\u{1D186}', '\u{1D187}',
-    '\u{1D188}', '\u{1D189}', '\u{1D1AA}', '\u{1D1AB}', '\u{1D1AC}', '\u{1D1AD}', '\u{1D242}', '\u{1D243}',
+    '\u{0305}',
+    '\u{030D}',
+    '\u{030E}',
+    '\u{0310}',
+    '\u{0312}',
+    '\u{033D}',
+    '\u{033E}',
+    '\u{033F}',
+    '\u{0346}',
+    '\u{034A}',
+    '\u{034B}',
+    '\u{034C}',
+    '\u{0350}',
+    '\u{0351}',
+    '\u{0352}',
+    '\u{0357}',
+    '\u{035B}',
+    '\u{0363}',
+    '\u{0364}',
+    '\u{0365}',
+    '\u{0366}',
+    '\u{0367}',
+    '\u{0368}',
+    '\u{0369}',
+    '\u{036A}',
+    '\u{036B}',
+    '\u{036C}',
+    '\u{036D}',
+    '\u{036E}',
+    '\u{036F}',
+    '\u{0483}',
+    '\u{0484}',
+    '\u{0485}',
+    '\u{0486}',
+    '\u{0487}',
+    '\u{0592}',
+    '\u{0593}',
+    '\u{0594}',
+    '\u{0595}',
+    '\u{0597}',
+    '\u{0598}',
+    '\u{0599}',
+    '\u{059C}',
+    '\u{059D}',
+    '\u{059E}',
+    '\u{059F}',
+    '\u{05A0}',
+    '\u{05A1}',
+    '\u{05A8}',
+    '\u{05A9}',
+    '\u{05AB}',
+    '\u{05AC}',
+    '\u{05AF}',
+    '\u{05C4}',
+    '\u{0610}',
+    '\u{0611}',
+    '\u{0612}',
+    '\u{0613}',
+    '\u{0614}',
+    '\u{0615}',
+    '\u{0616}',
+    '\u{0617}',
+    '\u{0657}',
+    '\u{0658}',
+    '\u{0659}',
+    '\u{065A}',
+    '\u{065B}',
+    '\u{065D}',
+    '\u{065E}',
+    '\u{06D6}',
+    '\u{06D7}',
+    '\u{06D8}',
+    '\u{06D9}',
+    '\u{06DA}',
+    '\u{06DB}',
+    '\u{06DC}',
+    '\u{06DF}',
+    '\u{06E0}',
+    '\u{06E1}',
+    '\u{06E2}',
+    '\u{06E4}',
+    '\u{06E7}',
+    '\u{06E8}',
+    '\u{06EB}',
+    '\u{06EC}',
+    '\u{0730}',
+    '\u{0732}',
+    '\u{0733}',
+    '\u{0735}',
+    '\u{0736}',
+    '\u{073A}',
+    '\u{073D}',
+    '\u{073F}',
+    '\u{0740}',
+    '\u{0741}',
+    '\u{0743}',
+    '\u{0745}',
+    '\u{0747}',
+    '\u{0749}',
+    '\u{074A}',
+    '\u{07EB}',
+    '\u{07EC}',
+    '\u{07ED}',
+    '\u{07EE}',
+    '\u{07EF}',
+    '\u{07F0}',
+    '\u{07F1}',
+    '\u{07F3}',
+    '\u{0816}',
+    '\u{0817}',
+    '\u{0818}',
+    '\u{0819}',
+    '\u{081B}',
+    '\u{081C}',
+    '\u{081D}',
+    '\u{081E}',
+    '\u{081F}',
+    '\u{0820}',
+    '\u{0821}',
+    '\u{0822}',
+    '\u{0823}',
+    '\u{0825}',
+    '\u{0826}',
+    '\u{0827}',
+    '\u{0829}',
+    '\u{082A}',
+    '\u{082B}',
+    '\u{082C}',
+    '\u{082D}',
+    '\u{0951}',
+    '\u{0953}',
+    '\u{0954}',
+    '\u{0F82}',
+    '\u{0F83}',
+    '\u{0F86}',
+    '\u{0F87}',
+    '\u{135D}',
+    '\u{135E}',
+    '\u{135F}',
+    '\u{17DD}',
+    '\u{193A}',
+    '\u{1A17}',
+    '\u{1A75}',
+    '\u{1A76}',
+    '\u{1A77}',
+    '\u{1A78}',
+    '\u{1A79}',
+    '\u{1A7A}',
+    '\u{1A7B}',
+    '\u{1A7C}',
+    '\u{1B6B}',
+    '\u{1B6D}',
+    '\u{1B6E}',
+    '\u{1B6F}',
+    '\u{1B70}',
+    '\u{1B71}',
+    '\u{1B72}',
+    '\u{1B73}',
+    '\u{1CD0}',
+    '\u{1CD1}',
+    '\u{1CD2}',
+    '\u{1CDA}',
+    '\u{1CDB}',
+    '\u{1CE0}',
+    '\u{1DC0}',
+    '\u{1DC1}',
+    '\u{1DC3}',
+    '\u{1DC4}',
+    '\u{1DC5}',
+    '\u{1DC6}',
+    '\u{1DC7}',
+    '\u{1DC8}',
+    '\u{1DC9}',
+    '\u{1DCB}',
+    '\u{1DCC}',
+    '\u{1DD1}',
+    '\u{1DD2}',
+    '\u{1DD3}',
+    '\u{1DD4}',
+    '\u{1DD5}',
+    '\u{1DD6}',
+    '\u{1DD7}',
+    '\u{1DD8}',
+    '\u{1DD9}',
+    '\u{1DDA}',
+    '\u{1DDB}',
+    '\u{1DDC}',
+    '\u{1DDD}',
+    '\u{1DDE}',
+    '\u{1DDF}',
+    '\u{1DE0}',
+    '\u{1DE1}',
+    '\u{1DE2}',
+    '\u{1DE3}',
+    '\u{1DE4}',
+    '\u{1DE5}',
+    '\u{1DE6}',
+    '\u{1DFE}',
+    '\u{20D0}',
+    '\u{20D1}',
+    '\u{20D4}',
+    '\u{20D5}',
+    '\u{20D6}',
+    '\u{20D7}',
+    '\u{20DB}',
+    '\u{20DC}',
+    '\u{20E1}',
+    '\u{20E7}',
+    '\u{20E9}',
+    '\u{20F0}',
+    '\u{2CEF}',
+    '\u{2CF0}',
+    '\u{2CF1}',
+    '\u{2DE0}',
+    '\u{2DE1}',
+    '\u{2DE2}',
+    '\u{2DE3}',
+    '\u{2DE4}',
+    '\u{2DE5}',
+    '\u{2DE6}',
+    '\u{2DE7}',
+    '\u{2DE8}',
+    '\u{2DE9}',
+    '\u{2DEA}',
+    '\u{2DEB}',
+    '\u{2DEC}',
+    '\u{2DED}',
+    '\u{2DEE}',
+    '\u{2DEF}',
+    '\u{2DF0}',
+    '\u{2DF1}',
+    '\u{2DF2}',
+    '\u{2DF3}',
+    '\u{2DF4}',
+    '\u{2DF5}',
+    '\u{2DF6}',
+    '\u{2DF7}',
+    '\u{2DF8}',
+    '\u{2DF9}',
+    '\u{2DFA}',
+    '\u{2DFB}',
+    '\u{2DFC}',
+    '\u{2DFD}',
+    '\u{2DFE}',
+    '\u{2DFF}',
+    '\u{A66F}',
+    '\u{A67C}',
+    '\u{A67D}',
+    '\u{A6F0}',
+    '\u{A6F1}',
+    '\u{A8E0}',
+    '\u{A8E1}',
+    '\u{A8E2}',
+    '\u{A8E3}',
+    '\u{A8E4}',
+    '\u{A8E5}',
+    '\u{A8E6}',
+    '\u{A8E7}',
+    '\u{A8E8}',
+    '\u{A8E9}',
+    '\u{A8EA}',
+    '\u{A8EB}',
+    '\u{A8EC}',
+    '\u{A8ED}',
+    '\u{A8EE}',
+    '\u{A8EF}',
+    '\u{A8F0}',
+    '\u{A8F1}',
+    '\u{AAB0}',
+    '\u{AAB2}',
+    '\u{AAB3}',
+    '\u{AAB7}',
+    '\u{AAB8}',
+    '\u{AABE}',
+    '\u{AABF}',
+    '\u{AAC1}',
+    '\u{FE20}',
+    '\u{FE21}',
+    '\u{FE22}',
+    '\u{FE23}',
+    '\u{FE24}',
+    '\u{FE25}',
+    '\u{FE26}',
+    '\u{10A0F}',
+    '\u{10A38}',
+    '\u{1D185}',
+    '\u{1D186}',
+    '\u{1D187}',
+    '\u{1D188}',
+    '\u{1D189}',
+    '\u{1D1AA}',
+    '\u{1D1AB}',
+    '\u{1D1AC}',
+    '\u{1D1AD}',
+    '\u{1D242}',
+    '\u{1D243}',
     '\u{1D244}',
 ];
 
@@ -162,12 +419,9 @@ const ROW_DIACRITICS: &[char] = &[
 /// infers the column from the cell's horizontal position.
 fn placeholder_row(cols: u16, image_id: u32, row_index: usize) -> String {
     let r = ((image_id >> 16) & 0xFF) as u8;
-    let g = ((image_id >> 8)  & 0xFF) as u8;
-    let b = ( image_id        & 0xFF) as u8;
-    let diacritic = ROW_DIACRITICS
-        .get(row_index)
-        .copied()
-        .unwrap_or('\u{0305}');
+    let g = ((image_id >> 8) & 0xFF) as u8;
+    let b = (image_id & 0xFF) as u8;
+    let diacritic = ROW_DIACRITICS.get(row_index).copied().unwrap_or('\u{0305}');
 
     // Set foreground colour; first cell gets the row diacritic, rest do not.
     let mut s = format!("\x1b[38;2;{r};{g};{b}m");
@@ -218,8 +472,8 @@ pub fn render_image(
     pad: Rgba<u8>,
 ) -> Result<()> {
     use base64::Engine;
-    use flate2::Compression;
     use flate2::write::ZlibEncoder;
+    use flate2::Compression;
 
     let inner_w = placement.width;
     let inner_h = placement.height;
@@ -235,16 +489,27 @@ pub fn render_image(
     };
 
     let place_rows = if in_tmux { tmux_rows } else { inner_h };
-    let fw = cell_px.map(|(w, _)| w as u32).filter(|&w| w > 0).unwrap_or(10);
-    let fh = cell_px.map(|(_, h)| h as u32).filter(|&h| h > 0).unwrap_or(20);
+    let fw = cell_px
+        .map(|(w, _)| w as u32)
+        .filter(|&w| w > 0)
+        .unwrap_or(10);
+    let fh = cell_px
+        .map(|(_, h)| h as u32)
+        .filter(|&h| h > 0)
+        .unwrap_or(20);
 
     let phys_w = inner_w as u32 * fw;
     let phys_h = place_rows as u32 * fh;
-    let (tw, th) =
-        crate::ui::art_prepare::uniform_scale_dimensions_to_max_edge(phys_w, phys_h, crate::ui::art_prepare::MAX_ART_EDGE_PX);
+    let (tw, th) = crate::ui::art_prepare::uniform_scale_dimensions_to_max_edge(
+        phys_w,
+        phys_h,
+        crate::ui::art_prepare::MAX_ART_EDGE_PX,
+    );
 
     let img = image::load_from_memory(bytes)?;
-    let img = crate::ui::art_prepare::prepare_art_image_for_exact_pixels_contain_centered(img, tw, th, pad);
+    let img = crate::ui::art_prepare::prepare_art_image_for_exact_pixels_contain_centered(
+        img, tw, th, pad,
+    );
     let img_rgba = img.to_rgba8();
     let (w, h) = img_rgba.dimensions();
     let raw = img_rgba.into_raw();
@@ -279,7 +544,10 @@ pub fn render_image(
                 write!(
                     out,
                     "{}",
-                    apc(&format!("a=t,f=32,i=1,s={w},v={h},o=z,m={m},q=2;{chunk_str}"), true)
+                    apc(
+                        &format!("a=t,f=32,i=1,s={w},v={h},o=z,m={m},q=2;{chunk_str}"),
+                        true
+                    )
                 )?;
             } else {
                 write!(out, "{}", apc(&format!("m={m};{chunk_str}"), true))?;
@@ -365,7 +633,11 @@ pub fn query_cell_pixel_size() -> Option<(u16, u16)> {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    let mut tty = OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?;
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()?;
     let mut tty_read = tty.try_clone().ok()?;
 
     if crossterm::terminal::enable_raw_mode().is_err() {
@@ -414,16 +686,14 @@ pub fn query_cell_pixel_size() -> Option<(u16, u16)> {
 /// Expected format: `\x1b[6;{height};{width}t`
 fn parse_cell_size_response(response: &str) -> Option<(u16, u16)> {
     // Strip leading ESC[ if present
-    let s = response
-        .trim_start_matches('\x1b')
-        .trim_start_matches('[');
+    let s = response.trim_start_matches('\x1b').trim_start_matches('[');
     // Should be "6;{height};{width}t"
     let s = s.strip_prefix("6;")?;
     let t_pos = s.rfind('t')?;
     let nums = &s[..t_pos];
     let mut parts = nums.splitn(2, ';');
     let height: u16 = parts.next()?.parse().ok()?;
-    let width: u16  = parts.next()?.parse().ok()?;
+    let width: u16 = parts.next()?.parse().ok()?;
     if width == 0 || height == 0 {
         return None;
     }
@@ -621,9 +891,11 @@ pub fn art_strip_layout(albums_inner_w: u16, albums_inner_h: u16) -> ArtStripLay
         per_row = visible_thumbnail_count(albums_inner_w, thumb_cols, STRIP_GAP_COLS);
     }
     let total_visible = per_row * grid_rows as usize;
-    let used_w = (per_row as u16)
-        .saturating_mul(thumb_cols)
-        .saturating_add((per_row as u16).saturating_sub(1).saturating_mul(STRIP_GAP_COLS));
+    let used_w = (per_row as u16).saturating_mul(thumb_cols).saturating_add(
+        (per_row as u16)
+            .saturating_sub(1)
+            .saturating_mul(STRIP_GAP_COLS),
+    );
     let pad_x = albums_inner_w.saturating_sub(used_w) / 2;
     let content_h = art_strip_content_height(grid_rows, thumb_rows);
     let pad_y = albums_inner_h.saturating_sub(content_h) / 2;
@@ -686,7 +958,6 @@ pub fn visible_thumbnail_count(terminal_cols: u16, thumb_cols: u16, gap_cols: u1
     count.max(1)
 }
 
-
 /// Cached resize + zlib for one Home-strip thumbnail (Kitty image id is chosen per slot at draw time).
 #[derive(Debug, Clone)]
 pub struct StripThumbPrepared {
@@ -707,8 +978,8 @@ impl StripThumbPrepared {
     /// Decode cover bytes, contain+letterbox to `tw×th` (matches `c×r` cell aspect), zlib RGBA.
     pub fn build(cover_bytes: &[u8], tw: u32, th: u32, pad: Rgba<u8>) -> Option<Self> {
         use base64::Engine;
-        use flate2::Compression;
         use flate2::write::ZlibEncoder;
+        use flate2::Compression;
         use std::io::Write;
 
         let img = image::load_from_memory(cover_bytes).ok()?;
@@ -766,8 +1037,14 @@ pub fn render_art_strip(
     let thumb_cols = layout.thumb_cols;
     let thumb_rows = layout.thumb_rows;
     let visible_count = layout.total_visible.min(KITTY_STRIP_MAX_SLOTS);
-    let fw = cell_px.map(|(w, _)| w as u32).filter(|&w| w > 0).unwrap_or(10);
-    let fh = cell_px.map(|(_, h)| h as u32).filter(|&h| h > 0).unwrap_or(20);
+    let fw = cell_px
+        .map(|(w, _)| w as u32)
+        .filter(|&w| w > 0)
+        .unwrap_or(10);
+    let fh = cell_px
+        .map(|(_, h)| h as u32)
+        .filter(|&h| h > 0)
+        .unwrap_or(20);
     // Physical size of one thumb slot — bitmap aspect must match or Kitty stretches (square thumbs were wrong).
     let phys_w = thumb_cols as u32 * fw;
     let phys_h = thumb_rows as u32 * fh;
@@ -817,7 +1094,10 @@ pub fn render_art_strip(
                     let _ = write!(
                         out,
                         "{}",
-                        apc(&format!("a=t,f=32,i={kitty_id},s={w},v={h},o=z,m={m},q=2;{chunk_str}"), in_tmux)
+                        apc(
+                            &format!("a=t,f=32,i={kitty_id},s={w},v={h},o=z,m={m},q=2;{chunk_str}"),
+                            in_tmux
+                        )
                     );
                 } else {
                     let _ = write!(out, "{}", apc(&format!("m={m};{chunk_str}"), in_tmux));
@@ -830,7 +1110,10 @@ pub fn render_art_strip(
                 let _ = write!(
                     out,
                     "{}",
-                    apc(&format!("a=p,U=1,i={kitty_id},c={thumb_cols},r={thumb_rows},q=2"), true)
+                    apc(
+                        &format!("a=p,U=1,i={kitty_id},c={thumb_cols},r={thumb_rows},q=2"),
+                        true
+                    )
                 );
                 // Write placeholder characters row-by-row at the thumbnail position.
                 for pr in 0..thumb_rows {
@@ -849,7 +1132,10 @@ pub fn render_art_strip(
                     "\x1b[{};{}H{}",
                     base_row + 1,
                     col + 1,
-                    apc(&format!("a=p,i={kitty_id},p=1,c={thumb_cols},r={thumb_rows},q=2;"), false)
+                    apc(
+                        &format!("a=p,i={kitty_id},p=1,c={thumb_cols},r={thumb_rows},q=2;"),
+                        false
+                    )
                 );
             }
             let _ = out.flush();

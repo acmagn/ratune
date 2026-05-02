@@ -1,8 +1,8 @@
-use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::Frame;
 use ratatui_image::picker::ProtocolType;
 use ratatui_image::thread::ThreadProtocol;
 use ratatui_image::StatefulImage;
@@ -26,8 +26,9 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
         .unwrap_or(super::layout::Placement::Right);
     let visualizer_position = super::layout::placement_from_str(&app.config.visualizer_location)
         .unwrap_or(super::layout::Placement::Right);
-    let now_playing_position = super::layout::placement_from_str(&app.config.now_playing_box_location)
-        .unwrap_or(super::layout::Placement::Right);
+    let now_playing_position =
+        super::layout::placement_from_str(&app.config.now_playing_box_location)
+            .unwrap_or(super::layout::Placement::Right);
 
     let rects = super::layout::now_playing_rects(
         area,
@@ -153,9 +154,11 @@ fn render_art_placeholder(app: &mut App, frame: &mut Frame, area: Rect) {
     {
         let inner = crate::ui::kitty_art::album_art_placeholder_inner(area);
         if inner.width > 0 && inner.height > 0 {
-            if app.art_picker.as_ref().is_some_and(|p| {
-                matches!(p.protocol_type(), ProtocolType::Sixel)
-            }) {
+            if app
+                .art_picker
+                .as_ref()
+                .is_some_and(|p| matches!(p.protocol_type(), ProtocolType::Sixel))
+            {
                 frame.render_widget(
                     Block::default().style(Style::default().bg(app.theme.surface)),
                     inner,
@@ -340,7 +343,12 @@ fn render_unsynced(
         .iter()
         .skip(scroll)
         .take(inner_h)
-        .map(|row| Line::from(Span::styled(row.as_str(), Style::default().fg(t.foreground))))
+        .map(|row| {
+            Line::from(Span::styled(
+                row.as_str(),
+                Style::default().fg(t.foreground),
+            ))
+        })
         .collect();
 
     let para = Paragraph::new(display).style(Style::default().bg(t.surface));

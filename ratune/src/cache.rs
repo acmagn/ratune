@@ -84,13 +84,27 @@ impl TrackCache {
         let index_path = base.join("cache.json");
 
         if !enabled {
-            return Self { entries: HashMap::new(), tracks_dir, index_path, max_size_bytes, enabled: false };
+            return Self {
+                entries: HashMap::new(),
+                tracks_dir,
+                index_path,
+                max_size_bytes,
+                enabled: false,
+            };
         }
 
         if let Err(e) = std::fs::create_dir_all(&tracks_dir) {
-            eprintln!("warn: could not create cache dir {}: {e} — caching disabled",
-                tracks_dir.display());
-            return Self { entries: HashMap::new(), tracks_dir, index_path, max_size_bytes, enabled: false };
+            eprintln!(
+                "warn: could not create cache dir {}: {e} — caching disabled",
+                tracks_dir.display()
+            );
+            return Self {
+                entries: HashMap::new(),
+                tracks_dir,
+                index_path,
+                max_size_bytes,
+                enabled: false,
+            };
         }
 
         let entries: HashMap<String, CacheEntry> = if index_path.exists() {
@@ -102,7 +116,13 @@ impl TrackCache {
             HashMap::new()
         };
 
-        Self { entries, tracks_dir, index_path, max_size_bytes, enabled: true }
+        Self {
+            entries,
+            tracks_dir,
+            index_path,
+            max_size_bytes,
+            enabled: true,
+        }
     }
 
     fn disabled(max_size_bytes: u64) -> Self {
@@ -120,15 +140,22 @@ impl TrackCache {
     /// Non-mutating — does not remove stale entries. Use this when only a
     /// presence check is needed and you do not hold a `&mut` already.
     pub fn get_const(&self, song_id: &str) -> bool {
-        if !self.enabled { return false; }
-        self.entries.get(song_id).map(|e| e.path.exists()).unwrap_or(false)
+        if !self.enabled {
+            return false;
+        }
+        self.entries
+            .get(song_id)
+            .map(|e| e.path.exists())
+            .unwrap_or(false)
     }
 
     /// Return the cached file path for `song_id` if the file exists on disk.
     ///
     /// Removes stale index entries whose files have been deleted externally.
     pub fn get(&mut self, song_id: &str) -> Option<PathBuf> {
-        if !self.enabled { return None; }
+        if !self.enabled {
+            return None;
+        }
         if let Some(entry) = self.entries.get(song_id) {
             if entry.path.exists() {
                 return Some(entry.path.clone());
@@ -144,7 +171,9 @@ impl TrackCache {
     /// Updates the index, runs LRU eviction, then saves. Any IO error is
     /// logged but does not propagate — cache failures must never affect playback.
     pub fn put(&mut self, song_id: &str, album_id: &str, data: &[u8]) -> anyhow::Result<()> {
-        if !self.enabled { return Ok(()); }
+        if !self.enabled {
+            return Ok(());
+        }
 
         let path = self.tracks_dir.join(format!("{song_id}.cache"));
         let nanos = std::time::SystemTime::now()
@@ -167,12 +196,15 @@ impl TrackCache {
             return Ok(());
         }
 
-        self.entries.insert(song_id.to_string(), CacheEntry {
-            path,
-            size_bytes: data.len() as u64,
-            last_played: unix_now(),
-            album_id: album_id.to_string(),
-        });
+        self.entries.insert(
+            song_id.to_string(),
+            CacheEntry {
+                path,
+                size_bytes: data.len() as u64,
+                last_played: unix_now(),
+                album_id: album_id.to_string(),
+            },
+        );
 
         self.evict_to_limit();
         self.save_index();
@@ -181,7 +213,9 @@ impl TrackCache {
 
     /// Update the `last_played` timestamp for `song_id` (LRU clock tick).
     pub fn touch(&mut self, song_id: &str) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         if let Some(entry) = self.entries.get_mut(song_id) {
             entry.last_played = unix_now();
             self.save_index();
@@ -191,23 +225,34 @@ impl TrackCache {
     /// Evict the least-recently-played entries until the total cache size is
     /// under `max_size_bytes`. Also saves the index after eviction.
     pub fn evict_to_limit(&mut self) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
 
         let total: u64 = self.entries.values().map(|e| e.size_bytes).sum();
-        if total <= self.max_size_bytes { return; }
+        if total <= self.max_size_bytes {
+            return;
+        }
 
         // Sort by last_played ascending — oldest entries evicted first.
-        let mut by_age: Vec<(String, u64)> = self.entries.iter()
+        let mut by_age: Vec<(String, u64)> = self
+            .entries
+            .iter()
             .map(|(id, e)| (id.clone(), e.last_played))
             .collect();
         by_age.sort_by_key(|(_, t)| *t);
 
         let mut remaining = total;
         for (id, _) in by_age {
-            if remaining <= self.max_size_bytes { break; }
+            if remaining <= self.max_size_bytes {
+                break;
+            }
             if let Some(entry) = self.entries.remove(&id) {
                 if let Err(e) = std::fs::remove_file(&entry.path) {
-                    eprintln!("warn: cache eviction failed for {}: {e}", entry.path.display());
+                    eprintln!(
+                        "warn: cache eviction failed for {}: {e}",
+                        entry.path.display()
+                    );
                 }
                 remaining = remaining.saturating_sub(entry.size_bytes);
             }
@@ -217,7 +262,9 @@ impl TrackCache {
 
     /// Serialize the index to `cache.json`. Silently ignores all errors.
     fn save_index(&self) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         if let Ok(json) = serde_json::to_string_pretty(&self.entries) {
             let _ = std::fs::write(&self.index_path, json);
         }

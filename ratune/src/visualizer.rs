@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, FftPlanner};
 
 const DEFAULT_FFT_SIZE: usize = 2048;
 
@@ -39,9 +39,12 @@ pub fn compute_bands(
         .map(|i| {
             if i < available {
                 let s = samples[start + i];
-                let window = 0.5 * (1.0
-                    - (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos());
-                Complex { re: s * window, im: 0.0 }
+                let window =
+                    0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos());
+                Complex {
+                    re: s * window,
+                    im: 0.0,
+                }
             } else {
                 Complex { re: 0.0, im: 0.0 }
             }
@@ -68,8 +71,7 @@ pub fn compute_bands(
         .map(|b| {
             let t0 = b as f32 / num_bands as f32;
             let t1 = (b + 1) as f32 / num_bands as f32;
-            let bin_start =
-                ((log_min + t0 * (log_max - log_min)).exp() as usize).min(num_mag - 1);
+            let bin_start = ((log_min + t0 * (log_max - log_min)).exp() as usize).min(num_mag - 1);
             let bin_end = ((log_min + t1 * (log_max - log_min)).exp() as usize)
                 .max(bin_start + 1)
                 .min(num_mag);

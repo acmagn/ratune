@@ -47,11 +47,7 @@ pub fn install_default_keyring_store() {
         return;
     }
 
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         eprintln!(
             "warning: no keyring backend is bundled for this OS; use [server].password or SUBSONIC_PASS."

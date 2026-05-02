@@ -16,8 +16,8 @@ pub mod tab_bar;
 pub mod tracks;
 pub mod visualizer;
 
-use ratatui::Frame;
 use crate::app::{App, Tab};
+use ratatui::Frame;
 
 use home_tab::render_home_tab;
 
@@ -33,13 +33,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     match app.active_tab {
         Tab::Home => {
             let areas = layout::build_layout(frame.area(), &layout::layout_options_for_app(app));
-            render_home_tab(
-                frame,
-                areas.center,
-                app,
-                app.accent(),
-                app.help_visible,
-            );
+            render_home_tab(frame, areas.center, app, app.accent(), app.help_visible);
             now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);
             // Tab bar (skip if terminal is too small).

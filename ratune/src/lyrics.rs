@@ -54,7 +54,10 @@ async fn fetch_inner(
     if let Some(plain) = body.plain_lyrics.filter(|s| !s.is_empty()) {
         return Ok(plain
             .lines()
-            .map(|l| LyricLine { time: None, text: l.to_string() })
+            .map(|l| LyricLine {
+                time: None,
+                text: l.to_string(),
+            })
             .collect());
     }
 

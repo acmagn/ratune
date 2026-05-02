@@ -1,12 +1,12 @@
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use ratatui::Frame;
 
+use super::{albums, artists, playlist_overlay, tracks};
 use crate::app::{App, BrowserColumn};
 use crate::config::BrowseMode;
-use super::{artists, albums, playlist_overlay, tracks};
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     match app.config.browse_mode {
@@ -42,9 +42,24 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     ])
     .split(area);
 
-    artists::render(app, frame, cols[0], matches!(app.browser_focus, BrowserColumn::Artists));
-    albums::render(app, frame, cols[1], matches!(app.browser_focus, BrowserColumn::Albums));
-    tracks::render(app, frame, cols[2], matches!(app.browser_focus, BrowserColumn::Tracks));
+    artists::render(
+        app,
+        frame,
+        cols[0],
+        matches!(app.browser_focus, BrowserColumn::Artists),
+    );
+    albums::render(
+        app,
+        frame,
+        cols[1],
+        matches!(app.browser_focus, BrowserColumn::Albums),
+    );
+    tracks::render(
+        app,
+        frame,
+        cols[2],
+        matches!(app.browser_focus, BrowserColumn::Tracks),
+    );
 
     playlist_overlay::render_playlist_overlay(
         frame,

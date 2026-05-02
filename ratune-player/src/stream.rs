@@ -12,8 +12,8 @@
 //! Playback starts as soon as 256 KB have been buffered (PREBUFFER_BYTES).
 
 use std::io::{Read, Seek, SeekFrom};
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use anyhow::{Context, Result};
 
@@ -49,7 +49,9 @@ impl Read for StreamingReader {
             let guard = self.inner.buf.lock().unwrap();
             self.inner
                 .cond
-                .wait_while(guard, |b| b.len() <= pos && !self.inner.done.load(Ordering::Acquire))
+                .wait_while(guard, |b| {
+                    b.len() <= pos && !self.inner.done.load(Ordering::Acquire)
+                })
                 .unwrap()
         };
         let available = buf.len().saturating_sub(pos);

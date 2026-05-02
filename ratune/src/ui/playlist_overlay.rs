@@ -4,14 +4,16 @@
 //! area.  Left column shows the playlist list; right column shows the tracks
 //! of the currently selected playlist.
 
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style}; // Modifier used by highlight_style
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::Frame;
 
 use crate::app::PlaylistPicker;
-use crate::state::{ConfirmAction, LoadingState, PlaylistFocus, PlaylistInputMode, PlaylistOverlay};
+use crate::state::{
+    ConfirmAction, LoadingState, PlaylistFocus, PlaylistInputMode, PlaylistOverlay,
+};
 use crate::theme::Theme;
 
 // ── Duration helpers ──────────────────────────────────────────────────────────
@@ -53,11 +55,8 @@ pub fn render_playlist_overlay(
 
     // ── Overlay occupies the bottom 40% of the browser content area ──────────
 
-    let split = Layout::vertical([
-        Constraint::Percentage(60),
-        Constraint::Percentage(40),
-    ])
-    .split(area);
+    let split =
+        Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).split(area);
 
     let overlay_area = split[1];
 
@@ -67,13 +66,10 @@ pub fn render_playlist_overlay(
 
     // ── Horizontal split: left 35% (playlists), right 65% (tracks) ───────────
 
-    let cols = Layout::horizontal([
-        Constraint::Percentage(35),
-        Constraint::Percentage(65),
-    ])
-    .split(overlay_area);
+    let cols = Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .split(overlay_area);
 
-    let left_active  = matches!(overlay.focus, PlaylistFocus::List);
+    let left_active = matches!(overlay.focus, PlaylistFocus::List);
     let right_active = !left_active;
 
     render_playlist_list(frame, cols[0], overlay, accent, theme, left_active);
@@ -114,14 +110,20 @@ fn render_playlist_list(
     let border_color = if is_active { accent } else { theme.border };
     let title_color = if is_active { accent } else { theme.dimmed };
     let list_border = if is_active {
-        Style::default().fg(border_color).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(border_color)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(border_color)
     };
 
     let block = Block::default()
         .title(" Playlists ")
-        .title_style(Style::default().fg(title_color).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(title_color)
+                .add_modifier(Modifier::BOLD),
+        )
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(list_border)
@@ -149,19 +151,15 @@ fn render_playlist_list(
                     .map(|p| {
                         let count = p.song_count.unwrap_or(0);
                         let label = match p.duration {
-                            Some(d) => format!(
-                                "{}  ({} tracks · {})",
-                                p.name,
-                                count,
-                                fmt_duration_hm(d)
-                            ),
+                            Some(d) => {
+                                format!("{}  ({} tracks · {})", p.name, count, fmt_duration_hm(d))
+                            }
                             None => format!("{}  ({} tracks)", p.name, count),
                         };
                         ListItem::new(label).style(Style::default().fg(theme.foreground))
                     })
                     .collect();
-                let sel =
-                    Some(overlay.selected_playlist_index.min(playlists.len() - 1));
+                let sel = Some(overlay.selected_playlist_index.min(playlists.len() - 1));
                 (items, sel)
             }
         }
@@ -217,7 +215,9 @@ fn render_track_list(
     let border_color = if is_active { accent } else { theme.border };
     let title_color = if is_active { accent } else { theme.dimmed };
     let list_border = if is_active {
-        Style::default().fg(border_color).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(border_color)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(border_color)
     };
@@ -233,7 +233,11 @@ fn render_track_list(
 
     let block = Block::default()
         .title(title_text)
-        .title_style(Style::default().fg(title_color).add_modifier(Modifier::BOLD))
+        .title_style(
+            Style::default()
+                .fg(title_color)
+                .add_modifier(Modifier::BOLD),
+        )
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(list_border)
@@ -264,17 +268,12 @@ fn render_track_list(
                     .enumerate()
                     .map(|(i, s)| {
                         let artist = s.artist.as_deref().unwrap_or("");
-                        let dur = s
-                            .duration
-                            .map(fmt_duration_ms)
-                            .unwrap_or_default();
-                        let label =
-                            format!("{}. {}  {}  {}", i + 1, s.title, artist, dur);
+                        let dur = s.duration.map(fmt_duration_ms).unwrap_or_default();
+                        let label = format!("{}. {}  {}  {}", i + 1, s.title, artist, dur);
                         ListItem::new(label).style(Style::default().fg(theme.foreground))
                     })
                     .collect();
-                let sel =
-                    Some(overlay.selected_track_index.min(songs.len() - 1));
+                let sel = Some(overlay.selected_track_index.min(songs.len() - 1));
                 (items, sel)
             }
         }
@@ -309,7 +308,12 @@ fn render_confirm_dialog(
     let h = 3u16;
     let x = parent.x + (parent.width.saturating_sub(w)) / 2;
     let y = parent.y + (parent.height.saturating_sub(h)) / 2;
-    let dialog_area = Rect { x, y, width: w, height: h };
+    let dialog_area = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     frame.render_widget(Clear, dialog_area);
     let block = Block::default()
@@ -339,7 +343,12 @@ pub fn render_playlist_picker(
     let h = (area.height * 6 / 10).max(5).min(area.height);
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let picker_area = Rect { x, y, width: w, height: h };
+    let picker_area = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     frame.render_widget(Clear, picker_area);
 

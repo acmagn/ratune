@@ -11,21 +11,21 @@ use crate::config::{ThemePreset, ThemeSection};
 pub struct Theme {
     pub preset: ThemePreset,
     /// Orange accent: active borders, highlighted items, progress bar fill. (#ff8c00)
-    pub accent:        Color,
+    pub accent: Color,
     /// Outer background (status bar, now-playing bar). (#1a1a1a)
-    pub background:    Color,
+    pub background: Color,
     /// Panel backgrounds (browser columns, queue block). (#161616)
-    pub surface:       Color,
+    pub surface: Color,
     /// Primary text. (#d4d0c8)
-    pub foreground:    Color,
+    pub foreground: Color,
     /// Secondary / muted text. (#5a5858)
-    pub dimmed:        Color,
+    pub dimmed: Color,
     /// Inactive pane borders. (#252525)
-    pub border:        Color,
+    pub border: Color,
     /// Active pane borders. (#3a3a3a)
     pub border_active: Color,
     /// Whether to use the dynamic accent extracted from album art.
-    pub dynamic:       bool,
+    pub dynamic: bool,
 }
 
 impl Theme {

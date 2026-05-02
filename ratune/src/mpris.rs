@@ -34,8 +34,8 @@ mod linux {
     use super::{MprisControl, MprisNotify, MprisSnapshot};
     use mpris_server::zbus::{self, fdo};
     use mpris_server::{
-        LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property, RootInterface,
-        Server, Signal, Time, TrackId, Volume,
+        LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property,
+        RootInterface, Server, Signal, Time, TrackId, Volume,
     };
     use std::sync::mpsc;
     use std::sync::{Arc, RwLock};
@@ -51,7 +51,11 @@ mod linux {
                 _ => '_',
             })
             .collect();
-        let tail = if safe.is_empty() { "unknown".into() } else { safe };
+        let tail = if safe.is_empty() {
+            "unknown".into()
+        } else {
+            safe
+        };
         format!("/net/ratune/track/{tail}")
     }
 
@@ -215,7 +219,11 @@ mod linux {
         }
 
         async fn playback_status(&self) -> fdo::Result<PlaybackStatus> {
-            Ok(self.snapshot.read().map(|s| s.playback_status).unwrap_or(PlaybackStatus::Stopped))
+            Ok(self
+                .snapshot
+                .read()
+                .map(|s| s.playback_status)
+                .unwrap_or(PlaybackStatus::Stopped))
         }
 
         async fn loop_status(&self) -> fdo::Result<LoopStatus> {
@@ -476,9 +484,7 @@ mod mpris_art {
         if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
             return "jpg";
         }
-        if bytes.len() >= 8
-            && bytes[0..8] == [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n']
-        {
+        if bytes.len() >= 8 && bytes[0..8] == [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'] {
             return "png";
         }
         if bytes.len() >= 6 && (&bytes[0..6] == *b"GIF87a" || &bytes[0..6] == *b"GIF89a") {

@@ -134,7 +134,7 @@ fn oklab_to_rgb(lab: [f32; 3]) -> (u8, u8, u8) {
     let m = m * m * m;
     let s = s * s * s;
 
-    let r =  4.076_741_66 * l - 3.307_711_59 * m + 0.230_969_94 * s;
+    let r = 4.076_741_66 * l - 3.307_711_59 * m + 0.230_969_94 * s;
     let g = -1.268_438_00 * l + 2.609_757_40 * m - 0.341_319_40 * s;
     let b = -0.004_196_09 * l - 0.703_418_61 * m + 1.707_614_70 * s;
 
@@ -159,5 +159,51 @@ fn linear_to_srgb(x: f32) -> f32 {
         x * 12.92
     } else {
         1.055 * x.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    #[test]
+    fn ensure_readable_boosts_dark_rgb() {
+        let c = ensure_readable(Color::Rgb(10, 10, 10), 0.55);
+        let Color::Rgb(r, g, b) = c else {
+            panic!("expected Rgb");
+        };
+        let lab = rgb_to_oklab(r, g, b);
+        assert!(lab[0] > rgb_to_oklab(10, 10, 10)[0]);
+        assert!(
+            lab[0] >= 0.52,
+            "lightness should move toward min_lightness={}",
+            lab[0]
+        );
+    }
+
+    #[test]
+    fn lerp_endpoints() {
+        let a = Color::Rgb(0, 0, 0);
+        let b = Color::Rgb(100, 100, 100);
+        let mid = lerp_color(a, b, 0.5);
+        let Color::Rgb(r, _, _) = mid else {
+            panic!("expected Rgb");
+        };
+        assert!(r > 0 && r < 100);
+        assert_eq!(lerp_color(a, b, -1.0), a);
+        let end = lerp_color(a, b, 2.0);
+        let Color::Rgb(er, eg, eb) = end else {
+            panic!("expected Rgb");
+        };
+        assert!((er as i16 - 100).abs() <= 1);
+        assert!((eg as i16 - 100).abs() <= 1);
+        assert!((eb as i16 - 100).abs() <= 1);
+    }
+
+    #[test]
+    fn ensure_readable_non_rgb_passthrough() {
+        let c = Color::Indexed(4);
+        assert_eq!(ensure_readable(c, 0.55), c);
     }
 }

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use inquire::Password;
 use keyring_core::Error as KeyringError;
 use serde::{Deserialize, Serialize};
@@ -42,43 +42,43 @@ struct FileConfig {
 /// unset fields fall back to built-in defaults inside `Keybinds::from_section`.
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct KeybindsSection {
-    pub scroll_up:     Option<String>,
-    pub scroll_down:   Option<String>,
-    pub column_left:   Option<String>,
-    pub column_right:  Option<String>,
-    pub play_pause:    Option<String>,
-    pub next_track:    Option<String>,
-    pub prev_track:    Option<String>,
-    pub seek_forward:  Option<String>,
+    pub scroll_up: Option<String>,
+    pub scroll_down: Option<String>,
+    pub column_left: Option<String>,
+    pub column_right: Option<String>,
+    pub play_pause: Option<String>,
+    pub next_track: Option<String>,
+    pub prev_track: Option<String>,
+    pub seek_forward: Option<String>,
     pub seek_backward: Option<String>,
-    pub add_track:     Option<String>,
-    pub add_all:       Option<String>,
+    pub add_track: Option<String>,
+    pub add_all: Option<String>,
     /// Replace queue with the **current album** (Browser). Default: Ctrl+r
     pub add_all_replace_album: Option<String>,
     /// Replace queue with **all tracks for the current artist** (Browser). Default: Ctrl+Shift+r
     pub add_all_replace_artist: Option<String>,
     /// Prepend artist/album tracks to the queue. Default: Ctrl+Shift+p
     pub add_all_prepend: Option<String>,
-    pub shuffle:       Option<String>,
-    pub unshuffle:     Option<String>,
-    pub clear_queue:   Option<String>,
-    pub search:        Option<String>,
-    pub volume_up:     Option<String>,
-    pub volume_down:   Option<String>,
-    pub tab_switch:         Option<String>,
+    pub shuffle: Option<String>,
+    pub unshuffle: Option<String>,
+    pub clear_queue: Option<String>,
+    pub search: Option<String>,
+    pub volume_up: Option<String>,
+    pub volume_down: Option<String>,
+    pub tab_switch: Option<String>,
     /// Reverse tab cycle (Backtick by default)
     pub tab_switch_reverse: Option<String>,
     /// Jump to Home tab (default: '1')
-    pub go_to_home:         Option<String>,
+    pub go_to_home: Option<String>,
     /// Jump to Browser tab (default: '2')
-    pub go_to_browser:      Option<String>,
+    pub go_to_browser: Option<String>,
     /// Jump to NowPlaying tab (default: '3')
-    pub go_to_nowplaying:   Option<String>,
-    pub quit:               Option<String>,
+    pub go_to_nowplaying: Option<String>,
+    pub quit: Option<String>,
     /// Fuzzy track picker (metadata index). Default: Ctrl+f
-    pub library_fzf:        Option<String>,
+    pub library_fzf: Option<String>,
     /// Force library index refresh. Default: Ctrl+g
-    pub library_refresh:    Option<String>,
+    pub library_refresh: Option<String>,
     /// Toggle this help popup. Default: i
     pub toggle_help: Option<String>,
     /// Toggle dynamic accent from album art. Default: t
@@ -116,12 +116,19 @@ pub struct CacheSection {
     pub max_size_gb: f64,
 }
 
-fn default_cache_enabled() -> bool { true }
-fn default_cache_max_size_gb() -> f64 { 2.0 }
+fn default_cache_enabled() -> bool {
+    true
+}
+fn default_cache_max_size_gb() -> f64 {
+    2.0
+}
 
 impl Default for CacheSection {
     fn default() -> Self {
-        Self { enabled: default_cache_enabled(), max_size_gb: default_cache_max_size_gb() }
+        Self {
+            enabled: default_cache_enabled(),
+            max_size_gb: default_cache_max_size_gb(),
+        }
     }
 }
 
@@ -445,26 +452,66 @@ pub struct UiSection {
     pub browsetab: Option<UiBrowseTabSection>,
 }
 
-fn default_ui_lyrics_enabled() -> bool { true }
-fn default_ui_visualizer_enabled() -> bool { true }
-fn default_ui_visualizer_type() -> String { "spectrum".into() }
-fn default_ui_visualizer_fps() -> u16 { 30 }
-fn default_ui_visualizer_fft_size() -> usize { 2048 }
-fn default_ui_visualizer_gain_db() -> f32 { 0.0 }
-fn default_ui_visualizer_colors() -> Vec<String> { vec!["accent".into()] }
-fn default_ui_visualizer_color_mode() -> String { "accent".into() }
-fn default_ui_progress_style() -> String { "██░".into() }
-fn default_ui_nowplaying_show_art() -> bool { true }
-fn default_ui_nowplaying_art_position() -> String { "left".into() }
-fn default_ui_nowplaying_left_width_percent() -> u8 { 50 }
-fn default_ui_show_fzf_hint() -> bool { false }
-fn default_ui_visualizer_location() -> String { "queue".into() }
-fn default_ui_tab_bar_position() -> String { "bottom".into() }
-fn default_ui_now_playing_bar_height() -> u16 { 4 }
-fn default_ui_now_playing_layout() -> String { "row".into() }
-fn default_ui_now_playing_box_location() -> String { "right".into() }
-fn default_ui_now_playing_show_controls() -> bool { true }
-fn default_ui_now_playing_show_progress() -> bool { true }
+fn default_ui_lyrics_enabled() -> bool {
+    true
+}
+fn default_ui_visualizer_enabled() -> bool {
+    true
+}
+fn default_ui_visualizer_type() -> String {
+    "spectrum".into()
+}
+fn default_ui_visualizer_fps() -> u16 {
+    30
+}
+fn default_ui_visualizer_fft_size() -> usize {
+    2048
+}
+fn default_ui_visualizer_gain_db() -> f32 {
+    0.0
+}
+fn default_ui_visualizer_colors() -> Vec<String> {
+    vec!["accent".into()]
+}
+fn default_ui_visualizer_color_mode() -> String {
+    "accent".into()
+}
+fn default_ui_progress_style() -> String {
+    "██░".into()
+}
+fn default_ui_nowplaying_show_art() -> bool {
+    true
+}
+fn default_ui_nowplaying_art_position() -> String {
+    "left".into()
+}
+fn default_ui_nowplaying_left_width_percent() -> u8 {
+    50
+}
+fn default_ui_show_fzf_hint() -> bool {
+    false
+}
+fn default_ui_visualizer_location() -> String {
+    "queue".into()
+}
+fn default_ui_tab_bar_position() -> String {
+    "bottom".into()
+}
+fn default_ui_now_playing_bar_height() -> u16 {
+    4
+}
+fn default_ui_now_playing_layout() -> String {
+    "row".into()
+}
+fn default_ui_now_playing_box_location() -> String {
+    "right".into()
+}
+fn default_ui_now_playing_show_controls() -> bool {
+    true
+}
+fn default_ui_now_playing_show_progress() -> bool {
+    true
+}
 
 fn default_now_playing_lines() -> Vec<String> {
     vec!["$b%t$/b".into(), "%a".into(), "%b".into()]
@@ -490,7 +537,11 @@ impl HomePanel {
 }
 
 fn default_home_panels() -> [HomePanel; 3] {
-    [HomePanel::RecentAlbums, HomePanel::RecentTracks, HomePanel::Rediscover]
+    [
+        HomePanel::RecentAlbums,
+        HomePanel::RecentTracks,
+        HomePanel::Rediscover,
+    ]
 }
 
 fn parse_home_panels(v: Option<Vec<String>>) -> [HomePanel; 3] {
@@ -572,12 +623,12 @@ pub struct ThemeSection {
     /// - `terminal` / `os`: inherit colors from the terminal theme (ignores hex palette)
     #[serde(default)]
     pub preset: Option<String>,
-    pub accent:        Option<String>,
-    pub background:    Option<String>,
-    pub surface:       Option<String>,
-    pub foreground:    Option<String>,
-    pub dimmed:        Option<String>,
-    pub border:        Option<String>,
+    pub accent: Option<String>,
+    pub background: Option<String>,
+    pub surface: Option<String>,
+    pub foreground: Option<String>,
+    pub dimmed: Option<String>,
+    pub border: Option<String>,
     pub border_active: Option<String>,
 }
 
@@ -614,7 +665,9 @@ impl Default for PlayerSection {
     }
 }
 
-fn default_volume() -> u8 { 70 }
+fn default_volume() -> u8 {
+    70
+}
 
 fn default_mpris() -> bool {
     true
@@ -624,17 +677,17 @@ fn default_mpris() -> bool {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub subsonic_url:   String,
-    pub subsonic_user:  String,
-    pub subsonic_pass:  String,
+    pub subsonic_url: String,
+    pub subsonic_user: String,
+    pub subsonic_pass: String,
     pub default_volume: u8,
-    pub max_bit_rate:   u32,
+    pub max_bit_rate: u32,
     /// Linux: register MPRIS on the session bus (media keys, `playerctl`).
-    pub mpris_enabled:  bool,
+    pub mpris_enabled: bool,
     /// Raw keybind strings — parsed into `Keybinds` by `App::new`.
     pub keybinds: KeybindsSection,
     /// Raw theme colour strings — parsed into `Theme` by `App::new`.
-    pub theme:    ThemeSection,
+    pub theme: ThemeSection,
     /// Whether to show the lyrics overlay on startup.
     pub lyrics_visible: bool,
     /// Whether to show the spectrum visualizer overlay on startup.
@@ -694,7 +747,7 @@ pub struct Config {
     /// `now_playing_lines_row` when empty.
     pub now_playing_lines_boxed: Vec<String>,
     /// Whether the offline track cache is enabled.
-    pub cache_enabled:     bool,
+    pub cache_enabled: bool,
     /// Maximum total cache size in gigabytes.
     pub cache_max_size_gb: f64,
     /// Local metadata index for fzf (see `[library]`).
@@ -734,8 +787,8 @@ impl Config {
 
         let text = std::fs::read_to_string(&config_path)
             .with_context(|| format!("reading {}", config_path.display()))?;
-        let mut file_cfg: FileConfig = toml::from_str(&text)
-            .with_context(|| format!("parsing {}", config_path.display()))?;
+        let mut file_cfg: FileConfig =
+            toml::from_str(&text).with_context(|| format!("parsing {}", config_path.display()))?;
 
         // Env vars override file values.
         merge_env_overrides(&mut file_cfg);
@@ -976,14 +1029,14 @@ impl Config {
             .unwrap_or_default();
 
         Ok(Config {
-            subsonic_url:      file_cfg.server.url,
-            subsonic_user:     file_cfg.server.username,
+            subsonic_url: file_cfg.server.url,
+            subsonic_user: file_cfg.server.username,
             subsonic_pass,
-            default_volume:    file_cfg.player.default_volume,
-            max_bit_rate:      file_cfg.player.max_bit_rate,
-            mpris_enabled:     file_cfg.player.mpris,
-            keybinds:          file_cfg.keybinds,
-            theme:             file_cfg.theme,
+            default_volume: file_cfg.player.default_volume,
+            max_bit_rate: file_cfg.player.max_bit_rate,
+            mpris_enabled: file_cfg.player.mpris,
+            keybinds: file_cfg.keybinds,
+            theme: file_cfg.theme,
             lyrics_visible,
             visualizer_visible,
             lyrics_enabled,
@@ -1015,13 +1068,13 @@ impl Config {
             now_playing_box_include_progress,
             now_playing_lines_row,
             now_playing_lines_boxed,
-            cache_enabled:     file_cfg.cache.enabled,
+            cache_enabled: file_cfg.cache.enabled,
             cache_max_size_gb: file_cfg.cache.max_size_gb,
             library_index_enabled: file_cfg.library.enabled,
-            library_index_path:    file_cfg.library.index_path,
+            library_index_path: file_cfg.library.index_path,
             library_index_max_age_secs: file_cfg.library.max_age_secs,
-            fzf_binary:            file_cfg.library.fzf_binary,
-            fzf_args:              file_cfg.library.fzf_args,
+            fzf_binary: file_cfg.library.fzf_binary,
+            fzf_args: file_cfg.library.fzf_args,
             library_fetch_album_parallelism: file_cfg.library.fetch_album_parallelism.max(1),
             library_fetch_artist_parallelism: file_cfg.library.fetch_artist_parallelism.max(1),
             library_navidrome_skip_unchanged_scan: file_cfg.library.navidrome_skip_unchanged_scan,
@@ -1221,11 +1274,7 @@ max_size_gb = 2   # maximum total cache size in gigabytes
 
 /// Keyring "user" field: `url|username` so multiple servers do not collide.
 fn subsonic_keyring_user(server_url: &str, username: &str) -> String {
-    format!(
-        "{}|{}",
-        server_url.trim_end_matches('/'),
-        username.trim()
-    )
+    format!("{}|{}", server_url.trim_end_matches('/'), username.trim())
 }
 
 /// Plaintext `[server].password` or env `SUBSONIC_PASS` wins; otherwise OS keyring (`ratune` /
@@ -1339,14 +1388,51 @@ fn prompt_and_store_subsonic_secret(entry: &keyring_core::Entry) -> Result<Strin
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_empty_toml_as_defaults() {
+        let fc: FileConfig = toml::from_str("").expect("empty");
+        assert!(fc.server.url.is_empty());
+        assert!(fc.cache.enabled);
+    }
+
+    #[test]
+    fn parses_server_credentials_block() {
+        let text = r#"
+[server]
+url = "http://music.example:4533"
+username = "alice"
+password = "secret"
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        assert_eq!(fc.server.url, "http://music.example:4533");
+        assert_eq!(fc.server.username, "alice");
+        assert_eq!(fc.server.password, "secret");
+    }
+
+    #[test]
+    fn browse_mode_parses_artists() {
+        assert_eq!(BrowseMode::parse("artists"), Some(BrowseMode::Artists));
+        assert_eq!(BrowseMode::parse("bogus"), None);
+    }
+}
+
 fn merge_env_overrides(cfg: &mut FileConfig) {
-    if let Ok(v) = std::env::var("TERMUSIC_SUBSONIC_URL").or_else(|_| std::env::var("SUBSONIC_URL")) {
+    if let Ok(v) = std::env::var("TERMUSIC_SUBSONIC_URL").or_else(|_| std::env::var("SUBSONIC_URL"))
+    {
         cfg.server.url = v;
     }
-    if let Ok(v) = std::env::var("TERMUSIC_SUBSONIC_USER").or_else(|_| std::env::var("SUBSONIC_USER")) {
+    if let Ok(v) =
+        std::env::var("TERMUSIC_SUBSONIC_USER").or_else(|_| std::env::var("SUBSONIC_USER"))
+    {
         cfg.server.username = v;
     }
-    if let Ok(v) = std::env::var("TERMUSIC_SUBSONIC_PASS").or_else(|_| std::env::var("SUBSONIC_PASS")) {
+    if let Ok(v) =
+        std::env::var("TERMUSIC_SUBSONIC_PASS").or_else(|_| std::env::var("SUBSONIC_PASS"))
+    {
         cfg.server.password = v;
     }
 }
