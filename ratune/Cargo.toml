@@ -34,6 +34,18 @@ rand = "0.8"
 rustfft = "6"
 notify-rust = "4"
 ratatui-image = { version = "9.0", default-features = false, features = ["image-defaults", "crossterm"] }
+inquire = "0.7"
+keyring-core = "1"
 
+# Platform credential stores for keyring-core — see https://crates.io/crates/keyring-core
 [target.'cfg(target_os = "linux")'.dependencies]
+# Kernel keyutils — always available on Linux; no Secret Service / D-Bus / gnome-keyring required.
+# See https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/
+linux-keyutils-keyring-store = "1"
 mpris-server = "0.9"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"

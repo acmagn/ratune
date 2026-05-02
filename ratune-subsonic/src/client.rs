@@ -10,8 +10,8 @@
 //! | Param | Value |
 //! |-------|-------|
 //! | `u`   | username |
-//! | `t`   | MD5(password + salt) as lowercase hex |
-//! | `s`   | random alphanumeric salt |
+//! | `t`   | MD5(secret + salt) as lowercase hex (`secret` = account password or compatible token) |
+//! | `s`   | random alphanumeric salt (new per request) |
 //! | `v`   | Subsonic API version (`1.16.1`) |
 //! | `c`   | client name (`ratune`) |
 

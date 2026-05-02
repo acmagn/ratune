@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use inquire::Password;
+use keyring_core::Error as KeyringError;
 use serde::{Deserialize, Serialize};
 
 /// How album art is rendered in the terminal (Now Playing column + Home strip).
@@ -585,6 +587,8 @@ struct ServerSection {
     url: String,
     #[serde(default)]
     username: String,
+    /// Plain Subsonic password or token. Leave empty (default) to use the OS keyring: prompted
+    /// once ([`inquire`]), then stored under service `ratune` and user `{url}|{username}`.
     #[serde(default)]
     password: String,
 }
@@ -736,11 +740,19 @@ impl Config {
         // Env vars override file values.
         merge_env_overrides(&mut file_cfg);
 
+        let subsonic_pass = resolve_subsonic_secret(&file_cfg.server).with_context(|| {
+            format!(
+                "Subsonic credentials failed (config {}). Hint: with password empty you need [server].url, [server].username, a working OS keyring, and a TTY for the first-time password prompt.",
+                config_path.display()
+            )
+        })?;
+
         // Validate password.
-        if file_cfg.server.password.is_empty() {
+        if subsonic_pass.is_empty() {
             bail!(
                 "No Subsonic password configured.\n\
-                 Edit {} or set TERMUSIC_SUBSONIC_PASS.",
+                 Set [server].password in {} or SUBSONIC_PASS / TERMUSIC_SUBSONIC_PASS,\n\
+                 or leave password empty and use the keyring prompt (needs url + username).",
                 config_path.display()
             );
         }
@@ -966,7 +978,7 @@ impl Config {
         Ok(Config {
             subsonic_url:      file_cfg.server.url,
             subsonic_user:     file_cfg.server.username,
-            subsonic_pass:     file_cfg.server.password,
+            subsonic_pass,
             default_volume:    file_cfg.player.default_volume,
             max_bit_rate:      file_cfg.player.max_bit_rate,
             mpris_enabled:     file_cfg.player.mpris,
@@ -1205,6 +1217,126 @@ max_size_gb = 2   # maximum total cache size in gigabytes
         .with_context(|| format!("writing default config to {}", path.display()))?;
     eprintln!("Created default config: {}", path.display());
     Ok(())
+}
+
+/// Keyring "user" field: `url|username` so multiple servers do not collide.
+fn subsonic_keyring_user(server_url: &str, username: &str) -> String {
+    format!(
+        "{}|{}",
+        server_url.trim_end_matches('/'),
+        username.trim()
+    )
+}
+
+/// Plaintext `[server].password` or env `SUBSONIC_PASS` wins; otherwise OS keyring (`ratune` /
+/// `subsonic_keyring_user`) or interactive prompt via [`inquire`]. If the keyring is unavailable
+/// (e.g. no Secret Service / D-Bus), prompt once and keep the secret in memory for this process only.
+fn resolve_subsonic_secret(server: &ServerSection) -> Result<String> {
+    let pass = server.password.trim();
+    if !pass.is_empty() {
+        return Ok(pass.to_string());
+    }
+
+    let url = server.url.trim();
+    let user = server.username.trim();
+    if url.is_empty() && user.is_empty() {
+        bail!(
+            "With an empty [server].password, you must set [server].url and [server].username (or SUBSONIC_URL and SUBSONIC_USER) for keyring auth — both are still empty."
+        );
+    }
+    if url.is_empty() {
+        bail!(
+            "With an empty [server].password, [server].url must be set (or SUBSONIC_URL) for keyring auth."
+        );
+    }
+    if user.is_empty() {
+        bail!(
+            "With an empty [server].password, [server].username must be set (or SUBSONIC_USER) for keyring auth."
+        );
+    }
+
+    let label = subsonic_keyring_user(url, user);
+    let entry = match keyring_core::Entry::new("ratune", &label) {
+        Ok(e) => e,
+        Err(KeyringError::NoDefaultStore) => {
+            eprintln!(
+                "warning: keyring default store is not configured on this platform or startup failed."
+            );
+            return inquire_subsonic_password_session();
+        }
+        Err(e) => return Err(e).context("keyring entry (service ratune)"),
+    };
+
+    match entry.get_password() {
+        Ok(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                prompt_and_store_subsonic_secret(&entry)
+            } else {
+                Ok(t.to_string())
+            }
+        }
+        Err(KeyringError::NoEntry) => prompt_and_store_subsonic_secret(&entry),
+        Err(e) if keyring_storage_unavailable(&e) => {
+            eprintln!(
+                "warning: keyring store is not available ({e}).\n\
+                 Using a one-time password prompt; the secret is not saved and applies only to this run.\n\
+                 To persist without typing each time: set [server].password or SUBSONIC_PASS."
+            );
+            inquire_subsonic_password_session()
+        }
+        Err(e) => Err(e).context("reading Subsonic secret from keyring"),
+    }
+}
+
+fn keyring_storage_unavailable(err: &KeyringError) -> bool {
+    matches!(
+        err,
+        KeyringError::PlatformFailure(_) | KeyringError::NoStorageAccess(_)
+    )
+}
+
+/// Prompt for secret; used when the keyring store cannot be used.
+fn inquire_subsonic_password_session() -> Result<String> {
+    inquire_plain_secret(Some(
+        "Enter your Subsonic password or token (this session only — keyring unavailable).\n\
+         API overview: https://www.navidrome.org/docs/developers/subsonic-api/",
+    ))
+}
+
+fn inquire_plain_secret(prefix: Option<&str>) -> Result<String> {
+    if let Some(s) = prefix {
+        eprintln!("{s}");
+    }
+    let pw = Password::new("Subsonic password or token:")
+        .without_confirmation()
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let pw = pw.trim();
+    if pw.is_empty() {
+        bail!("empty password");
+    }
+    Ok(pw.to_string())
+}
+
+fn prompt_and_store_subsonic_secret(entry: &keyring_core::Entry) -> Result<String> {
+    let pw = inquire_plain_secret(Some(
+        "No plaintext password in config — storing your Subsonic secret in the platform keyring \
+         (service \"ratune\", user \"url|username\").\n\
+         On Linux this uses kernel keyutils; on macOS/Windows use the system credential UI to remove the entry if needed.\n\
+         API overview: https://www.navidrome.org/docs/developers/subsonic-api/",
+    ))?;
+
+    match entry.set_password(&pw) {
+        Ok(()) => Ok(pw),
+        Err(e) if keyring_storage_unavailable(&e) => {
+            eprintln!(
+                "warning: could not save to keyring ({e}). Using password for this session only."
+            );
+            Ok(pw)
+        }
+        Err(e) => Err(e).context("storing Subsonic secret in keyring"),
+    }
 }
 
 fn merge_env_overrides(cfg: &mut FileConfig) {

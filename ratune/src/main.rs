@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod cache;
 mod fzf_picker;
+mod keyring_init;
 mod library_index;
 mod mpris;
 mod color;
@@ -43,8 +44,11 @@ use state::{GlobalConfirm, PlaylistFocus, PlaylistInputMode};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    keyring_init::install_default_keyring_store();
+
     let config = Config::load().unwrap_or_else(|e| {
-        eprintln!("error: {e}");
+        // `{:#}` prints the full cause chain (plain `{}` hides nested anyhow contexts).
+        eprintln!("error: {e:#}");
         process::exit(1);
     });
     let mut app = App::new(config)?;

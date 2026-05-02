@@ -49,8 +49,12 @@
 #
 # url       — Base URL of the server (no trailing path required in most setups).
 # username  — Subsonic username.
-# password  — Subsonic password or token (must be non-empty or the app exits
-#             at startup; use env override to avoid storing it in a file).
+# password  — Subsonic password or token. Empty (default) = keyring-core + native store (Linux:
+#             kernel keyutils; macOS: Keychain; Windows: Credential Manager) when available; else a
+#             one-time session prompt. Non-empty = plaintext. SUBSONIC_PASS overrides.
+#
+# Subsonic API auth (v1.16.1): random salt per request + MD5(secret+salt). See:
+# https://www.navidrome.org/docs/developers/subsonic-api/
 
 [server]
 url = ""
@@ -61,11 +65,7 @@ password = ""
 # [player]
 # -----------------------------------------------------------------------------
 #
-# default_volume — In-app playback gain (0–100), applied in software before the
-#                  audio device. This is separate from OS / PipeWire / game volume:
-#                  lower this to duck music under a loud game without changing
-#                  system volume. Adjust live with + / − (saved in state.json).
-#                  Default: 70.
+# default_volume — Initial UI/player volume after connect (0–100). Default: 70.
 # max_bit_rate   — Cap streaming bitrate in kbps. 0 = unlimited (server decides).
 # mpris          — Linux only: register an MPRIS player on the session bus so
 #                  media keys / playerctl work. Default: true.

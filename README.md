@@ -98,7 +98,9 @@ Press `q` or Esc to exit.
 
 On first start, ratune creates a short default file at `~/.config/ratune/config.toml` (server fields plus common UI defaults). For every key with comments, use the sample file and copy the sections you need: [`docs/sample-config.toml`](docs/sample-config.toml).
 
-Minimum: set Subsonic URL and credentials:
+Set Subsonic URL and username. For the secret you can either put it in the file (**plaintext**) or leave **`password` empty** (**default**) and use the OS keyring:
+
+**Plaintext in config:**
 
 ```toml
 [server]
@@ -107,9 +109,13 @@ username = "you"
 password = "your_password"
 ```
 
+**Keyring (default starter config):** leave `password = ""`. The app uses [`keyring-core`](https://crates.io/crates/keyring-core) with a platform store: [**kernel keyutils**](https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/) on Linux (no Secret Service, D-Bus, or gnome-keyring), **Keychain** on macOS, **Credential Manager** on Windows. Linux uses the in-kernel keyring ([persistence and lifetimes](https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/#persistence)); a reboot clears keys, so you may be prompted again after restart. On first run you are prompted (via [inquire](https://crates.io/crates/inquire)); the secret is stored under service **`ratune`** and user **`{url}|{username}`** (not in `config.toml`). If the store cannot be opened (e.g. restricted container), you get a session-only prompt — use **`SUBSONIC_PASS`** or **`password`** in config. On macOS/Windows you can remove the saved login from the usual credential UI; on Linux, clearing happens on reboot or when kernel keyring entries expire per the docs linked above.
+
+Subsonic auth uses a random salt per request and `MD5(secret + salt)` ([Navidrome / Subsonic API](https://www.navidrome.org/docs/developers/subsonic-api/)).
+
 ### Environment overrides (optional)
 
-Takes priority over the file if set:
+Overrides the config file when set:
 
 ```sh
 export SUBSONIC_URL="https://your-server.example.com"
