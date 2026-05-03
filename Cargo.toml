@@ -1,3 +1,11 @@
 [workspace]
 members = ["ratune-subsonic", "ratune-player", "ratune"]
 resolver = "2"
+
+# Smaller release binaries (typ. ~1/3 less than defaults for this project). Slower `cargo build --release`.
+# See https://github.com/taiki-e/upload-rust-binary-action#optimize-rust-binary
+# Use `lto = true` (fat LTO) instead of `thin` for a bit more shrink, slower link.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

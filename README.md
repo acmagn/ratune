@@ -64,7 +64,7 @@ Everything under **Runtime**, plus:
 
 ## Installation
 
-**Prebuilt binaries:** see [Releases](https://github.com/acmagn/ratune/releases).
+**Prebuilt binaries:** see [Releases](https://github.com/acmagn/ratune/releases). Asset names follow `ratune-<tag>-<target>.tar.gz` (for example `ratune-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`), plus a `.sha256` sidecar.
 
 **Linux (build from source):** install ALSA dev headers *before* the first `cargo build`:
 
