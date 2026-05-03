@@ -42,16 +42,31 @@ Ratune was built to bring together a combination of features often missing from 
 
 ## Requirements
 
-- **Rust**: Stable toolchain (for building from source, and `cargo install` when published).
+### Runtime (prebuilt binary or any install)
+
+These apply whenever you run Ratune, including [GitHub Releases](https://github.com/acmagn/ratune/releases) assets.
+
 - **Server**: A Subsonic-compatible music server (Navidrome is a good default).
-- **Fzf**: `fzf` or `sk` on `PATH` if you use the library picker (see `[library]` in the sample config).
-- **Linux**: `libasound2-dev` / `alsa-lib` development packages for the audio stack.
+- **Linux audio**: ALSA userspace library at runtime — e.g. Debian/Ubuntu `libasound2`, Fedora `alsa-lib`, Arch `alsa-lib`. (You do **not** need `-dev` / `*-devel` packages just to run a prebuilt binary.)
+- **macOS audio**: Uses Core Audio via the system toolchain; no separate audio library install for typical use.
+- **Optional**: `fzf` or `sk` on `PATH` if you use the library fuzzy picker (see `[library]` in the sample config).
+
+Prebuilt archives on [Releases](https://github.com/acmagn/ratune/releases): **Linux x86_64** (`x86_64-unknown-linux-gnu`) and **macOS universal** (`universal-apple-darwin`, Intel + Apple Silicon). Other targets need a local build (or your own packaging).
+
+### Build from source / `cargo install`
+
+Everything under **Runtime**, plus:
+
+- **Rust**: Stable toolchain (`rustup` default stable is fine).
+- **Linux build deps**: ALSA headers and `pkg-config` — e.g. Debian/Ubuntu `libasound2-dev` + `pkg-config`, Fedora `alsa-lib-devel`, Arch `alsa-lib` (provides what `alsa-sys` needs via pkg-config).
 
 ---
 
 ## Installation
 
-**Linux (and similar):** install ALSA dev headers *before* the first `cargo build`:
+**Prebuilt binaries:** see [Releases](https://github.com/acmagn/ratune/releases).
+
+**Linux (build from source):** install ALSA dev headers *before* the first `cargo build`:
 
 ```bash
 # Debian / Ubuntu
