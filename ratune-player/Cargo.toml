@@ -9,6 +9,9 @@ homepage = "https://github.com/acmagn/ratune"
 readme = "../README.md"
 keywords = ["audio", "playback", "music", "rodio"]
 categories = ["multimedia::audio"]
+# Library crate: version bumps and tags are driven by `ratune` only (see root `cargo release`).
+[package.metadata.release]
+release = false
 
 [dependencies]
 anyhow = "1"

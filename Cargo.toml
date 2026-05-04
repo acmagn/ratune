@@ -2,6 +2,10 @@
 members = ["ratune-subsonic", "ratune-player", "ratune"]
 resolver = "2"
 
+# https://github.com/crate-ci/cargo-release — GitHub/binary releases only until you publish to crates.io.
+[workspace.metadata.release]
+publish = false
+
 # Smaller release binaries (typ. ~1/3 less than defaults for this project). Slower `cargo build --release`.
 # See https://github.com/taiki-e/upload-rust-binary-action#optimize-rust-binary
 # Use `lto = true` (fat LTO) instead of `thin` for a bit more shrink, slower link.
