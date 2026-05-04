@@ -87,10 +87,8 @@ pub fn format_spec(spec: &KeySpec) -> String {
     if m.contains(KeyModifiers::CONTROL) {
         p.push_str("Ctrl+");
     }
-    if m.contains(KeyModifiers::SHIFT) {
-        if matches!(spec.code, Char(_)) {
-            p.push_str("Shift+");
-        }
+    if m.contains(KeyModifiers::SHIFT) && matches!(spec.code, Char(_)) {
+        p.push_str("Shift+");
     }
     if m.contains(KeyModifiers::ALT) {
         p.push_str("Alt+");

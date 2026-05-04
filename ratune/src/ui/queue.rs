@@ -100,7 +100,7 @@ fn format_queue_line(template: &str, s: &ratune_subsonic::Song) -> String {
     let duration = s
         .duration
         .map(|d| format!("{}:{:02}", d / 60, d % 60))
-        .unwrap_or_else(|| "".to_string());
+        .unwrap_or_default();
 
     render_template(template, |name| match name {
         "n" => Some(n.clone()),
@@ -201,8 +201,7 @@ fn trunc(s: &str, max: usize) -> String {
     }
     let mut chars = s.chars();
     let mut result = String::with_capacity(max);
-    let mut count = 0;
-    for ch in chars.by_ref() {
+    for (count, ch) in chars.by_ref().enumerate() {
         if count >= max - 1 {
             // Check if there are more characters coming.
             if chars.next().is_some() {
@@ -213,7 +212,6 @@ fn trunc(s: &str, max: usize) -> String {
             return result;
         }
         result.push(ch);
-        count += 1;
     }
     result
 }

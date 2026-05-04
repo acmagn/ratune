@@ -43,6 +43,7 @@ const LEFT_COL: [u32; 5] = [
 /// - The last 2 of 32 computed bands are dropped (noisy high-frequency tail).
 ///
 /// Does nothing if all bands are zero (startup / toggled off).
+#[allow(clippy::too_many_arguments)] // Single render entry point for spectrum + waveform modes.
 pub fn render_visualizer_ex(
     f: &mut Frame,
     area: Rect,
@@ -58,12 +59,9 @@ pub fn render_visualizer_ex(
         // For waveform, bands may be empty; handle below.
     }
     let vtype = visualizer_type.trim().to_lowercase();
-    match vtype.as_str() {
-        "wave" => {
-            render_wave(f, area, theme, waveform, color_mode, colors, accent);
-            return;
-        }
-        _ => {}
+    if vtype.as_str() == "wave" {
+        render_wave(f, area, theme, waveform, color_mode, colors, accent);
+        return;
     }
 
     if area.width == 0 || area.height == 0 || bands.is_empty() {

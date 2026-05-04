@@ -376,10 +376,8 @@ async fn run_loop(
 
         if app.ratatui_art_ready() && !app.ratatui_uses_kitty_apc() {
             for (_id, st) in app.home_strip_art.iter_mut() {
-                if let Some(r) = st.last_encoding_result() {
-                    if let Err(e) = r {
-                        eprintln!("home strip art: {e}");
-                    }
+                if let Some(Err(e)) = st.last_encoding_result() {
+                    eprintln!("home strip art: {e}");
                 }
             }
         }
@@ -586,10 +584,10 @@ async fn run_loop(
                     }
                     Err(e) => return Err(e.into()),
                     Ok(ev) => match ev {
-                        Event::Key(key) => {
+                        Event::Key(key)
                             // Only process key-press events; ignore release/repeat to avoid
                             // double-firing on terminals that send all event kinds (e.g. Kitty).
-                            if key.kind == KeyEventKind::Press {
+                            if key.kind == KeyEventKind::Press => {
                                 if app.playlist_picker.is_some() && !app.help_visible {
                                     // Picker is open: highest priority — swallow all keys.
                                     let action = map_picker_key(key.code, key.modifiers);
@@ -680,14 +678,12 @@ async fn run_loop(
                                     }
                                 }
                             }
-                        }
-                        Event::Mouse(mouse) => {
-                            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                        Event::Mouse(mouse)
+                            if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
                                 let sz = terminal.size()?;
                                 let area = ratatui::layout::Rect::new(0, 0, sz.width, sz.height);
                                 handle_mouse_click(mouse.column, mouse.row, app, area);
                             }
-                        }
                         Event::Resize(_, _) => {
                             // Terminal resized — clear any displayed image and reset
                             // stored state so the art is re-encoded at the new size.
@@ -770,10 +766,10 @@ async fn run_loop(
 
         if last_art_recovery_fire.elapsed() >= Duration::from_secs(2) {
             last_art_recovery_fire = Instant::now();
-            let latched_bad = match (&app.art_cache, &kitty_cover_unrenderable) {
-                (Some((cid, _)), Some(bad)) if bad == cid => true,
-                _ => false,
-            };
+            let latched_bad = matches!(
+                (&app.art_cache, &kitty_cover_unrenderable),
+                (Some((cid, _)), Some(bad)) if bad == cid
+            );
             if app.kitty_apc_overlay_active()
                 && !art_displayed
                 && app.art_cache.is_some()

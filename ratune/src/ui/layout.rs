@@ -114,6 +114,7 @@ fn split_main_and_docks(area: Rect, dock_count: usize) -> (Rect, Vec<Rect>) {
 }
 
 /// Unified Now Playing tab rect computation for rendering + hit-testing + kitty art placement.
+#[allow(clippy::too_many_arguments)] // Layout API: every flag affects rect geometry.
 pub fn now_playing_rects(
     center: Rect,
     show_art: bool,

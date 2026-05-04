@@ -605,13 +605,13 @@ fn build_progress_bar(
             let frac = units % 8;
             let has_partial = frac > 0 && full < bar_w;
             let empty_n = bar_w - full - usize::from(has_partial);
-            let filled_str = std::iter::repeat(filled).take(full).collect();
+            let filled_str = std::iter::repeat_n(filled, full).collect();
             let partial_str = if has_partial {
                 FRAC[frac - 1].to_string()
             } else {
                 String::new()
             };
-            let empty_str = std::iter::repeat(empty).take(empty_n).collect();
+            let empty_str = std::iter::repeat_n(empty, empty_n).collect();
             (filled_str, partial_str, empty_str)
         }
         ProgressStyleSpec::Ncmpcpp(f, c, e) => {
@@ -619,16 +619,16 @@ fn build_progress_bar(
             let filled_n = filled_n.min(bar_w);
             if filled_n >= bar_w {
                 (
-                    std::iter::repeat(f).take(bar_w).collect(),
+                    std::iter::repeat_n(f, bar_w).collect(),
                     String::new(),
                     String::new(),
                 )
             } else {
                 let rest = bar_w - filled_n - 1;
                 (
-                    std::iter::repeat(f).take(filled_n).collect(),
+                    std::iter::repeat_n(f, filled_n).collect(),
                     c.to_string(),
-                    std::iter::repeat(e).take(rest).collect(),
+                    std::iter::repeat_n(e, rest).collect(),
                 )
             }
         }

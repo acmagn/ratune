@@ -598,19 +598,15 @@ impl BrowseMode {
 /// Raw hex colour strings from config.toml. Defaults inside `Theme::from_section`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum ThemePreset {
     /// Use the configured hex palette in `[theme]` (and do **not** extract accent from album art).
     Static,
     /// Use configured hex palette, but allow dynamic accent extracted from album art. (Default)
+    #[default]
     Dynamic,
     /// Use terminal/OS palette (ANSI indices / default fg/bg), ignoring the hex palette.
     Terminal,
-}
-
-impl Default for ThemePreset {
-    fn default() -> Self {
-        Self::Dynamic
-    }
 }
 
 pub(crate) fn theme_preset_from_section(sec: &ThemeSection) -> ThemePreset {
@@ -1411,6 +1407,23 @@ fn prompt_and_store_subsonic_secret(entry: &keyring_core::Entry) -> Result<Strin
     }
 }
 
+fn merge_env_overrides(cfg: &mut FileConfig) {
+    if let Ok(v) = std::env::var("TERMUSIC_SUBSONIC_URL").or_else(|_| std::env::var("SUBSONIC_URL"))
+    {
+        cfg.server.url = v;
+    }
+    if let Ok(v) =
+        std::env::var("TERMUSIC_SUBSONIC_USER").or_else(|_| std::env::var("SUBSONIC_USER"))
+    {
+        cfg.server.username = v;
+    }
+    if let Ok(v) =
+        std::env::var("TERMUSIC_SUBSONIC_PASS").or_else(|_| std::env::var("SUBSONIC_PASS"))
+    {
+        cfg.server.password = v;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1440,22 +1453,5 @@ password = "secret"
     fn browse_mode_parses_artists() {
         assert_eq!(BrowseMode::parse("artists"), Some(BrowseMode::Artists));
         assert_eq!(BrowseMode::parse("bogus"), None);
-    }
-}
-
-fn merge_env_overrides(cfg: &mut FileConfig) {
-    if let Ok(v) = std::env::var("TERMUSIC_SUBSONIC_URL").or_else(|_| std::env::var("SUBSONIC_URL"))
-    {
-        cfg.server.url = v;
-    }
-    if let Ok(v) =
-        std::env::var("TERMUSIC_SUBSONIC_USER").or_else(|_| std::env::var("SUBSONIC_USER"))
-    {
-        cfg.server.username = v;
-    }
-    if let Ok(v) =
-        std::env::var("TERMUSIC_SUBSONIC_PASS").or_else(|_| std::env::var("SUBSONIC_PASS"))
-    {
-        cfg.server.password = v;
     }
 }

@@ -5,18 +5,13 @@ use ratune_subsonic::models::{Album, Artist, Song};
 
 // ── LoadingState ──────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum LoadingState<T> {
+    #[default]
     NotLoaded,
     Loading,
     Loaded(T),
     Error(String),
-}
-
-impl<T> Default for LoadingState<T> {
-    fn default() -> Self {
-        Self::NotLoaded
-    }
 }
 
 // ── LibraryState ──────────────────────────────────────────────────────────────
@@ -48,7 +43,7 @@ impl LibraryState {
             return;
         }
         let sel = sel.min(len - 1);
-        let max_first = if len <= visible { 0 } else { len - visible };
+        let max_first = len.saturating_sub(visible);
         if *scroll > max_first {
             *scroll = max_first;
         }
@@ -153,7 +148,7 @@ impl QueueState {
             return;
         }
         let c = self.cursor.min(len - 1);
-        let max_first = if len <= visible { 0 } else { len - visible };
+        let max_first = len.saturating_sub(visible);
         if self.scroll > max_first {
             self.scroll = max_first;
         }

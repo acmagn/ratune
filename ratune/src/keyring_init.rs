@@ -16,7 +16,6 @@ pub fn install_default_keyring_store() {
                 );
             }
         }
-        return;
     }
 
     #[cfg(target_os = "macos")]

@@ -99,7 +99,7 @@ const FZF_COL_TITLE: usize = 36;
 const FZF_COL_DUR: usize = 6;
 
 fn sanitize_field(s: &str) -> String {
-    s.replace('\t', " ").replace('\n', " ")
+    s.replace(['\t', '\n'], " ")
 }
 
 /// Truncate with ellipsis; never wider than `max_chars` scalars.

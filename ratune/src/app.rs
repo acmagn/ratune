@@ -799,7 +799,7 @@ impl App {
         match vtype.as_str() {
             "wave" => {
                 // Take a recent slice (renderer bins/averages per column).
-                let take = samples.len().min(2048).max(16);
+                let take = samples.len().clamp(16, 2048);
                 let start = samples.len().saturating_sub(take);
                 let amp = 10.0f32.powf(gain_db / 20.0);
                 self.waveform = samples
@@ -1047,14 +1047,12 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        if !force {
-            if !self.library_index_tracks.is_empty() {
-                if let Some(refreshed) = self.library_index_refreshed_at {
-                    let stale = self.config.library_index_max_age_secs == 0
-                        || now.saturating_sub(refreshed) > self.config.library_index_max_age_secs;
-                    if !stale {
-                        return;
-                    }
+        if !force && !self.library_index_tracks.is_empty() {
+            if let Some(refreshed) = self.library_index_refreshed_at {
+                let stale = self.config.library_index_max_age_secs == 0
+                    || now.saturating_sub(refreshed) > self.config.library_index_max_age_secs;
+                if !stale {
+                    return;
                 }
             }
         }
@@ -1073,14 +1071,10 @@ impl App {
                         if let Some(file) = crate::library_index::load(&index_path) {
                             if let Some(ref tok) = file.navidrome_last_scan {
                                 if let Ok(status) = client.get_scan_status().await {
-                                    if !status.scanning {
-                                        if status.last_scan.as_deref() == Some(tok.as_str()) {
-                                            return Ok((
-                                                file.tracks.clone(),
-                                                Some(tok.clone()),
-                                                false,
-                                            ));
-                                        }
+                                    if !status.scanning
+                                        && status.last_scan.as_deref() == Some(tok.as_str())
+                                    {
+                                        return Ok((file.tracks.clone(), Some(tok.clone()), false));
                                     }
                                 }
                             }
@@ -2399,7 +2393,7 @@ impl App {
                         if self.home.album_selected_index < self.home.album_scroll_offset {
                             let diff =
                                 self.home.album_scroll_offset - self.home.album_selected_index;
-                            let rows = (diff + per_row - 1) / per_row;
+                            let rows = diff.div_ceil(per_row);
                             self.home.album_scroll_offset =
                                 self.home.album_scroll_offset.saturating_sub(rows * per_row);
                         }
@@ -2473,7 +2467,7 @@ impl App {
                         let end = self.home.album_scroll_offset + visible_count.saturating_sub(1);
                         if self.home.album_selected_index > end {
                             let diff = self.home.album_selected_index - end;
-                            let rows = (diff + per_row - 1) / per_row;
+                            let rows = diff.div_ceil(per_row);
                             self.home.album_scroll_offset += rows * per_row;
                         }
                         self.home.album_scroll_offset = self.home.album_scroll_offset.min(max_idx);
@@ -2742,13 +2736,13 @@ impl App {
             let mut off = self.home.album_scroll_offset;
             if self.home.album_selected_index < off {
                 let diff = off - self.home.album_selected_index;
-                let rows = (diff + per_row - 1) / per_row;
+                let rows = diff.div_ceil(per_row);
                 off = off.saturating_sub(rows * per_row);
             } else {
                 let end = off + vis.saturating_sub(1);
                 if self.home.album_selected_index > end {
                     let diff = self.home.album_selected_index - end;
-                    let rows = (diff + per_row - 1) / per_row;
+                    let rows = diff.div_ceil(per_row);
                     off = off.saturating_add(rows * per_row);
                 }
             }

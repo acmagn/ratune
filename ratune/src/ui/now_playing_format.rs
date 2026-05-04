@@ -74,14 +74,14 @@ fn placeholder_value(key: char, ctx: &NowPlayingContext<'_>) -> String {
         'g' => s.and_then(|x| x.genre.as_deref()).unwrap_or("").to_string(),
         'f' => s
             .and_then(|x| x.path.as_deref())
-            .map(|p| std::path::Path::new(p))
+            .map(std::path::Path::new)
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string(),
         'D' => s
             .and_then(|x| x.path.as_deref())
-            .map(|p| std::path::Path::new(p))
+            .map(std::path::Path::new)
             .and_then(|p| p.parent())
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())

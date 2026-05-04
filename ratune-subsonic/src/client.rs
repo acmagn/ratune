@@ -311,7 +311,7 @@ impl SubsonicClient {
     /// Navidrome and most servers return a smaller JPEG/PNG, which is faster to download and decode
     /// than full-resolution artwork.
     pub async fn get_cover_art_sized(&self, id: &str, size: u32) -> Result<Vec<u8>> {
-        self.get_cover_art_impl(id, Some(size.max(32).min(2048)))
+        self.get_cover_art_impl(id, Some(size.clamp(32, 2048)))
             .await
     }
 

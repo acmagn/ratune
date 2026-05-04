@@ -249,21 +249,19 @@ fn render_lyrics_pane(app: &App, frame: &mut Frame, area: Rect) {
     });
 
     match cache_match {
-        None if app.lyrics_loading => {
-            render_centered_msg(frame, inner, "Loading…", t.dimmed);
-        }
         None => {
             render_centered_msg(frame, inner, "Loading…", t.dimmed);
         }
-        Some(lines) if lines.is_empty() => {
-            render_centered_msg(frame, inner, "No lyrics available", t.dimmed);
-        }
         Some(lines) => {
-            let is_synced = lines.iter().any(|l| l.time.is_some());
-            if is_synced {
-                render_synced(app, frame, inner, lines, inner_h, inner_w, accent);
+            if lines.is_empty() {
+                render_centered_msg(frame, inner, "No lyrics available", t.dimmed);
             } else {
-                render_unsynced(app, frame, inner, lines, inner_h, inner_w);
+                let is_synced = lines.iter().any(|l| l.time.is_some());
+                if is_synced {
+                    render_synced(app, frame, inner, lines, inner_h, inner_w, accent);
+                } else {
+                    render_unsynced(app, frame, inner, lines, inner_h, inner_w);
+                }
             }
         }
     }
@@ -298,7 +296,7 @@ fn render_synced(
         .enumerate()
         .filter(|(_, l)| l.time.map(|ts| ts <= elapsed).unwrap_or(false))
         .map(|(i, _)| i)
-        .last();
+        .next_back();
 
     let scroll: usize = current_idx
         .map(|ci| ci.saturating_sub(inner_h / 2))

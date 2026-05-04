@@ -131,7 +131,7 @@ fn player_thread(
     // Suppress the default stderr message on drop — we control shutdown explicitly.
     device.log_on_drop(false);
 
-    let player = Player::connect_new(&device.mixer());
+    let player = Player::connect_new(device.mixer());
 
     // State for the current track.
     let mut current_total: Option<Duration> = None;
@@ -409,6 +409,7 @@ fn play_payload(
     let _ = evt_tx.send(PlayerEvent::TrackStarted);
 }
 
+#[allow(clippy::too_many_arguments)] // Engine thread: one place for all command side-effects.
 fn handle_command(
     cmd: PlayerCommand,
     player: &Player,

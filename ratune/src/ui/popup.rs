@@ -130,7 +130,7 @@ fn pack_blocks_into_two_columns(
     blocks: Vec<Vec<Line<'static>>>,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
     let total: usize = blocks.iter().map(|b| b.len()).sum();
-    let target_left = (total + 1) / 2;
+    let target_left = total.div_ceil(2);
 
     let mut left: Vec<Line<'static>> = Vec::new();
     let mut right: Vec<Line<'static>> = Vec::new();

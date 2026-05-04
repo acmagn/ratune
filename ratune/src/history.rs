@@ -88,7 +88,7 @@ impl PlayHistory {
             .map(|(id, (name, count))| (id, name, count))
             .collect();
 
-        artists.sort_by(|a, b| b.2.cmp(&a.2));
+        artists.sort_by_key(|a| std::cmp::Reverse(a.2));
         artists.truncate(n);
         artists
     }

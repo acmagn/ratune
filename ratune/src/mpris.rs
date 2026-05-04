@@ -487,7 +487,7 @@ mod mpris_art {
         if bytes.len() >= 8 && bytes[0..8] == [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'] {
             return "png";
         }
-        if bytes.len() >= 6 && (&bytes[0..6] == *b"GIF87a" || &bytes[0..6] == *b"GIF89a") {
+        if bytes.len() >= 6 && (bytes[0..6] == *b"GIF87a" || bytes[0..6] == *b"GIF89a") {
             return "gif";
         }
         if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
@@ -612,9 +612,7 @@ pub fn write_snapshot(app: &crate::app::App, snap: &RwLock<MprisSnapshot>) {
     #[cfg(target_os = "linux")]
     {
         use mpris_server::PlaybackStatus;
-        s.playback_status = if song.is_none() {
-            PlaybackStatus::Stopped
-        } else if !app.playback.player_loaded {
+        s.playback_status = if song.is_none() || !app.playback.player_loaded {
             PlaybackStatus::Stopped
         } else if app.playback.paused {
             PlaybackStatus::Paused

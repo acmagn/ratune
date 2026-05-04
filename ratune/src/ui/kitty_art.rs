@@ -60,19 +60,14 @@ pub fn detect_kitty_support() -> bool {
     std::thread::spawn(move || {
         let mut response = Vec::with_capacity(128);
         let mut byte = [0u8; 1];
-        loop {
-            match tty_read.read(&mut byte) {
-                Ok(1) => {
-                    response.push(byte[0]);
-                    // DA1 response format: \x1b[?{digits}c  — stop on 'c' after \x1b[?
-                    if byte[0] == b'c' && response.windows(3).any(|w| w == b"\x1b[?") {
-                        break;
-                    }
-                    if response.len() >= 256 {
-                        break;
-                    }
-                }
-                _ => break,
+        while let Ok(1) = tty_read.read(&mut byte) {
+            response.push(byte[0]);
+            // DA1 response format: \x1b[?{digits}c  — stop on 'c' after \x1b[?
+            if byte[0] == b'c' && response.windows(3).any(|w| w == b"\x1b[?") {
+                break;
+            }
+            if response.len() >= 256 {
+                break;
             }
         }
         let _ = tx.send(String::from_utf8_lossy(&response).into_owned());
@@ -655,19 +650,14 @@ pub fn query_cell_pixel_size() -> Option<(u16, u16)> {
     std::thread::spawn(move || {
         let mut response = Vec::with_capacity(64);
         let mut byte = [0u8; 1];
-        loop {
-            match tty_read.read(&mut byte) {
-                Ok(1) => {
-                    response.push(byte[0]);
-                    // Response ends with 't'
-                    if byte[0] == b't' {
-                        break;
-                    }
-                    if response.len() >= 64 {
-                        break;
-                    }
-                }
-                _ => break,
+        while let Ok(1) = tty_read.read(&mut byte) {
+            response.push(byte[0]);
+            // Response ends with 't'
+            if byte[0] == b't' {
+                break;
+            }
+            if response.len() >= 64 {
+                break;
             }
         }
         let _ = tx.send(String::from_utf8_lossy(&response).into_owned());
@@ -919,7 +909,7 @@ pub fn art_strip_thumb_hit(layout: &ArtStripLayout, rel_x: u16, rel_y: u16) -> O
     }
     let rx = rel_x - layout.pad_x;
     let stride = layout.thumb_cols + STRIP_GAP_COLS;
-    let col = (rx / stride) as u16;
+    let col = rx / stride;
     if rx % stride >= layout.thumb_cols || (col as usize) >= layout.per_row {
         return None;
     }
@@ -1085,7 +1075,7 @@ pub fn render_art_strip(
             // Transmit image in chunks (same for both paths — a=t: store only).
             const CHUNK: usize = 4096;
             let b64_bytes = prep.b64.as_bytes();
-            let n_chunks = (b64_bytes.len() + CHUNK - 1) / CHUNK;
+            let n_chunks = b64_bytes.len().div_ceil(CHUNK);
             for (ci, chunk) in b64_bytes.chunks(CHUNK).enumerate() {
                 let is_last = ci + 1 == n_chunks || n_chunks == 0;
                 let m = if is_last { 0u8 } else { 1u8 };
