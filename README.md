@@ -51,7 +51,7 @@ These apply whenever you run Ratune, including [GitHub Releases](https://github.
 - **macOS audio**: Uses Core Audio via the system toolchain; no separate audio library install for typical use.
 - **Optional**: `fzf` or `sk` on `PATH` if you use the library fuzzy picker (see `[library]` in the sample config).
 
-Prebuilt archives on [Releases](https://github.com/acmagn/ratune/releases): **Linux x86_64** (`x86_64-unknown-linux-gnu`) and **macOS universal** (`universal-apple-darwin`, Intel + Apple Silicon). Other targets need a local build (or your own packaging).
+Prebuilt archives on [Releases](https://github.com/acmagn/ratune/releases): **Linux x86_64** (`x86_64-unknown-linux-gnu`), **macOS Apple Silicon** (`aarch64-apple-darwin`), and **macOS Intel** (`x86_64-apple-darwin`). Other targets need a local build (or your own packaging).
 
 ### Build from source / `cargo install`
 
@@ -64,7 +64,7 @@ Everything under **Runtime**, plus:
 
 ## Installation
 
-**Prebuilt binaries:** see [Releases](https://github.com/acmagn/ratune/releases). Asset names follow `ratune-<tag>-<target>.tar.gz` (for example `ratune-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`), plus a `.sha256` sidecar.
+**Prebuilt binaries:** see [Releases](https://github.com/acmagn/ratune/releases). Asset names follow `ratune-<tag>-<target>.tar.gz` (for example `ratune-v0.1.0-x86_64-unknown-linux-gnu.tar.gz` or `ratune-v0.1.0-aarch64-apple-darwin.tar.gz`), plus a `.sha256` sidecar.
 
 **Linux (build from source):** install ALSA dev headers *before* the first `cargo build`:
 
