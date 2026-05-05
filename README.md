@@ -53,7 +53,7 @@ These apply whenever you run Ratune, including [GitHub Releases](https://github.
 
 Prebuilt archives on [Releases](https://github.com/acmagn/ratune/releases): **Linux x86_64** (`x86_64-unknown-linux-gnu`), **macOS Apple Silicon** (`aarch64-apple-darwin`), and **macOS Intel** (`x86_64-apple-darwin`). Other targets need a local build (or your own packaging).
 
-### Build from source / `cargo install`
+### Build from source
 
 Everything under **Runtime**, plus:
 
@@ -64,9 +64,51 @@ Everything under **Runtime**, plus:
 
 ## Installation
 
-**Prebuilt binaries:** see [Releases](https://github.com/acmagn/ratune/releases). Asset names follow `ratune-<tag>-<target>.tar.gz` (for example `ratune-v0.1.0-x86_64-unknown-linux-gnu.tar.gz` or `ratune-v0.1.0-aarch64-apple-darwin.tar.gz`), plus a `.sha256` sidecar.
+Current options are:
 
-**Linux (build from source):** install ALSA dev headers *before* the first `cargo build`:
+[Binaries](#binary-releases-linux-x86_64-macos)
+[AUR](#arch-linux-aur)
+[crates.io](#cratesio)
+[Homebrew](#macos-homebrew)
+[From source](#build-from-source-1).
+
+
+### Binary Releases (Linux x86_64, macOS)
+
+Download the `.tar.gz` for your platform from [Releases](https://github.com/acmagn/ratune/releases).
+Extract and put `ratune` on your `PATH`.
+
+### Arch Linux (AUR)
+
+Install the **`-bin`** package with an AUR helper, e.g.:
+
+```bash
+yay -S ratune-bin
+# or: paru -S ratune-bin
+```
+
+[ratune-bin on AUR](https://aur.archlinux.org/packages/ratune-bin) ships the same Linux binary as GitHub Releases.
+
+### crates.io
+
+```sh
+cargo install ratune
+```
+
+This **builds** from the published crate. You need a **Rust toolchain**; on **Linux**, install ALSA **development** packages first (same as [Build from source](#build-from-source)).
+
+### macOS (Homebrew)
+
+```bash
+brew tap acmagn/tap
+brew install ratune
+```
+
+### Build from source
+
+Use this when you want the latest git checkout, you’re on an OS/arch without a prebuilt, or you’re developing Ratune.
+
+**Linux:** install ALSA headers and `pkg-config` *before* the first build:
 
 ```bash
 # Debian / Ubuntu
@@ -79,7 +121,7 @@ sudo dnf install alsa-lib-devel pkg-config
 sudo pacman -S alsa-lib
 ```
 
-**From source** (recommended for now):
+**Clone and build:**
 
 ```sh
 git clone https://github.com/acmagn/ratune.git
@@ -87,15 +129,9 @@ cd ratune
 cargo build --release
 ```
 
-The binary is `target/release/ratune`.
+The binary is `target/release/ratune`. Check the build with `ratune --version` (or `-V`).
 
-**When published to crates.io:**
-
-```sh
-cargo install ratune
-```
-
-**Album art in the terminal:** from a source checkout you can run a small [ratatui-image](https://github.com/ratatui/ratatui-image) harness (same capability query as the real UI) to verify your terminal or tmux passthrough before chasing bugs in the full app. Use any JPEG/PNG (etc.) on disk:
+**Album art in the terminal:** from a source checkout you can run a small [ratatui-image](https://github.com/ratatui/ratatui-image) harness (same capability query as the real UI) to verify your terminal or tmux passthrough. Use any JPEG/PNG (etc.) on disk:
 
 ```sh
 # Cargo workspace root (this repo layout)
