@@ -114,6 +114,7 @@ mpris = true
 # library_refresh     = "Ctrl+g"      # "" disables; forced refresh if still Ctrl+g
 #                       # If you set library_refresh to Ctrl+r while album replace is also Ctrl+r,
 #                       # the app treats refresh as unset so Ctrl+g default wins.
+# library_index_append_queue = "Ctrl+a"  # append full indexed library to queue (y/n); "" disables
 # toggle_help         = "i"
 # toggle_dynamic_theme = "t"          # cycles dynamic accent (ignored when theme preset is terminal)
 # toggle_lyrics       = "Shift+l"
