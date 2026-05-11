@@ -164,6 +164,8 @@ pub struct Keybinds {
     pub library_fzf: Option<KeySpec>,
     /// Force library index refresh (`None` = disabled).
     pub library_refresh: Option<KeySpec>,
+    /// Append entire metadata index to queue after y/n (`None` = disabled).
+    pub library_index_append_queue: Option<KeySpec>,
     pub toggle_help: KeySpec,
     pub toggle_dynamic_theme: KeySpec,
     pub toggle_lyrics: KeySpec,
@@ -252,6 +254,13 @@ impl Keybinds {
                 modifiers: KeyModifiers::CONTROL,
             }),
         );
+        let library_index_append_queue = resolve_opt(
+            sec.library_index_append_queue.as_deref(),
+            Some(KeySpec {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+        );
 
         Self {
             scroll_up: resolve(sec.scroll_up.as_deref(), KeySpec::new(KeyCode::Char('k'))),
@@ -312,6 +321,7 @@ impl Keybinds {
             quit: resolve(sec.quit.as_deref(), KeySpec::new(KeyCode::Char('q'))),
             library_fzf,
             library_refresh,
+            library_index_append_queue,
             toggle_help: resolve(sec.toggle_help.as_deref(), KeySpec::new(KeyCode::Char('i'))),
             toggle_dynamic_theme: resolve(
                 sec.toggle_dynamic_theme.as_deref(),

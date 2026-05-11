@@ -642,17 +642,30 @@ async fn run_loop(
                                         map_help_key(key.code, key.modifiers, &app.keybinds)
                                     } else if app.search_mode.active {
                                         map_search_key(key.code)
-                                    } else if app.pending_global_confirm
-                                        == Some(GlobalConfirm::LibraryIndexRefresh)
-                                    {
-                                        match key.code {
-                                            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                                                Action::ConfirmLibraryIndexRefresh
+                                    } else if let Some(pending) = app.pending_global_confirm {
+                                        match pending {
+                                            GlobalConfirm::LibraryIndexRefresh => {
+                                                match key.code {
+                                                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                                        Action::ConfirmLibraryIndexRefresh
+                                                    }
+                                                    KeyCode::Char('n')
+                                                    | KeyCode::Char('N')
+                                                    | KeyCode::Esc => Action::CancelGlobalConfirm,
+                                                    _ => Action::None,
+                                                }
                                             }
-                                            KeyCode::Char('n')
-                                            | KeyCode::Char('N')
-                                            | KeyCode::Esc => Action::CancelGlobalConfirm,
-                                            _ => Action::None,
+                                            GlobalConfirm::LibraryIndexAppendQueue => {
+                                                match key.code {
+                                                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                                        Action::ConfirmLibraryIndexAppendQueue
+                                                    }
+                                                    KeyCode::Char('n')
+                                                    | KeyCode::Char('N')
+                                                    | KeyCode::Esc => Action::CancelGlobalConfirm,
+                                                    _ => Action::None,
+                                                }
+                                            }
                                         }
                                     } else {
                                         map_key(
@@ -1245,6 +1258,11 @@ fn map_key(
     if let Some(spec) = &kb.library_refresh {
         if spec.matches(code, modifiers) {
             return Action::LibraryIndexRefresh;
+        }
+    }
+    if let Some(spec) = &kb.library_index_append_queue {
+        if spec.matches(code, modifiers) {
+            return Action::LibraryIndexAppendQueue;
         }
     }
 

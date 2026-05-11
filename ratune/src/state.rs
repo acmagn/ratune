@@ -194,6 +194,8 @@ impl QueueState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlobalConfirm {
     LibraryIndexRefresh,
+    /// Append every track in the on-disk metadata index to the queue (after y/n).
+    LibraryIndexAppendQueue,
 }
 
 // ── PlaylistOverlay ───────────────────────────────────────────────────────────

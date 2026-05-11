@@ -79,6 +79,8 @@ pub struct KeybindsSection {
     pub library_fzf: Option<String>,
     /// Force library index refresh. Default: Ctrl+g
     pub library_refresh: Option<String>,
+    /// Append all indexed tracks to the queue (y/n confirm). Default: Ctrl+a (`""` disables)
+    pub library_index_append_queue: Option<String>,
     /// Toggle this help popup. Default: i
     pub toggle_help: Option<String>,
     /// Toggle dynamic accent from album art. Default: t
@@ -1188,6 +1190,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # quit          = "q"
 # library_fzf     = "Ctrl+f"
 # library_refresh = "Ctrl+g"
+# library_index_append_queue = "Ctrl+a"   # append full index to queue (y/n); "" to disable
 # toggle_help = "i"
 # toggle_dynamic_theme = "t"
 # toggle_lyrics = "Shift+l"

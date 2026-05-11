@@ -2099,6 +2099,35 @@ impl App {
                     self.spawn_library_index_refresh(true);
                 }
             }
+            Action::LibraryIndexAppendQueue => {
+                if self.pending_global_confirm.is_some() {
+                    self.flash_status("Already confirming — press y or n");
+                } else if !self.config.library_index_enabled {
+                    self.flash_status("Library index is disabled in config");
+                } else if self.library_index_refreshing {
+                    self.flash_status_secs(
+                        "Library index refresh in progress — try again shortly",
+                        8,
+                    );
+                } else if self.library_index_tracks.is_empty() {
+                    self.flash_status(
+                        "Library index empty — wait for refresh or use the index refresh shortcut",
+                    );
+                } else {
+                    let n = self.library_index_tracks.len();
+                    self.pending_global_confirm = Some(GlobalConfirm::LibraryIndexAppendQueue);
+                    self.flash_status_secs(
+                        format!("Append all {n} indexed tracks to queue? (y/n)"),
+                        12,
+                    );
+                }
+            }
+            Action::ConfirmLibraryIndexAppendQueue => {
+                if self.pending_global_confirm == Some(GlobalConfirm::LibraryIndexAppendQueue) {
+                    self.pending_global_confirm = None;
+                    self.handle_confirm_library_index_append_queue();
+                }
+            }
             Action::CancelGlobalConfirm => {
                 if self.pending_global_confirm.take().is_some() {
                     self.flash_status("Cancelled");
@@ -3083,6 +3112,33 @@ impl App {
                 self.queue.cursor = 0;
                 self.play_current();
             }
+        }
+    }
+
+    /// Append every track from the on-disk metadata index to the queue (after y/n confirm).
+    fn handle_confirm_library_index_append_queue(&mut self) {
+        if !self.config.library_index_enabled {
+            self.flash_status("Library index is disabled in config");
+            return;
+        }
+        if self.library_index_tracks.is_empty() {
+            self.flash_status("Library index empty");
+            return;
+        }
+        let n = self.library_index_tracks.len();
+        let was_empty = self.queue.songs.is_empty();
+        for song in self.library_index_tracks.iter().cloned() {
+            self.queue.push(song);
+        }
+        if was_empty && !self.queue.songs.is_empty() {
+            self.queue.cursor = 0;
+            self.queue.scroll = 0;
+            self.play_current();
+        }
+        if n == 1 {
+            self.flash_status_secs("Added 1 track to queue", 3);
+        } else {
+            self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
         }
     }
 

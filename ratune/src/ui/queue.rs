@@ -56,15 +56,18 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         app.config.queue_template.as_str()
     };
 
-    let items: Vec<ListItem> = app
-        .queue
-        .songs
+    // Only render the currently visible window of the queue instead of all rows.
+    let total = app.queue.songs.len();
+    let start = app.queue.scroll.min(total.saturating_sub(1));
+    let end = (start + visible).min(total);
+    let items: Vec<ListItem> = app.queue.songs[start..end]
         .iter()
         .enumerate()
-        .map(|(i, s)| {
+        .map(|(offset, s)| {
+            let idx = start + offset;
             let label = format_queue_line(template, s);
 
-            let style = if i == app.queue.cursor {
+            let style = if idx == app.queue.cursor {
                 Style::default()
                     .fg(app.accent())
                     .add_modifier(Modifier::BOLD)
@@ -84,8 +87,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         )
         .style(Style::default().bg(t.surface));
 
-    let mut state = ListState::default().with_offset(app.queue.scroll);
-    state.select(Some(app.queue.cursor));
+    // Offset is handled by slicing, so keep ListState offset at 0 and select within window.
+    let mut state = ListState::default();
+    let selected = app.queue.cursor.saturating_sub(start);
+    state.select(Some(selected));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
