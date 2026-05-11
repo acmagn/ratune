@@ -129,14 +129,22 @@ mpris = true
 # [theme]
 # -----------------------------------------------------------------------------
 #
-# preset — Optional. Who drives colors:
-#   "dynamic" (default when omitted) — hex fields below + album-art accent extraction.
-#   "static"       — hex fields only; no album-art accent extraction.
-#   "terminal" / "os" / "term" — inherit terminal palette; hex fields below are ignored
-#                  for UI colors (accent uses ANSI index 4; fg/bg use terminal defaults).
+# preset — Optional. Base palette + behaviour:
+#   "dynamic" (default when omitted) — built-in dark greys + album-art accent extraction.
+#   "static"       — same built-in defaults; no album-art accent extraction.
+#   "terminal" / "os" / "term" — ANSI / default fg-bg (e.g. accent idx 4, dimmed idx 8, fg/bg reset).
 #
-# Hex fields — `#rrggbb` or `rrggbb`. Used for static and dynamic presets only.
-#   accent        — Base accent (highlights, progress, focused chrome when not terminal).
+# Optional colour fields — Any preset: set only what you want; each overrides that slot on top
+# of the preset defaults (so e.g. terminal + custom list highlight still uses accent for .bg in lists).
+#
+# Each colour value may be:
+#   • Hex: `#rrggbb` or `rrggbb`
+#   • Terminal index (256-colour): `idx:0` … `idx:255` — also `indexed:`, `ansi:`, `color:`, or `i:`
+#     (e.g. list selection uses accent as background — `accent = "idx:2"` maps “primary” to ANSI green)
+#   • `reset` / `inherit` / `default` — terminal default foreground or background where applicable
+#
+# Fields:
+#   accent        — Highlights, progress, focused chrome, list selection background (with fg on top).
 #   background    — Status bar + outer chrome.
 #   surface       — Panel backgrounds (browser columns, queue, blocks).
 #   foreground    — Primary text.
@@ -147,12 +155,17 @@ mpris = true
 [theme]
 preset = "dynamic"
 # accent = "#ff8c00"
+# accent = "idx:2"              # terminal green (example) for highlights / selection bar
 # background = "#1a1a1a"
 # surface = "#161616"
 # foreground = "#d4d0c8"
 # dimmed = "#5a5858"
 # border = "#252525"
 # border_active = "#3a3a3a"
+
+# Example: mostly terminal colours, but a fixed hex for selection/highlight accent:
+# preset = "terminal"
+# accent = "#76cce0"
 
 # -----------------------------------------------------------------------------
 # [ui] — global UI (only album backend here)
