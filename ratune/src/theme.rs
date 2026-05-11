@@ -2,6 +2,11 @@
 ///
 /// All fields default to the current hardcoded palette so the appearance is
 /// identical when no `[theme]` section is present in config.toml.
+///
+/// Optional `[theme]` colour strings accept:
+/// - `#rrggbb` or `rrggbb` (RGB),
+/// - terminal indices: `idx:N`, `indexed:N`, `ansi:N`, `color:N`, or `i:N` for `N` in `0..=255`,
+/// - `reset` / `inherit` / `default` → inherit the terminal default fg/bg where applicable.
 use image::Rgba;
 use ratatui::style::Color;
 
@@ -30,11 +35,12 @@ pub struct Theme {
 
 impl Theme {
     pub fn from_section(sec: &ThemeSection) -> Self {
-        fn p(opt: Option<&str>, default: Color) -> Color {
-            opt.and_then(parse_hex).unwrap_or(default)
+        fn apply(opt: Option<&str>, base: Color) -> Color {
+            opt.and_then(parse_theme_color).unwrap_or(base)
         }
+
         let preset = crate::config::theme_preset_from_section(sec);
-        match preset {
+        let mut theme = match preset {
             ThemePreset::Terminal => Self {
                 preset,
                 // Use the terminal's palette / defaults. These indices follow the common ANSI
@@ -56,27 +62,37 @@ impl Theme {
             },
             ThemePreset::Static => Self {
                 preset,
-                accent: p(sec.accent.as_deref(), Color::Rgb(255, 140, 0)),
-                background: p(sec.background.as_deref(), Color::Rgb(26, 26, 26)),
-                surface: p(sec.surface.as_deref(), Color::Rgb(22, 22, 22)),
-                foreground: p(sec.foreground.as_deref(), Color::Rgb(212, 208, 200)),
-                dimmed: p(sec.dimmed.as_deref(), Color::Rgb(90, 88, 88)),
-                border: p(sec.border.as_deref(), Color::Rgb(37, 37, 37)),
-                border_active: p(sec.border_active.as_deref(), Color::Rgb(58, 58, 58)),
+                accent: Color::Rgb(255, 140, 0),
+                background: Color::Rgb(26, 26, 26),
+                surface: Color::Rgb(22, 22, 22),
+                foreground: Color::Rgb(212, 208, 200),
+                dimmed: Color::Rgb(90, 88, 88),
+                border: Color::Rgb(37, 37, 37),
+                border_active: Color::Rgb(58, 58, 58),
                 dynamic: false,
             },
             ThemePreset::Dynamic => Self {
                 preset,
-                accent: p(sec.accent.as_deref(), Color::Rgb(255, 140, 0)),
-                background: p(sec.background.as_deref(), Color::Rgb(26, 26, 26)),
-                surface: p(sec.surface.as_deref(), Color::Rgb(22, 22, 22)),
-                foreground: p(sec.foreground.as_deref(), Color::Rgb(212, 208, 200)),
-                dimmed: p(sec.dimmed.as_deref(), Color::Rgb(90, 88, 88)),
-                border: p(sec.border.as_deref(), Color::Rgb(37, 37, 37)),
-                border_active: p(sec.border_active.as_deref(), Color::Rgb(58, 58, 58)),
+                accent: Color::Rgb(255, 140, 0),
+                background: Color::Rgb(26, 26, 26),
+                surface: Color::Rgb(22, 22, 22),
+                foreground: Color::Rgb(212, 208, 200),
+                dimmed: Color::Rgb(90, 88, 88),
+                border: Color::Rgb(37, 37, 37),
+                border_active: Color::Rgb(58, 58, 58),
                 dynamic: true,
             },
-        }
+        };
+
+        theme.accent = apply(sec.accent.as_deref(), theme.accent);
+        theme.background = apply(sec.background.as_deref(), theme.background);
+        theme.surface = apply(sec.surface.as_deref(), theme.surface);
+        theme.foreground = apply(sec.foreground.as_deref(), theme.foreground);
+        theme.dimmed = apply(sec.dimmed.as_deref(), theme.dimmed);
+        theme.border = apply(sec.border.as_deref(), theme.border);
+        theme.border_active = apply(sec.border_active.as_deref(), theme.border_active);
+
+        theme
     }
 
     /// Return the accent colour to use for rendering: the dynamic extracted
@@ -103,6 +119,30 @@ pub fn color_to_rgba(c: Color) -> Rgba<u8> {
     }
 }
 
+/// Parse a theme colour from config: hex RGB, terminal index (`idx:` / `ansi:` / …), or reset.
+fn parse_theme_color(s: &str) -> Option<Color> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+    match lower.as_str() {
+        "reset" | "inherit" | "default" => return Some(Color::Reset),
+        _ => {}
+    }
+
+    const INDEX_PREFIXES: &[&str] = &["indexed:", "idx:", "ansi:", "color:", "i:"];
+    for p in INDEX_PREFIXES {
+        if s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p) {
+            let rest = s[p.len()..].trim();
+            let n: u32 = rest.parse().ok()?;
+            return (n <= 255).then_some(Color::Indexed(n as u8));
+        }
+    }
+
+    parse_hex(s)
+}
+
 fn parse_hex(s: &str) -> Option<Color> {
     let s = s.trim().trim_start_matches('#');
     if s.len() != 6 {
@@ -112,4 +152,63 @@ fn parse_hex(s: &str) -> Option<Color> {
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
     Some(Color::Rgb(r, g, b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_theme_color_hex() {
+        assert_eq!(
+            parse_theme_color("#76cce0"),
+            Some(Color::Rgb(0x76, 0xcc, 0xe0))
+        );
+        assert_eq!(
+            parse_theme_color("76cce0"),
+            Some(Color::Rgb(0x76, 0xcc, 0xe0))
+        );
+    }
+
+    #[test]
+    fn parse_theme_color_indexed() {
+        assert_eq!(parse_theme_color("idx:2"), Some(Color::Indexed(2)));
+        assert_eq!(parse_theme_color("IDX: 14 "), Some(Color::Indexed(14)));
+        assert_eq!(parse_theme_color("ansi:255"), Some(Color::Indexed(255)));
+        assert_eq!(parse_theme_color("color:0"), Some(Color::Indexed(0)));
+        assert_eq!(parse_theme_color("i:6"), Some(Color::Indexed(6)));
+        assert_eq!(parse_theme_color("indexed:1"), Some(Color::Indexed(1)));
+    }
+
+    #[test]
+    fn parse_theme_color_invalid_index() {
+        assert_eq!(parse_theme_color("idx:256"), None);
+        assert_eq!(parse_theme_color("idx:abc"), None);
+    }
+
+    #[test]
+    fn terminal_preset_accepts_hex_override() {
+        let sec = crate::config::ThemeSection {
+            preset: Some("terminal".into()),
+            accent: Some("#76cce0".into()),
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert_eq!(t.preset, ThemePreset::Terminal);
+        assert_eq!(t.accent, Color::Rgb(0x76, 0xcc, 0xe0));
+        assert_eq!(t.background, Color::Reset);
+    }
+
+    #[test]
+    fn static_preset_accepts_idx_override() {
+        let sec = crate::config::ThemeSection {
+            preset: Some("static".into()),
+            accent: Some("idx:3".into()),
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert_eq!(t.preset, ThemePreset::Static);
+        assert_eq!(t.accent, Color::Indexed(3));
+        assert_eq!(t.background, Color::Rgb(26, 26, 26));
+    }
 }

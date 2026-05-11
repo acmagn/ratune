@@ -597,7 +597,7 @@ impl BrowseMode {
     }
 }
 
-/// Raw hex colour strings from config.toml. Defaults inside `Theme::from_section`.
+/// Theme colour strings for `[theme]` (hex, `idx:` / `ansi:` / …, or `reset`); parsed in [`crate::theme`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[derive(Default)]
@@ -628,7 +628,11 @@ pub struct ThemeSection {
     /// Theme mode preset:
     /// - `dynamic` (default): configured palette + album-art accent extraction
     /// - `static`: configured palette only (no dynamic accent)
-    /// - `terminal` / `os`: inherit colors from the terminal theme (ignores hex palette)
+    /// - `terminal` / `os`: terminal palette defaults; optional fields below still override
+    ///
+    /// Optional colour fields merge on top of preset defaults. Values may be 6-digit hex (`#rrggbb`
+    /// or `rrggbb`), a 256-colour index (`idx:N`, `indexed:N`, `ansi:N`, `color:N`, or `i:N` for N in 0..=255),
+    /// or `reset` / `inherit` / `default` for the terminal default fg/bg.
     #[serde(default)]
     pub preset: Option<String>,
     pub accent: Option<String>,
