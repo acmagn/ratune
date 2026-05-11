@@ -2175,7 +2175,8 @@ impl App {
                     );
                 } else if self.library_server_append_fetching {
                     self.flash_status_secs("Library fetch already in progress", 8);
-                } else if self.config.library_index_enabled && !self.library_index_tracks.is_empty() {
+                } else if self.config.library_index_enabled && !self.library_index_tracks.is_empty()
+                {
                     // Fast path: local metadata index already loaded.
                     let n = self.library_index_tracks.len();
                     self.pending_global_confirm = Some(GlobalConfirm::LibraryIndexAppendQueue);
