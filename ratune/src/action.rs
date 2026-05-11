@@ -135,6 +135,8 @@ pub enum Action {
     LibraryIndexAppendQueue,
     /// Confirm pending append of the full metadata index to the queue.
     ConfirmLibraryIndexAppendQueue,
+    /// Confirm pending append of the full server library (non-index) to the queue.
+    ConfirmLibraryServerAppendQueue,
     /// Dismiss a global confirmation prompt (e.g. library refresh).
     CancelGlobalConfirm,
     Quit,

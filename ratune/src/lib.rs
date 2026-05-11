@@ -666,6 +666,17 @@ async fn run_loop(
                                                     _ => Action::None,
                                                 }
                                             }
+                                            GlobalConfirm::LibraryServerAppendQueue => {
+                                                match key.code {
+                                                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                                        Action::ConfirmLibraryServerAppendQueue
+                                                    }
+                                                    KeyCode::Char('n')
+                                                    | KeyCode::Char('N')
+                                                    | KeyCode::Esc => Action::CancelGlobalConfirm,
+                                                    _ => Action::None,
+                                                }
+                                            }
                                         }
                                     } else {
                                         map_key(

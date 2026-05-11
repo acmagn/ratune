@@ -25,6 +25,20 @@ fn library_index_refresh_status_text(app: &App) -> String {
     format!("Refreshing library index {sp}  ·  {secs}s")
 }
 
+fn library_fetch_status_text(app: &App) -> String {
+    let (idx, secs) = match app.library_server_append_started {
+        Some(start) => {
+            let idx = (Instant::now().duration_since(start).as_millis() / 80) as usize
+                % LIB_SPINNER.len();
+            let secs = start.elapsed().as_secs();
+            (idx, secs)
+        }
+        None => (0, 0),
+    };
+    let sp = LIB_SPINNER[idx];
+    format!("Fetching full library {sp}  ·  {secs}s")
+}
+
 // ── Public render ─────────────────────────────────────────────────────────────
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
@@ -50,6 +64,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     } else if app.library_index_refreshing {
         let w = area.width as usize;
         let shown = fit_status_bar_text(&library_index_refresh_status_text(app), w);
+        Line::from(vec![Span::styled(shown, Style::default().fg(app.accent()))])
+    } else if app.library_server_append_fetching {
+        let w = area.width as usize;
+        let shown = fit_status_bar_text(&library_fetch_status_text(app), w);
         Line::from(vec![Span::styled(shown, Style::default().fg(app.accent()))])
     } else if let Some((msg, _)) = &app.status_flash {
         // Flash message: left-aligned, truncated to the bar width (centred long

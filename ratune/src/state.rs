@@ -196,6 +196,8 @@ pub enum GlobalConfirm {
     LibraryIndexRefresh,
     /// Append every track in the on-disk metadata index to the queue (after y/n).
     LibraryIndexAppendQueue,
+    /// Fetch the full library from the server and append it to the queue (after y/n).
+    LibraryServerAppendQueue,
 }
 
 // ── PlaylistOverlay ───────────────────────────────────────────────────────────

@@ -303,6 +303,10 @@ pub enum LibraryUpdate {
     LibraryIndexRefreshComplete {
         result: Result<(Vec<ratune_subsonic::Song>, Option<String>, bool), String>,
     },
+    /// Full-library fetch (from server) finished for "append whole library" when index is disabled.
+    LibraryServerAppendQueueComplete {
+        result: Result<Vec<ratune_subsonic::Song>, String>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -394,6 +398,11 @@ pub struct App {
     pub library_index_refreshing: bool,
     /// When the current refresh started; drives status-bar animation until complete.
     pub library_index_refresh_started: Option<Instant>,
+    /// True while a background full-library fetch is running for "append whole library"
+    /// when the local index is disabled/empty.
+    pub library_server_append_fetching: bool,
+    /// When the current server fetch started; drives status-bar animation until complete.
+    pub library_server_append_started: Option<Instant>,
 
     // ── Offline cache (Feature 5.3) ───────────────────────────────────────────
     /// Track file cache (LRU, persisted to `~/.cache/ratune/`).
@@ -573,6 +582,8 @@ impl App {
             library_index_refreshed_at,
             library_index_refreshing: false,
             library_index_refresh_started: None,
+            library_server_append_fetching: false,
+            library_server_append_started: None,
             cache: track_cache,
             prefetch_gen: Arc::new(AtomicU64::new(0)),
             help_visible: false,
@@ -1106,6 +1117,34 @@ impl App {
         });
     }
 
+    /// Fetch the full library from the server (without requiring the on-disk index)
+    /// and append it to the queue.
+    pub fn spawn_library_server_append_queue(&mut self) {
+        if self.library_server_append_fetching {
+            self.flash_status_secs("Library fetch already in progress", 8);
+            return;
+        }
+        self.library_server_append_fetching = true;
+        self.library_server_append_started = Some(Instant::now());
+
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        let album_p = self.config.library_fetch_album_parallelism;
+        let artist_p = self.config.library_fetch_artist_parallelism;
+        tokio::spawn(async move {
+            let opts = ratune_subsonic::FetchLibraryOptions {
+                album_parallelism: album_p,
+                artist_parallelism: artist_p,
+            };
+            let result = ratune_subsonic::fetch_all_library_songs_with_options(&client, opts)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx
+                .send(LibraryUpdate::LibraryServerAppendQueueComplete { result })
+                .await;
+        });
+    }
+
     pub fn flash_status(&mut self, msg: impl Into<String>) {
         self.flash_status_secs(msg, 3);
     }
@@ -1617,6 +1656,33 @@ impl App {
                     }
                 }
             }
+            LibraryUpdate::LibraryServerAppendQueueComplete { result } => {
+                self.library_server_append_fetching = false;
+                self.library_server_append_started = None;
+                match result {
+                    Ok(tracks) => {
+                        let n = tracks.len();
+                        if n == 0 {
+                            self.flash_status_secs("No tracks found in library", 5);
+                            return;
+                        }
+                        let was_empty = self.queue.songs.is_empty();
+                        for s in tracks {
+                            self.queue.push(s);
+                        }
+                        if was_empty && !self.queue.songs.is_empty() {
+                            self.queue.cursor = 0;
+                            self.queue.scroll = 0;
+                            self.play_current();
+                        }
+                        self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
+                    }
+                    Err(e) => {
+                        eprintln!("library fetch for append queue: {e}");
+                        self.flash_status_secs(format!("Library fetch failed: {e}"), 6);
+                    }
+                }
+            }
         }
     }
 
@@ -2102,22 +2168,26 @@ impl App {
             Action::LibraryIndexAppendQueue => {
                 if self.pending_global_confirm.is_some() {
                     self.flash_status("Already confirming — press y or n");
-                } else if !self.config.library_index_enabled {
-                    self.flash_status("Library index is disabled in config");
                 } else if self.library_index_refreshing {
                     self.flash_status_secs(
                         "Library index refresh in progress — try again shortly",
                         8,
                     );
-                } else if self.library_index_tracks.is_empty() {
-                    self.flash_status(
-                        "Library index empty — wait for refresh or use the index refresh shortcut",
-                    );
-                } else {
+                } else if self.library_server_append_fetching {
+                    self.flash_status_secs("Library fetch already in progress", 8);
+                } else if self.config.library_index_enabled && !self.library_index_tracks.is_empty() {
+                    // Fast path: local metadata index already loaded.
                     let n = self.library_index_tracks.len();
                     self.pending_global_confirm = Some(GlobalConfirm::LibraryIndexAppendQueue);
                     self.flash_status_secs(
                         format!("Append all {n} indexed tracks to queue? (y/n)"),
+                        12,
+                    );
+                } else {
+                    // Slow path: no local index available; fetch full library from server.
+                    self.pending_global_confirm = Some(GlobalConfirm::LibraryServerAppendQueue);
+                    self.flash_status_secs(
+                        "Fetch full library from server and append to queue? (y/n)",
                         12,
                     );
                 }
@@ -2126,6 +2196,12 @@ impl App {
                 if self.pending_global_confirm == Some(GlobalConfirm::LibraryIndexAppendQueue) {
                     self.pending_global_confirm = None;
                     self.handle_confirm_library_index_append_queue();
+                }
+            }
+            Action::ConfirmLibraryServerAppendQueue => {
+                if self.pending_global_confirm == Some(GlobalConfirm::LibraryServerAppendQueue) {
+                    self.pending_global_confirm = None;
+                    self.spawn_library_server_append_queue();
                 }
             }
             Action::CancelGlobalConfirm => {
