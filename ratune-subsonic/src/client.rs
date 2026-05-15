@@ -25,9 +25,11 @@ use tokio::task::JoinSet;
 
 use crate::error::check_status;
 use crate::models::{
-    Album, AlbumEnvelope, Artist, ArtistEnvelope, Artists, ArtistsEnvelope, PingEnvelope, Playlist,
-    PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
-    SearchEnvelope, SearchResult3, Song, SongEnvelope, SubsonicLibrary,
+    parse_music_library_root_folder_id, Album, AlbumEnvelope, Artist, ArtistEnvelope, Artists,
+    ArtistsEnvelope, DirectoryChild, IndexesEnvelope, MusicDirectory, MusicDirectoryEnvelope,
+    MusicFolder, MusicFoldersEnvelope, PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope,
+    PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope, SearchEnvelope, SearchResult3, Song,
+    SongEnvelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -89,6 +91,38 @@ pub struct SubsonicClient {
     username: String,
     password: String,
     http: Client,
+}
+
+fn music_directory_from_library_indexes(music_folder_id: &str, data: &Artists) -> MusicDirectory {
+    let mut directories: Vec<DirectoryChild> = data
+        .index
+        .iter()
+        .flat_map(|bucket| bucket.artist.iter())
+        .map(|a| DirectoryChild {
+            id: a.id.clone(),
+            parent: None,
+            is_dir: true,
+            title: a.name.clone(),
+            artist: Some(a.name.clone()),
+            album: None,
+            album_id: None,
+            artist_id: None,
+            track: None,
+            disc_number: None,
+            duration: None,
+            cover_art: None,
+            path: None,
+            suffix: None,
+            content_type: None,
+        })
+        .collect();
+    directories.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    MusicDirectory {
+        id: music_folder_id.to_string(),
+        name: String::new(),
+        directories,
+        songs: vec![],
+    }
 }
 
 impl SubsonicClient {
@@ -162,6 +196,104 @@ impl SubsonicClient {
             .json()
             .await?;
         check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// Top-level music folders (`getMusicFolders`).
+    pub async fn get_music_folders(&self) -> Result<Vec<MusicFolder>> {
+        let env: MusicFoldersEnvelope = self
+            .http
+            .get(self.endpoint_url("getMusicFolders"))
+            .query(&self.auth_params())
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        let folders = r
+            .music_folders
+            .as_ref()
+            .map(|c| {
+                c.music_folder
+                    .iter()
+                    .map(|f| MusicFolder {
+                        id: f.id.clone(),
+                        name: f.name.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(folders)
+    }
+
+    /// Letter-bucket index for folder browsing (`getIndexes`).
+    ///
+    /// Pass `music_folder_id` as the **`id` from [`get_music_folders`](Self::get_music_folders)**.
+    pub async fn get_indexes(&self, music_folder_id: Option<&str>) -> Result<Artists> {
+        let mut params = self.auth_params();
+        if let Some(m) = music_folder_id {
+            params.push(("musicFolderId", m.to_string()));
+        }
+        let env: IndexesEnvelope = self
+            .http
+            .get(self.endpoint_url("getIndexes"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        r.indexes
+            .clone()
+            .ok_or_else(|| anyhow!("missing 'indexes' field in getIndexes response"))
+    }
+
+    /// One Browse-tab folder pane: synthetic [`crate::models::music_library_root_cache_key`] ids
+    /// call `getIndexes?musicFolderId=<id>`; anything else goes to [`get_music_directory`](Self::get_music_directory).
+    pub async fn browse_folder_listing(&self, cache_directory_id: &str) -> Result<MusicDirectory> {
+        if let Some(folder_id) = parse_music_library_root_folder_id(cache_directory_id) {
+            let ix = self.get_indexes(Some(folder_id)).await?;
+            return Ok(music_directory_from_library_indexes(folder_id, &ix));
+        }
+        self.get_music_directory(cache_directory_id).await
+    }
+
+    /// Directory listing for folder navigation (`getMusicDirectory`).
+    pub async fn get_music_directory(&self, id: &str) -> Result<MusicDirectory> {
+        let mut params = self.auth_params();
+        params.push(("id", id.to_string()));
+        let env: MusicDirectoryEnvelope = self
+            .http
+            .get(self.endpoint_url("getMusicDirectory"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        let dir = r
+            .directory
+            .clone()
+            .ok_or_else(|| anyhow!("missing 'directory' in getMusicDirectory response"))?;
+        let mut directories = Vec::new();
+        let mut songs = Vec::new();
+        for child in dir.child {
+            if child.is_dir {
+                directories.push(child);
+            } else {
+                songs.push(child.to_song());
+            }
+        }
+        directories.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        songs.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        Ok(MusicDirectory {
+            id: dir.id,
+            name: dir.name.unwrap_or_else(|| id.to_string()),
+            directories,
+            songs,
+        })
     }
 
     /// Fetch all artists, grouped by index letter (`getArtists`).

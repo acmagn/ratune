@@ -38,7 +38,7 @@ use ratatui::Terminal;
 
 use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
-use config::{AlbumArtBackend, Config, HomePanel};
+use config::{AlbumArtBackend, BrowseMode, Config, HomePanel};
 use keybinds::Keybinds;
 use state::{GlobalConfirm, PlaylistFocus, PlaylistInputMode};
 
@@ -59,12 +59,11 @@ pub async fn run() -> Result<()> {
         app.tmux_status_offset = tmux_status_offset();
     }
 
-    app.visualizer_gradient_rgb_cache =
-        ui::terminal_palette::try_query_visualizer_gradient_cache(
-            &app.theme,
-            &app.config,
-            app.in_tmux,
-        );
+    app.visualizer_gradient_rgb_cache = ui::terminal_palette::try_query_visualizer_gradient_cache(
+        &app.theme,
+        &app.config,
+        app.in_tmux,
+    );
 
     // kitty-apc backend: probe before raw mode / alternate screen (see `kitty_art`).
     // `ratatui-image` uses `Picker::from_query_stdio()` after the alternate screen.
@@ -103,8 +102,12 @@ pub async fn run() -> Result<()> {
         app.home_art_needs_redraw = true;
     }
 
-    // Begin fetching artists immediately.
-    app.fetch_artists();
+    // Begin fetching library metadata for the browse tab.
+    if app.browser_browse_mode == crate::config::BrowseMode::Files {
+        app.fetch_music_folders();
+    } else {
+        app.fetch_artists();
+    }
     // Background metadata index refresh when missing or stale (Milestone 2).
     app.spawn_library_index_refresh(false);
 
@@ -1187,6 +1190,11 @@ fn map_key(
     if kb.go_to_nowplaying.matches(code, modifiers) {
         return Action::GoToNowPlaying;
     }
+    if let Some(spec) = &kb.toggle_folder_browse {
+        if spec.matches(code, modifiers) {
+            return Action::ToggleBrowserFolder;
+        }
+    }
 
     // seek_forward / seek_backward are tab-aware: they also act as column
     // navigation in the Browser tab so Right/Left keep working there.
@@ -1444,15 +1452,26 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             handle_home_click(x, y, app, center);
         }
         Tab::Browser => {
-            // 3 columns: [30% artists | 35% albums | 35% tracks]
-            let browser_cols = Layout::horizontal([
-                Constraint::Percentage(30),
-                Constraint::Percentage(35),
-                Constraint::Percentage(35),
-            ])
-            .split(center);
+            let files_mode = app.browser_browse_mode == BrowseMode::Files;
+            let browser_cols = if files_mode {
+                Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+                    .split(center)
+            } else {
+                Layout::horizontal([
+                    Constraint::Percentage(30),
+                    Constraint::Percentage(35),
+                    Constraint::Percentage(35),
+                ])
+                .split(center)
+            };
 
-            let col_idx = if x < browser_cols[1].x {
+            let col_idx = if files_mode {
+                if x < browser_cols[1].x {
+                    0usize
+                } else {
+                    1
+                }
+            } else if x < browser_cols[1].x {
                 0usize
             } else if x < browser_cols[2].x {
                 1
@@ -1470,11 +1489,35 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             let visible_height = col_area.height.saturating_sub(2) as usize;
 
             // Switch focus to the clicked column.
-            app.browser_focus = match col_idx {
-                0 => BrowserColumn::Artists,
-                1 => BrowserColumn::Albums,
-                _ => BrowserColumn::Tracks,
+            app.browser_focus = if files_mode {
+                match col_idx {
+                    0 => BrowserColumn::Artists,
+                    _ => BrowserColumn::Tracks,
+                }
+            } else {
+                match col_idx {
+                    0 => BrowserColumn::Artists,
+                    1 => BrowserColumn::Albums,
+                    _ => BrowserColumn::Tracks,
+                }
             };
+
+            if files_mode {
+                match col_idx {
+                    0 => {
+                        let visible_pos = {
+                            let scroll = app.folders.dirs_scroll;
+                            scroll + visible_row
+                        };
+                        app.click_folder_dir(visible_pos);
+                    }
+                    _ => {
+                        app.click_folder_preview_row(visible_row);
+                        app.folder_activate_preview_selection();
+                    }
+                }
+                return;
+            }
 
             match col_idx {
                 0 => {

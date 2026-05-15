@@ -23,6 +23,10 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("Shift-Tab", "Previous tab"),
                 ("/", "Search current column"),
                 ("Enter", "Select / expand"),
+                (
+                    "Ctrl+b",
+                    "Browse: toggle folder view (if enabled in config)",
+                ),
             ],
         ),
         (

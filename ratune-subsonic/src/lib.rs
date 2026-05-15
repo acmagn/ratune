@@ -8,6 +8,7 @@ pub use client::{
 };
 pub use error::SubsonicError;
 pub use models::{
-    Album, Artist, ArtistIndex, Artists, LyricLine, Playlist, PlaylistDetail, ScanStatus,
-    SearchResult3, Song, SubsonicLibrary,
+    music_library_root_cache_key, parse_music_library_root_folder_id, Album, Artist, ArtistIndex,
+    Artists, DirectoryChild, Indexes, LyricLine, MusicDirectory, MusicFolder, Playlist,
+    PlaylistDetail, ScanStatus, SearchResult3, Song, SubsonicLibrary, MUSIC_FOLDER_ROOT_ID_PREFIX,
 };

@@ -262,13 +262,7 @@ fn color_for_row(
                 return parse_color_spec(&colors[0], accent);
             }
             let parsed: Vec<Color> = colors.iter().map(|c| parse_color_spec(c, accent)).collect();
-            gradient_color(
-                &parsed,
-                row,
-                height,
-                gradient_rgb_cache,
-                dither_col,
-            )
+            gradient_color(&parsed, row, height, gradient_rgb_cache, dither_col)
         }
         _ => accent, // "accent"
     }
@@ -299,17 +293,16 @@ fn gradient_color(
 }
 
 /// Bayer 4×4 for ordered dither when OSC readback is missing or incomplete.
-const BAYER4: [[u8; 4]; 4] = [
-    [0, 8, 2, 10],
-    [12, 4, 14, 6],
-    [3, 11, 1, 9],
-    [15, 7, 13, 5],
-];
+const BAYER4: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
 #[inline]
 fn dither_two_colors(a: Color, b: Color, frac: f32, row: usize, col: usize) -> Color {
     let m = BAYER4[row % 4][col % 4] as f32;
-    if frac * 16.0 > m { b } else { a }
+    if frac * 16.0 > m {
+        b
+    } else {
+        a
+    }
 }
 
 fn lerp_color(

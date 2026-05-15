@@ -178,6 +178,8 @@ pub struct Keybinds {
     pub home_section_next: KeySpec,
     pub home_section_prev: KeySpec,
     pub home_refresh: KeySpec,
+    /// `None` = disabled — folder toggle from keybinds
+    pub toggle_folder_browse: Option<KeySpec>,
 }
 
 impl Keybinds {
@@ -258,6 +260,13 @@ impl Keybinds {
             sec.library_index_append_queue.as_deref(),
             Some(KeySpec {
                 code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+        );
+        let toggle_folder_browse = resolve_opt(
+            sec.toggle_folder_browse.as_deref(),
+            Some(KeySpec {
+                code: KeyCode::Char('b'),
                 modifiers: KeyModifiers::CONTROL,
             }),
         );
@@ -370,6 +379,7 @@ impl Keybinds {
                 sec.home_refresh.as_deref(),
                 KeySpec::new(KeyCode::Char('r')),
             ),
+            toggle_folder_browse,
         }
     }
 }

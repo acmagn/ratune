@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use ratune_subsonic::models::{Album, Artist, Song};
+use ratune_subsonic::models::{Album, Artist, MusicFolder, Song};
 
 // ── LoadingState ──────────────────────────────────────────────────────────────
 
@@ -80,6 +80,126 @@ impl LibraryState {
             self.selected_track.and_then(|i| songs.get(i))
         } else {
             None
+        }
+    }
+}
+
+// ── FolderBrowseState ─────────────────────────────────────────────────────────
+
+/// Cached contents of one `getMusicDirectory` response.
+#[derive(Debug, Clone)]
+pub struct DirectoryListing {
+    pub name: String,
+    pub directories: Vec<(String, String)>,
+    pub tracks: Vec<Song>,
+}
+
+/// One row in the folder preview pane (right column): subfolders first, then tracks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderPreviewRow {
+    Dir(usize),
+    Track(usize),
+}
+
+/// Build filtered preview rows for `listing` (directories then tracks).
+pub fn folder_preview_rows(
+    listing: &DirectoryListing,
+    filter: Option<&str>,
+) -> Vec<FolderPreviewRow> {
+    let mut out = Vec::new();
+    match filter {
+        Some(q) => {
+            let ql = q.to_lowercase();
+            for (i, (_, name)) in listing.directories.iter().enumerate() {
+                if name.to_lowercase().contains(&ql) {
+                    out.push(FolderPreviewRow::Dir(i));
+                }
+            }
+            for (i, s) in listing.tracks.iter().enumerate() {
+                if s.title.to_lowercase().contains(&ql) {
+                    out.push(FolderPreviewRow::Track(i));
+                }
+            }
+        }
+        None => {
+            for i in 0..listing.directories.len() {
+                out.push(FolderPreviewRow::Dir(i));
+            }
+            for i in 0..listing.tracks.len() {
+                out.push(FolderPreviewRow::Track(i));
+            }
+        }
+    }
+    out
+}
+
+/// Left folder column row count inside a directory: `..` plus search-filtered subdirectories.
+fn folder_left_visible_rows_len(listing: &DirectoryListing, filter: Option<&str>) -> usize {
+    let sub = if let Some(q) = filter {
+        listing
+            .directories
+            .iter()
+            .filter(|(_, name)| name.to_lowercase().contains(q))
+            .count()
+    } else {
+        listing.directories.len()
+    };
+    1 + sub
+}
+
+/// Default highlighted row: skip `..` when at least one subdirectory is visible.
+pub fn folder_left_default_row(listing: &DirectoryListing, filter: Option<&str>) -> usize {
+    let len = folder_left_visible_rows_len(listing, filter);
+    if len >= 2 {
+        1
+    } else {
+        0
+    }
+}
+
+/// File/folder browser state (`[ui.browsetab] mode = "files"`).
+#[derive(Debug, Default)]
+pub struct FolderBrowseState {
+    pub roots: LoadingState<Vec<MusicFolder>>,
+    /// `(id, display name)` from the selected root into the current folder.
+    pub path: Vec<(String, String)>,
+    pub listings: std::collections::HashMap<String, LoadingState<DirectoryListing>>,
+    pub selected_dir: Option<usize>,
+    /// After path changes, set selection when the current folder listing finishes loading.
+    pub folder_default_row_pending: bool,
+    /// Listing id shown in the right-hand preview column (`browse_folder_listing` cache key).
+    pub preview_dir_id: Option<String>,
+    /// Selected row in the preview list (filtered dirs + tracks).
+    pub preview_selected_row: usize,
+    pub dirs_scroll: usize,
+    pub tracks_scroll: usize,
+}
+
+impl FolderBrowseState {
+    pub fn clamp_scroll(scroll: &mut usize, sel: usize, len: usize, visible: usize) {
+        LibraryState::clamp_vertical_scroll(scroll, sel, len, visible);
+    }
+
+    pub fn current_dir_id(&self) -> Option<&str> {
+        self.path.last().map(|(id, _)| id.as_str())
+    }
+
+    pub fn current_listing(&self) -> Option<&LoadingState<DirectoryListing>> {
+        let id = self.current_dir_id()?;
+        self.listings.get(id)
+    }
+
+    pub fn current_preview_track(&self, filter: Option<&str>) -> Option<&Song> {
+        let pid = self.preview_dir_id.as_ref()?;
+        let listing = match self.listings.get(pid)? {
+            LoadingState::Loaded(l) => l,
+            _ => return None,
+        };
+        let rows = folder_preview_rows(listing, filter);
+        let row = rows.get(self.preview_selected_row)?;
+        match row {
+            FolderPreviewRow::Track(i) => listing.tracks.get(*i),
+            FolderPreviewRow::Dir(_) => None,
         }
     }
 }

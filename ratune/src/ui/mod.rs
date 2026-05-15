@@ -2,6 +2,8 @@ pub mod albums;
 pub mod art_prepare;
 pub mod artists;
 pub mod browser;
+pub mod folder_tracks;
+pub mod folders;
 pub mod home_tab;
 pub mod kitty_art;
 pub mod layout;

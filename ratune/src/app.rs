@@ -17,12 +17,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, Direction};
 use crate::color::{extract_accent, lerp_color};
-use crate::config::{AlbumArtBackend, Config};
+use crate::config::{AlbumArtBackend, BrowseMode, Config};
 use crate::history::PlayRecord;
 use crate::keybinds::Keybinds;
 use crate::state::{
-    ConfirmAction, GlobalConfirm, LibraryState, LoadingState, PlaybackState, PlaylistFocus,
-    PlaylistInputMode, PlaylistOverlay, QueueState,
+    folder_left_default_row, folder_preview_rows, ConfirmAction, DirectoryListing,
+    FolderBrowseState, FolderPreviewRow, GlobalConfirm, LibraryState, LoadingState, PlaybackState,
+    PlaylistFocus, PlaylistInputMode, PlaylistOverlay, QueueState,
 };
 use crate::theme::Theme;
 use image::{imageops::FilterType, DynamicImage};
@@ -307,6 +308,13 @@ pub enum LibraryUpdate {
     LibraryServerAppendQueueComplete {
         result: Result<Vec<ratune_subsonic::Song>, String>,
     },
+    /// Top-level folders from `getMusicFolders` (file browse mode).
+    MusicFolders(Result<Vec<ratune_subsonic::MusicFolder>, String>),
+    /// One directory listing from `getMusicDirectory`.
+    MusicDirectory {
+        id: String,
+        result: Result<DirectoryListing, String>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -337,9 +345,12 @@ pub struct App {
     pub active_tab: Tab,
     pub browser_focus: BrowserColumn,
     pub library: LibraryState,
+    pub folders: FolderBrowseState,
     pub queue: QueueState,
     pub playback: PlaybackState,
     pub config: Config,
+    /// Effective Browse tab layout: toggled at runtime when folder navigation is enabled.
+    pub browser_browse_mode: BrowseMode,
     pub subsonic: Arc<SubsonicClient>,
     /// Receives library data from background tokio tasks.
     pub library_rx: mpsc::Receiver<LibraryUpdate>,
@@ -550,10 +561,17 @@ impl App {
                 None => (Vec::new(), None),
             };
         let library_index_by_id = crate::library_index::index_by_id(&library_index_tracks);
+        let browser_browse_mode = match config.browse_mode {
+            BrowseMode::Genre => BrowseMode::Genre,
+            _ if !config.browse_folder_navigation => BrowseMode::Artists,
+            BrowseMode::Files => BrowseMode::Files,
+            BrowseMode::Artists => BrowseMode::Artists,
+        };
         Ok(Self {
             active_tab: Tab::Home,
             browser_focus: BrowserColumn::Artists,
             library: LibraryState::default(),
+            folders: FolderBrowseState::default(),
             queue: QueueState::default(),
             playback: PlaybackState::default(),
             subsonic: Arc::new(subsonic),
@@ -563,6 +581,7 @@ impl App {
             player_rx,
             player_join: Some(player_join),
             config,
+            browser_browse_mode,
             should_quit: false,
             search_mode: SearchMode::default(),
             search_filter: None,
@@ -1030,6 +1049,404 @@ impl App {
     }
 
     // ── Background fetch helpers ──────────────────────────────────────────────
+
+    fn browse_files(&self) -> bool {
+        self.browser_browse_mode == BrowseMode::Files
+    }
+
+    /// Spawn a task to fetch top-level music folders (file browse mode).
+    pub fn fetch_music_folders(&self) {
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let result = client.get_music_folders().await.map_err(|e| e.to_string());
+            let _ = tx.send(LibraryUpdate::MusicFolders(result)).await;
+        });
+    }
+
+    /// Spawn [`SubsonicClient::browse_folder_listing`] (indexes for library roots, directory API below).
+    pub fn fetch_music_directory(&self, id: String) {
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let result = client
+                .browse_folder_listing(&id)
+                .await
+                .map(|dir| DirectoryListing {
+                    name: dir.name,
+                    directories: dir
+                        .directories
+                        .into_iter()
+                        .map(|c| (c.id, c.title))
+                        .collect(),
+                    tracks: dir.songs,
+                })
+                .map_err(|e| e.to_string());
+            let _ = tx.send(LibraryUpdate::MusicDirectory { id, result }).await;
+        });
+    }
+
+    /// Subsonic cache id for the folder shown in the preview pane from the current left-column selection.
+    pub fn folder_preview_source_id(&self) -> Option<String> {
+        if !self.browse_files() {
+            return None;
+        }
+        if self.folders.path.is_empty() {
+            let roots = match &self.folders.roots {
+                LoadingState::Loaded(r) => r,
+                _ => return None,
+            };
+            if roots.is_empty() {
+                return None;
+            }
+            let indices: Vec<usize> = if let Some(q) = &self.search_filter {
+                roots
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.name.to_lowercase().contains(q.as_str()))
+                    .map(|(i, _)| i)
+                    .collect()
+            } else {
+                (0..roots.len()).collect()
+            };
+            if indices.is_empty() {
+                return None;
+            }
+            let pos = self
+                .folders
+                .selected_dir
+                .unwrap_or(0)
+                .min(indices.len() - 1);
+            let slot = indices[pos];
+            Some(ratune_subsonic::music_library_root_cache_key(
+                &roots[slot].id,
+            ))
+        } else {
+            let sel = self.folders.selected_dir.unwrap_or(0);
+            if sel == 0 {
+                // `..` is highlighted: preview **this** folder (tracks / dirs here), not the parent.
+                return self.folders.current_dir_id().map(|id| id.to_string());
+            }
+            let listing = match self.folders.current_listing()? {
+                LoadingState::Loaded(l) => l,
+                _ => return None,
+            };
+            let dir_indices: Vec<usize> = if let Some(q) = &self.search_filter {
+                listing
+                    .directories
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, name))| name.to_lowercase().contains(q.as_str()))
+                    .map(|(i, _)| i)
+                    .collect()
+            } else {
+                (0..listing.directories.len()).collect()
+            };
+            let dir_pos = sel.saturating_sub(1);
+            if dir_pos >= dir_indices.len() {
+                return None;
+            }
+            let orig_i = dir_indices[dir_pos];
+            Some(listing.directories[orig_i].0.clone())
+        }
+    }
+
+    pub fn sync_folder_preview_from_left(&mut self) {
+        if !self.browse_files() {
+            return;
+        }
+        let Some(pid) = self.folder_preview_source_id() else {
+            self.folders.preview_dir_id = None;
+            self.folders.preview_selected_row = 0;
+            self.folders.tracks_scroll = 0;
+            return;
+        };
+        if self.folders.preview_dir_id.as_deref() != Some(pid.as_str()) {
+            self.folders.preview_dir_id = Some(pid.clone());
+            self.folders.preview_selected_row = 0;
+            self.folders.tracks_scroll = 0;
+        }
+        if !self.folders.listings.contains_key(&pid) {
+            self.folders
+                .listings
+                .insert(pid.clone(), LoadingState::Loading);
+            self.fetch_music_directory(pid);
+        }
+    }
+
+    fn folder_display_name_for_cache_id(&self, cache_id: &str) -> Option<String> {
+        if let Some(fid) = ratune_subsonic::parse_music_library_root_folder_id(cache_id) {
+            if let LoadingState::Loaded(roots) = &self.folders.roots {
+                if let Some(r) = roots.iter().find(|r| r.id == fid) {
+                    return Some(r.name.clone());
+                }
+            }
+        }
+        if let Some(LoadingState::Loaded(li)) = self.folders.listings.get(cache_id) {
+            let n = li.name.trim();
+            if !n.is_empty() {
+                return Some(n.to_string());
+            }
+        }
+        None
+    }
+
+    fn ensure_left_at_preview_folder(&mut self, preview_key: &str) {
+        let max_ops = self.folders.path.len().saturating_add(8).max(16);
+        for _ in 0..max_ops {
+            let cur = self.folders.current_dir_id().map(|s| s.to_string());
+            if cur.as_deref() == Some(preview_key) {
+                return;
+            }
+            match cur {
+                None => {
+                    let name = self
+                        .folder_display_name_for_cache_id(preview_key)
+                        .unwrap_or_else(|| "Library".into());
+                    self.folder_enter(preview_key.to_string(), name);
+                    return;
+                }
+                Some(cur_id) => {
+                    if self.folders.path.len() >= 2 {
+                        let parent_id = self.folders.path[self.folders.path.len() - 2].0.clone();
+                        if parent_id == preview_key {
+                            self.folder_go_up();
+                            continue;
+                        }
+                    }
+                    match self.folders.listings.get(&cur_id) {
+                        Some(LoadingState::Loaded(listing)) => {
+                            if let Some((_, name)) =
+                                listing.directories.iter().find(|(id, _)| id == preview_key)
+                            {
+                                self.folder_enter(preview_key.to_string(), name.clone());
+                                continue;
+                            }
+                        }
+                        Some(LoadingState::Loading) => return,
+                        Some(LoadingState::NotLoaded) | None => {
+                            self.folders
+                                .listings
+                                .insert(cur_id.clone(), LoadingState::Loading);
+                            self.fetch_music_directory(cur_id.clone());
+                            return;
+                        }
+                        Some(LoadingState::Error(_)) => {}
+                    }
+                    if self.folders.path.len() > 1 {
+                        self.folder_go_up();
+                        continue;
+                    }
+                    let name = self
+                        .folder_display_name_for_cache_id(preview_key)
+                        .unwrap_or_else(|| "...".into());
+                    self.folder_enter(preview_key.to_string(), name);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn folder_enter_preview_child(&mut self, child_id: String, child_name: String) {
+        let Some(ref preview_key) = self.folders.preview_dir_id.clone() else {
+            return;
+        };
+        let pk = preview_key.clone();
+        self.ensure_left_at_preview_folder(&pk);
+        self.folder_enter(child_id, child_name);
+    }
+
+    /// Activate the highlighted preview row (enter subdirectory or enqueue track).
+    pub fn folder_activate_preview_selection(&mut self) {
+        let Some(ref preview_key) = self.folders.preview_dir_id.clone() else {
+            return;
+        };
+        let listing = match self.folders.listings.get(preview_key) {
+            Some(LoadingState::Loaded(l)) => l,
+            _ => return,
+        };
+        let rows = folder_preview_rows(listing, self.search_filter.as_deref());
+        if rows.is_empty() {
+            return;
+        }
+        let row_ix = self
+            .folders
+            .preview_selected_row
+            .min(rows.len().saturating_sub(1));
+        match rows[row_ix] {
+            FolderPreviewRow::Dir(i) => {
+                let (id, name) = listing.directories[i].clone();
+                self.folder_enter_preview_child(id, name);
+                if self.active_tab == Tab::Browser && self.browse_files() {
+                    self.browser_focus = BrowserColumn::Artists;
+                }
+            }
+            FolderPreviewRow::Track(i) => {
+                let song = listing.tracks[i].clone();
+                let was_empty = self.queue.songs.is_empty();
+                self.queue.push(song);
+                if was_empty {
+                    self.queue.cursor = 0;
+                    self.play_current();
+                }
+            }
+        }
+    }
+
+    /// Open the **music folder row** using its API `id` (scoped via `getIndexes?musicFolderId=`).
+    pub fn folder_enter_music_library_root(
+        &mut self,
+        music_folder_id: String,
+        display_name: String,
+    ) {
+        let cache_id = ratune_subsonic::music_library_root_cache_key(&music_folder_id);
+        self.folder_enter(cache_id, display_name);
+    }
+
+    pub fn folder_enter(&mut self, id: String, name: String) {
+        self.folders.path.push((id.clone(), name));
+        self.folders.dirs_scroll = 0;
+        self.folders.tracks_scroll = 0;
+
+        let mut need_fetch = false;
+        match self.folders.listings.get(&id) {
+            Some(LoadingState::Loaded(listing)) => {
+                self.folders.folder_default_row_pending = false;
+                let row = folder_left_default_row(listing, self.search_filter.as_deref());
+                self.folders.selected_dir = Some(row);
+            }
+            Some(LoadingState::Loading) => {
+                self.folders.folder_default_row_pending = true;
+                self.folders.selected_dir = Some(0);
+            }
+            Some(LoadingState::NotLoaded) | None => {
+                self.folders.folder_default_row_pending = true;
+                self.folders.selected_dir = Some(0);
+                need_fetch = true;
+            }
+            Some(LoadingState::Error(_)) => {
+                self.folders.folder_default_row_pending = true;
+                self.folders.selected_dir = Some(0);
+                need_fetch = true;
+            }
+        }
+        if need_fetch {
+            self.folders
+                .listings
+                .insert(id.clone(), LoadingState::Loading);
+            self.fetch_music_directory(id);
+        }
+        self.sync_folder_preview_from_left();
+    }
+
+    pub fn folder_go_up(&mut self) {
+        if !self.folders.path.pop().is_some() {
+            return;
+        }
+        self.folders.dirs_scroll = 0;
+        self.folders.tracks_scroll = 0;
+
+        if self.folders.path.is_empty() {
+            self.folders.folder_default_row_pending = false;
+            self.sync_folder_preview_from_left();
+            return;
+        }
+
+        let Some(cur) = self.folders.current_dir_id().map(|s| s.to_string()) else {
+            self.folders.folder_default_row_pending = false;
+            self.sync_folder_preview_from_left();
+            return;
+        };
+
+        let mut need_fetch = false;
+        match self.folders.listings.get(&cur) {
+            Some(LoadingState::Loaded(listing)) => {
+                self.folders.folder_default_row_pending = false;
+                let row = folder_left_default_row(listing, self.search_filter.as_deref());
+                self.folders.selected_dir = Some(row);
+            }
+            Some(LoadingState::Loading) => {
+                self.folders.folder_default_row_pending = true;
+                self.folders.selected_dir = Some(0);
+            }
+            Some(LoadingState::NotLoaded) | None => {
+                self.folders.folder_default_row_pending = true;
+                self.folders.selected_dir = Some(0);
+                need_fetch = true;
+            }
+            Some(LoadingState::Error(_)) => {
+                self.folders.folder_default_row_pending = true;
+                self.folders.selected_dir = Some(0);
+                need_fetch = true;
+            }
+        }
+        if need_fetch {
+            self.folders
+                .listings
+                .insert(cur.clone(), LoadingState::Loading);
+            self.fetch_music_directory(cur);
+        }
+        self.sync_folder_preview_from_left();
+    }
+
+    /// Enter the highlighted row in the folders column (root, parent, or subfolder).
+    pub fn folder_activate_selected_dir(&mut self) {
+        if self.folders.path.is_empty() {
+            let roots = match &self.folders.roots {
+                LoadingState::Loaded(r) => r,
+                _ => return,
+            };
+            let indices: Vec<usize> = if let Some(q) = &self.search_filter {
+                roots
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.name.to_lowercase().contains(q.as_str()))
+                    .map(|(i, _)| i)
+                    .collect()
+            } else {
+                (0..roots.len()).collect()
+            };
+            if indices.is_empty() {
+                return;
+            }
+            let pos = self
+                .folders
+                .selected_dir
+                .unwrap_or(0)
+                .min(indices.len() - 1);
+            let slot = indices[pos];
+            let root = &roots[slot];
+            self.folder_enter_music_library_root(root.id.clone(), root.name.clone());
+            return;
+        }
+
+        let listing = match self.folders.current_listing() {
+            Some(LoadingState::Loaded(l)) => l,
+            _ => return,
+        };
+        let sel = self.folders.selected_dir.unwrap_or(0);
+        if sel == 0 {
+            self.folder_go_up();
+            return;
+        }
+        let dir_indices: Vec<usize> = if let Some(q) = &self.search_filter {
+            listing
+                .directories
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, name))| name.to_lowercase().contains(q.as_str()))
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            (0..listing.directories.len()).collect()
+        };
+        let dir_pos = sel.saturating_sub(1);
+        if dir_pos >= dir_indices.len() {
+            return;
+        }
+        let (id, name) = listing.directories[dir_indices[dir_pos]].clone();
+        self.folder_enter(id, name);
+    }
 
     /// Spawn a task to fetch the artist list.
     pub fn fetch_artists(&self) {
@@ -1619,6 +2036,72 @@ impl App {
                 if let Some(ref mut picker) = self.playlist_picker {
                     picker.playlists = playlists;
                     picker.loading = false;
+                }
+            }
+            LibraryUpdate::MusicFolders(result) => {
+                self.folders.roots = match result {
+                    Ok(roots) => {
+                        if self.folders.selected_dir.is_none() && !roots.is_empty() {
+                            self.folders.selected_dir = Some(0);
+                        }
+                        if roots.len() == 1 && self.folders.path.is_empty() {
+                            let id = roots[0].id.clone();
+                            let name = roots[0].name.clone();
+                            self.folder_enter_music_library_root(id, name);
+                        }
+                        LoadingState::Loaded(roots)
+                    }
+                    Err(e) => LoadingState::Error(e),
+                };
+                if self.browse_files() {
+                    self.sync_folder_preview_from_left();
+                }
+            }
+            LibraryUpdate::MusicDirectory { id, result } => {
+                let loaded = match result {
+                    Ok(listing) => LoadingState::Loaded(listing),
+                    Err(e) => LoadingState::Error(e),
+                };
+                self.folders.listings.insert(id.clone(), loaded);
+
+                match self.folders.listings.get(&id) {
+                    Some(LoadingState::Loaded(listing)) => {
+                        if self.browse_files() && self.folders.current_dir_id() == Some(id.as_str())
+                        {
+                            if self.folders.folder_default_row_pending {
+                                let row =
+                                    folder_left_default_row(listing, self.search_filter.as_deref());
+                                self.folders.selected_dir = Some(row);
+                                self.folders.folder_default_row_pending = false;
+                            } else if self.folders.selected_dir.is_none() {
+                                let row =
+                                    folder_left_default_row(listing, self.search_filter.as_deref());
+                                self.folders.selected_dir = Some(row);
+                            }
+                        }
+                    }
+                    Some(LoadingState::Error(_)) => {
+                        if self.browse_files() && self.folders.current_dir_id() == Some(id.as_str())
+                        {
+                            self.folders.folder_default_row_pending = false;
+                        }
+                    }
+                    _ => {}
+                }
+
+                if self.browse_files() {
+                    self.sync_folder_preview_from_left();
+                }
+
+                if let Some(LoadingState::Loaded(listing)) = self.folders.listings.get(&id) {
+                    if self.browse_files()
+                        && self.folders.preview_dir_id.as_deref() == Some(id.as_str())
+                    {
+                        let rows = folder_preview_rows(listing, self.search_filter.as_deref());
+                        let max_r = rows.len().saturating_sub(1);
+                        self.folders.preview_selected_row =
+                            self.folders.preview_selected_row.min(max_r);
+                    }
                 }
             }
             LibraryUpdate::LibraryIndexRefreshComplete { result } => {
@@ -2256,6 +2739,40 @@ impl App {
                 self.search_filter = None;
                 self.apply_pending_artist_select();
             }
+            Action::ToggleBrowserFolder => {
+                self.playlist_overlay.visible = false;
+                self.playlist_picker = None;
+                self.clear_art_on_tab_switch();
+                self.pending_gg = false;
+                if !self.config.browse_folder_navigation {
+                    self.flash_status_secs(
+                        "Folder browse disabled — set [ui.browsetab] folder_navigation = true",
+                        5,
+                    );
+                } else if self.browser_browse_mode == BrowseMode::Genre {
+                    self.flash_status("Genre browse is not implemented (change mode in config)");
+                } else {
+                    self.browser_browse_mode = match self.browser_browse_mode {
+                        BrowseMode::Files => BrowseMode::Artists,
+                        _ => BrowseMode::Files,
+                    };
+                    self.active_tab = Tab::Browser;
+                    self.search_filter = None;
+                    if self.browser_browse_mode == BrowseMode::Files {
+                        if matches!(
+                            &self.folders.roots,
+                            LoadingState::NotLoaded | LoadingState::Error(_)
+                        ) {
+                            self.fetch_music_folders();
+                        }
+                        self.sync_folder_preview_from_left();
+                    }
+                    self.flash_status(match self.browser_browse_mode {
+                        BrowseMode::Files => "Browse: folders",
+                        _ => "Browse: artists / albums / tracks",
+                    });
+                }
+            }
             Action::GoToNowPlaying => {
                 self.playlist_overlay.visible = false;
                 self.playlist_picker = None;
@@ -2706,6 +3223,16 @@ impl App {
             return;
         }
         self.search_filter = None;
+        if self.browse_files() {
+            match self.browser_focus {
+                BrowserColumn::Artists => {
+                    self.browser_focus = BrowserColumn::Tracks;
+                    self.sync_folder_preview_from_left();
+                }
+                BrowserColumn::Albums | BrowserColumn::Tracks => {}
+            }
+            return;
+        }
         match self.browser_focus {
             BrowserColumn::Artists => {
                 if let Some(artist) = self.library.current_artist() {
@@ -2740,6 +3267,16 @@ impl App {
             return;
         }
         self.search_filter = None;
+        if self.browse_files() {
+            match self.browser_focus {
+                BrowserColumn::Tracks => {
+                    self.browser_focus = BrowserColumn::Artists;
+                    self.sync_folder_preview_from_left();
+                }
+                BrowserColumn::Artists | BrowserColumn::Albums => {}
+            }
+            return;
+        }
         self.browser_focus = self.browser_focus.left();
     }
 
@@ -2883,6 +3420,10 @@ impl App {
     }
 
     fn handle_navigate_browser(&mut self, dir: Direction) {
+        if self.browse_files() {
+            self.handle_navigate_browser_files(dir);
+            return;
+        }
         match self.browser_focus {
             BrowserColumn::Artists => {
                 let result = if let LoadingState::Loaded(artists) = &self.library.artists {
@@ -3022,6 +3563,81 @@ impl App {
         }
     }
 
+    fn handle_navigate_browser_files(&mut self, dir: Direction) {
+        let page = self.browser_list_viewport_rows.max(1);
+        match self.browser_focus {
+            BrowserColumn::Artists | BrowserColumn::Albums => {
+                let len = if self.folders.path.is_empty() {
+                    match &self.folders.roots {
+                        LoadingState::Loaded(roots) => {
+                            if let Some(q) = &self.search_filter {
+                                roots
+                                    .iter()
+                                    .filter(|r| r.name.to_lowercase().contains(q.as_str()))
+                                    .count()
+                            } else {
+                                roots.len()
+                            }
+                        }
+                        _ => return,
+                    }
+                } else {
+                    match self.folders.current_listing() {
+                        Some(LoadingState::Loaded(listing)) => {
+                            let sub = if let Some(q) = &self.search_filter {
+                                listing
+                                    .directories
+                                    .iter()
+                                    .filter(|(_, name)| name.to_lowercase().contains(q.as_str()))
+                                    .count()
+                            } else {
+                                listing.directories.len()
+                            };
+                            1 + sub
+                        }
+                        _ => return,
+                    }
+                };
+                if len == 0 {
+                    return;
+                }
+                let cur = self.folders.selected_dir.unwrap_or(0).min(len - 1);
+                let new_pos = match dir {
+                    Direction::Up => cur.saturating_sub(1),
+                    Direction::Down => (cur + 1).min(len - 1),
+                    Direction::Top => 0,
+                    Direction::Bottom => len - 1,
+                    Direction::PageUp => cur.saturating_sub(page),
+                    Direction::PageDown => (cur + page).min(len - 1),
+                };
+                self.folders.selected_dir = Some(new_pos);
+                self.folders.folder_default_row_pending = false;
+                self.sync_folder_preview_from_left();
+            }
+            BrowserColumn::Tracks => {
+                let Some(ref pid) = self.folders.preview_dir_id.clone() else {
+                    return;
+                };
+                if let Some(LoadingState::Loaded(listing)) = self.folders.listings.get(pid) {
+                    let rows = folder_preview_rows(listing, self.search_filter.as_deref());
+                    if rows.is_empty() {
+                        return;
+                    }
+                    let cur_pos = self.folders.preview_selected_row.min(rows.len() - 1);
+                    let new_pos = match dir {
+                        Direction::Up => cur_pos.saturating_sub(1),
+                        Direction::Down => (cur_pos + 1).min(rows.len() - 1),
+                        Direction::Top => 0,
+                        Direction::Bottom => rows.len() - 1,
+                        Direction::PageUp => cur_pos.saturating_sub(page),
+                        Direction::PageDown => (cur_pos + page).min(rows.len() - 1),
+                    };
+                    self.folders.preview_selected_row = new_pos;
+                }
+            }
+        }
+    }
+
     fn handle_navigate_queue(&mut self, dir: Direction) {
         let len = self.queue.songs.len();
         if len == 0 {
@@ -3043,12 +3659,21 @@ impl App {
     fn handle_select(&mut self) {
         match self.active_tab {
             Tab::Home => self.handle_select_home(),
-            Tab::Browser => match self.browser_focus {
-                // Enter on Artists or Albums: same as pressing l
-                BrowserColumn::Artists | BrowserColumn::Albums => self.handle_focus_right(),
-                // Enter on Tracks: add the highlighted track to the queue
-                BrowserColumn::Tracks => self.handle_add_to_queue(),
-            },
+            Tab::Browser => {
+                if self.browse_files() {
+                    match self.browser_focus {
+                        BrowserColumn::Artists | BrowserColumn::Albums => {
+                            self.folder_activate_selected_dir()
+                        }
+                        BrowserColumn::Tracks => self.folder_activate_preview_selection(),
+                    }
+                } else {
+                    match self.browser_focus {
+                        BrowserColumn::Artists | BrowserColumn::Albums => self.handle_focus_right(),
+                        BrowserColumn::Tracks => self.handle_add_to_queue(),
+                    }
+                }
+            }
             Tab::NowPlaying => {
                 // Enter: jump playback to the highlighted queue row.
                 if !self.queue.songs.is_empty() {
@@ -3185,6 +3810,21 @@ impl App {
     // ── Queue helpers ─────────────────────────────────────────────────────────
 
     fn handle_add_to_queue(&mut self) {
+        if self.browse_files() {
+            if let Some(song) = self
+                .folders
+                .current_preview_track(self.search_filter.as_deref())
+                .cloned()
+            {
+                let was_empty = self.queue.songs.is_empty();
+                self.queue.push(song);
+                if was_empty {
+                    self.queue.cursor = 0;
+                    self.play_current();
+                }
+            }
+            return;
+        }
         if let Some(song) = self.library.current_track().cloned() {
             let was_empty = self.queue.songs.is_empty();
             self.queue.push(song);
@@ -3223,6 +3863,54 @@ impl App {
     }
 
     fn handle_add_all_to_queue(&mut self, mode: AddAllMode) {
+        if self.browse_files() {
+            let id = match self.folders.preview_dir_id.clone() {
+                Some(id) => id,
+                None => {
+                    self.flash_status("Nothing to add");
+                    return;
+                }
+            };
+            let songs = match self.folders.listings.get(&id) {
+                Some(LoadingState::Loaded(l)) if !l.tracks.is_empty() => l.tracks.clone(),
+                _ => {
+                    self.flash_status("No tracks in this folder");
+                    return;
+                }
+            };
+            let prepend = matches!(mode, AddAllMode::Prepend);
+            match mode {
+                AddAllMode::ReplaceAlbum | AddAllMode::ReplaceArtist => {
+                    self.queue.songs = songs;
+                    self.queue.cursor = 0;
+                    self.queue.scroll = 0;
+                    self.queue.pre_shuffle_order = None;
+                    let _ = self.player_tx.send(PlayerCommand::Stop);
+                    self.playback.current_song = None;
+                    self.playback.elapsed = std::time::Duration::ZERO;
+                    self.playback.paused = false;
+                    self.playback.player_loaded = false;
+                    if !self.queue.songs.is_empty() {
+                        self.play_current();
+                    }
+                }
+                AddAllMode::Append | AddAllMode::Prepend => {
+                    let was_empty = self.queue.songs.is_empty();
+                    if prepend {
+                        self.queue.prepend_songs(songs);
+                    } else {
+                        for song in songs {
+                            self.queue.push(song);
+                        }
+                    }
+                    if was_empty && !self.queue.songs.is_empty() {
+                        self.queue.cursor = 0;
+                        self.play_current();
+                    }
+                }
+            }
+            return;
+        }
         match mode {
             AddAllMode::ReplaceAlbum => self.handle_replace_queue_with_current_album(),
             AddAllMode::ReplaceArtist => self.handle_replace_queue_with_current_artist(),
@@ -3366,50 +4054,129 @@ impl App {
         }
         match self.active_tab {
             Tab::Home => {} // no search targets yet
-            Tab::Browser => match self.browser_focus {
-                BrowserColumn::Artists => {
-                    if let crate::state::LoadingState::Loaded(artists) = &self.library.artists {
-                        if let Some(idx) = artists
-                            .iter()
-                            .position(|a| a.name.to_lowercase().contains(&q))
-                        {
-                            self.library.selected_artist = Some(idx);
+            Tab::Browser => {
+                if self.browse_files() {
+                    match self.browser_focus {
+                        BrowserColumn::Artists | BrowserColumn::Albums => {
+                            if self.folders.path.is_empty() {
+                                if let LoadingState::Loaded(roots) = &self.folders.roots {
+                                    let filtered_slots: Vec<usize> =
+                                        if let Some(sf) = &self.search_filter {
+                                            roots
+                                                .iter()
+                                                .enumerate()
+                                                .filter(|(_, r)| {
+                                                    r.name.to_lowercase().contains(sf.as_str())
+                                                })
+                                                .map(|(i, _)| i)
+                                                .collect()
+                                        } else {
+                                            (0..roots.len()).collect()
+                                        };
+                                    if let Some(visible_pos) =
+                                        filtered_slots.iter().position(|&slot| {
+                                            roots[slot].name.to_lowercase().contains(&q)
+                                        })
+                                    {
+                                        self.folders.selected_dir = Some(visible_pos);
+                                    }
+                                }
+                            } else if let Some(LoadingState::Loaded(listing)) =
+                                self.folders.current_listing()
+                            {
+                                let dir_indices: Vec<usize> = if let Some(sf) = &self.search_filter
+                                {
+                                    listing
+                                        .directories
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, (_, n))| {
+                                            n.to_lowercase().contains(sf.as_str())
+                                        })
+                                        .map(|(i, _)| i)
+                                        .collect()
+                                } else {
+                                    (0..listing.directories.len()).collect()
+                                };
+                                if let Some(dp) = dir_indices.iter().position(|&orig_i| {
+                                    listing.directories[orig_i].1.to_lowercase().contains(&q)
+                                }) {
+                                    self.folders.selected_dir = Some(1 + dp);
+                                }
+                            }
+                            self.folders.folder_default_row_pending = false;
+                            self.sync_folder_preview_from_left();
+                        }
+                        BrowserColumn::Tracks => {
+                            if let Some(ref pid) = self.folders.preview_dir_id.clone() {
+                                if let Some(LoadingState::Loaded(listing)) =
+                                    self.folders.listings.get(pid)
+                                {
+                                    let rows =
+                                        folder_preview_rows(listing, self.search_filter.as_deref());
+                                    if let Some(ix) = rows.iter().position(|row| match row {
+                                        FolderPreviewRow::Dir(i) => {
+                                            listing.directories[*i].1.to_lowercase().contains(&q)
+                                        }
+                                        FolderPreviewRow::Track(i) => {
+                                            listing.tracks[*i].title.to_lowercase().contains(&q)
+                                        }
+                                    }) {
+                                        self.folders.preview_selected_row = ix;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    match self.browser_focus {
+                        BrowserColumn::Artists => {
+                            if let crate::state::LoadingState::Loaded(artists) =
+                                &self.library.artists
+                            {
+                                if let Some(idx) = artists
+                                    .iter()
+                                    .position(|a| a.name.to_lowercase().contains(&q))
+                                {
+                                    self.library.selected_artist = Some(idx);
+                                }
+                            }
+                        }
+                        BrowserColumn::Albums => {
+                            let artist_id = match self.library.current_artist() {
+                                Some(a) => a.id.clone(),
+                                None => return,
+                            };
+                            if let Some(crate::state::LoadingState::Loaded(albums)) =
+                                self.library.albums.get(&artist_id)
+                            {
+                                if let Some(idx) = albums
+                                    .iter()
+                                    .position(|a| a.name.to_lowercase().contains(&q))
+                                {
+                                    self.library.selected_album = Some(idx);
+                                }
+                            }
+                        }
+                        BrowserColumn::Tracks => {
+                            let album_id = match self.library.current_album() {
+                                Some(a) => a.id.clone(),
+                                None => return,
+                            };
+                            if let Some(crate::state::LoadingState::Loaded(songs)) =
+                                self.library.tracks.get(&album_id)
+                            {
+                                if let Some(idx) = songs
+                                    .iter()
+                                    .position(|s| s.title.to_lowercase().contains(&q))
+                                {
+                                    self.library.selected_track = Some(idx);
+                                }
+                            }
                         }
                     }
                 }
-                BrowserColumn::Albums => {
-                    let artist_id = match self.library.current_artist() {
-                        Some(a) => a.id.clone(),
-                        None => return,
-                    };
-                    if let Some(crate::state::LoadingState::Loaded(albums)) =
-                        self.library.albums.get(&artist_id)
-                    {
-                        if let Some(idx) = albums
-                            .iter()
-                            .position(|a| a.name.to_lowercase().contains(&q))
-                        {
-                            self.library.selected_album = Some(idx);
-                        }
-                    }
-                }
-                BrowserColumn::Tracks => {
-                    let album_id = match self.library.current_album() {
-                        Some(a) => a.id.clone(),
-                        None => return,
-                    };
-                    if let Some(crate::state::LoadingState::Loaded(songs)) =
-                        self.library.tracks.get(&album_id)
-                    {
-                        if let Some(idx) = songs
-                            .iter()
-                            .position(|s| s.title.to_lowercase().contains(&q))
-                        {
-                            self.library.selected_track = Some(idx);
-                        }
-                    }
-                }
-            },
+            }
             Tab::NowPlaying => {
                 if let Some(idx) = self
                     .queue
@@ -3503,6 +4270,37 @@ impl App {
                 .tracks
                 .insert(album_id.clone(), LoadingState::Loading);
             self.fetch_tracks(album_id);
+        }
+    }
+
+    pub fn click_folder_dir(&mut self, visible_pos: usize) {
+        self.folders.folder_default_row_pending = false;
+        self.folders.selected_dir = Some(visible_pos);
+        self.folder_activate_selected_dir();
+    }
+
+    pub fn click_folder_preview_row(&mut self, visible_row: usize) {
+        let Some(ref pid) = self.folders.preview_dir_id.clone() else {
+            return;
+        };
+        let listing = match self.folders.listings.get(pid) {
+            Some(LoadingState::Loaded(l)) => l,
+            _ => return,
+        };
+        let rows = folder_preview_rows(listing, self.search_filter.as_deref());
+        if rows.is_empty() {
+            return;
+        }
+        let vh = self.browser_list_viewport_rows.max(1);
+        let sel_pos = self
+            .folders
+            .preview_selected_row
+            .min(rows.len().saturating_sub(1));
+        FolderBrowseState::clamp_scroll(&mut self.folders.tracks_scroll, sel_pos, rows.len(), vh);
+        let scroll = self.folders.tracks_scroll;
+        let clicked = scroll + visible_row;
+        if clicked < rows.len() {
+            self.folders.preview_selected_row = clicked;
         }
     }
 
@@ -3791,7 +4589,13 @@ impl App {
                 }
             }
             Action::BrowserAddToPlaylist => {
-                if let Some(song) = self.library.current_track() {
+                let song = if self.browse_files() {
+                    self.folders
+                        .current_preview_track(self.search_filter.as_deref())
+                } else {
+                    self.library.current_track()
+                };
+                if let Some(song) = song {
                     let song_id = song.id.clone();
                     match &self.playlist_overlay.playlists {
                         LoadingState::Loaded(playlists) => {

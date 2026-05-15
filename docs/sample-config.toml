@@ -124,6 +124,7 @@ mpris = true
 # home_section_next   = "Shift+j"   # home: focus next panel block
 # home_section_prev   = "Shift+k"
 # home_refresh        = "r"          # home: refresh / re-roll where applicable
+# toggle_folder_browse = "Ctrl+b"   # browse: toggle folder view (needs [ui.browsetab] folder_navigation); "" disables
 
 # -----------------------------------------------------------------------------
 # [theme]
@@ -245,9 +246,15 @@ panels = ["recent_albums", "recent_tracks", "rediscover"]
 # [ui.browsetab]
 # -----------------------------------------------------------------------------
 #
-# mode — "artists" (implemented), "genre" / "files" (placeholders: use artists).
+# folder_navigation — When true, Ctrl+b toggles the Browse tab between the
+#   normal artist/album/track columns and folder view (getMusicFolders for
+#   libraries, getIndexes + getMusicDirectory under the hood). Default: false.
+# mode — Default layout on startup when folder_navigation is true: "artists" or
+#   "files". When folder_navigation is false, the Browse tab always starts as
+#   artists. "genre" is still a stub.
 
 [ui.browsetab]
+folder_navigation = false
 mode = "artists"
 
 # -----------------------------------------------------------------------------
@@ -318,8 +325,6 @@ location = "right"
 #   - "gradient_theme" ignores this list and uses theme dimmed→foreground→accent.
 #   - "#RRGGBB" uses truecolor.
 #   - "0".."255" uses 256-color indices.
-# tmux + gradient_theme / gradient_height with indexed or reset colours: enable palette readback
-#   on the outer terminal by adding to ~/.tmux.conf:  set -g allow-passthrough on
 #   (tmux 3.2+). Ratune wraps OSC queries in DCS passthrough when $TMUX is set.
 type = "spectrum"
 fps = 30

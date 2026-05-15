@@ -23,6 +23,8 @@ pub enum Action {
     GoToHome,
     /// Jump directly to Browser tab (key '2')
     GoToBrowser,
+    /// Toggle Browse tab between artist columns and folder layout (requires config).
+    ToggleBrowserFolder,
     /// Jump directly to NowPlaying tab (key '3')
     GoToNowPlaying,
     FocusLeft,

@@ -99,6 +99,8 @@ pub struct KeybindsSection {
     pub home_section_prev: Option<String>,
     /// Home: re-roll / refresh. Default: r
     pub home_refresh: Option<String>,
+    /// Browse: toggle folder navigation (requires `[ui.browsetab] folder_navigation`). Default: Ctrl+b
+    pub toggle_folder_browse: Option<String>,
 }
 
 // ── [theme] ───────────────────────────────────────────────────────────────────
@@ -392,7 +394,12 @@ pub struct UiHomeTabSection {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct UiBrowseTabSection {
-    /// `artists` (default), `genre`, or `files`. Genre/files are placeholders until implemented.
+    /// When true, folder (`getMusicFolders` / `getMusicDirectory`) browsing is available and
+    /// the configured key toggles between artist columns and folder view. Default: false.
+    #[serde(default)]
+    pub folder_navigation: Option<bool>,
+    /// Default browse layout on startup: `artists` (default), `genre` (stub), or `files` (only
+    /// applies when [`folder_navigation`](Self::folder_navigation) is true).
     #[serde(default)]
     pub mode: Option<String>,
 }
@@ -577,7 +584,7 @@ fn parse_home_panels(v: Option<Vec<String>>) -> [HomePanel; 3] {
     out
 }
 
-/// Browse tab mode (`artists` is the only fully implemented path today).
+/// Browse tab mode: `artists` (artist/album/track) or `files` (folder navigation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BrowseMode {
     #[default]
@@ -786,6 +793,8 @@ pub struct Config {
     pub home_panels: [HomePanel; 3],
     /// Browse tab: `artists` (default), or placeholder `genre` / `files`.
     pub browse_mode: BrowseMode,
+    /// When true, folder browsing can be toggled with the keybind and used from the Browse tab.
+    pub browse_folder_navigation: bool,
 }
 
 impl Config {
@@ -1048,6 +1057,11 @@ impl Config {
             .and_then(|b| b.mode.as_deref())
             .and_then(BrowseMode::parse)
             .unwrap_or_default();
+        let browse_folder_navigation = ui
+            .browsetab
+            .as_ref()
+            .and_then(|b| b.folder_navigation)
+            .unwrap_or(false);
 
         Ok(Config {
             subsonic_url: file_cfg.server.url,
@@ -1106,6 +1120,7 @@ impl Config {
             home_top_height_percent,
             home_panels,
             browse_mode,
+            browse_folder_navigation,
         })
     }
 

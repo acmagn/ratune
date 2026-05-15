@@ -238,7 +238,11 @@ fn query_tty_raw(query: &str) -> Option<String> {
     use std::io::{Read, Write};
     use std::time::{Duration, Instant};
 
-    let mut tty = OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?;
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()?;
     if crossterm::terminal::enable_raw_mode().is_err() {
         return None;
     }
