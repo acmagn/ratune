@@ -367,6 +367,8 @@ pub struct App {
     /// Terminal cell pixel dimensions `(width_px, height_px)`.
     /// Queried once at startup; `None` if unavailable (fallback: 8×16).
     pub cell_px: Option<(u16, u16)>,
+    /// OSC 4 / OSC 10 readback for smooth visualizer gradients with indexed or reset colours.
+    pub visualizer_gradient_rgb_cache: Option<crate::ui::terminal_palette::GradientRgbCache>,
     /// Cached cover art: `(cover_art_id, raw_image_bytes)`.
     /// Updated whenever a new track starts with a different cover ID.
     pub art_cache: Option<(String, Vec<u8>)>,
@@ -568,6 +570,7 @@ impl App {
             in_tmux: false,
             tmux_status_offset: 0,
             cell_px: None,
+            visualizer_gradient_rgb_cache: None,
             art_cache: None,
             art_cache_fingerprint: None,
             art_cache_decoded: None,

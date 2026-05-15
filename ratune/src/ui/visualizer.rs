@@ -25,6 +25,8 @@ use ratatui::Frame;
 
 use crate::theme::Theme;
 
+use super::terminal_palette::{stop_to_rgb, GradientRgbCache};
+
 /// Braille codepoints for 0-4 left-column dots filled from the bottom.
 /// Index = number of filled dots.
 const LEFT_COL: [u32; 5] = [
@@ -54,13 +56,23 @@ pub fn render_visualizer_ex(
     color_mode: &str,
     colors: &[String],
     accent: Color,
+    gradient_rgb_cache: Option<&GradientRgbCache>,
 ) {
     if area.width == 0 || area.height == 0 || bands.is_empty() {
         // For waveform, bands may be empty; handle below.
     }
     let vtype = visualizer_type.trim().to_lowercase();
     if vtype.as_str() == "wave" {
-        render_wave(f, area, theme, waveform, color_mode, colors, accent);
+        render_wave(
+            f,
+            area,
+            theme,
+            waveform,
+            color_mode,
+            colors,
+            accent,
+            gradient_rgb_cache,
+        );
         return;
     }
 
@@ -118,6 +130,8 @@ pub fn render_visualizer_ex(
                     color_mode,
                     colors,
                     accent,
+                    gradient_rgb_cache,
+                    i,
                 )),
             )));
         }
@@ -132,6 +146,8 @@ pub fn render_visualizer_ex(
                     color_mode,
                     colors,
                     accent,
+                    gradient_rgb_cache,
+                    i,
                 )),
             )));
         }
@@ -143,6 +159,7 @@ pub fn render_visualizer_ex(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_wave(
     f: &mut Frame,
     area: Rect,
@@ -151,6 +168,7 @@ fn render_wave(
     color_mode: &str,
     colors: &[String],
     accent: Color,
+    gradient_rgb_cache: Option<&GradientRgbCache>,
 ) {
     if area.width == 0 || area.height == 0 || waveform.is_empty() {
         return;
@@ -186,7 +204,16 @@ fn render_wave(
         let y1 = y_min.max(y_max).clamp(0, (h as i32).saturating_sub(1));
 
         for yy in y0..=y1 {
-            let color = color_for_row(yy as usize, h, theme, color_mode, colors, accent);
+            let color = color_for_row(
+                yy as usize,
+                h,
+                theme,
+                color_mode,
+                colors,
+                accent,
+                gradient_rgb_cache,
+                x,
+            );
             // Keep the waveform readable (min/max envelope) but render with simple,
             // widely-supported glyphs.
             let ch = "•";
@@ -198,6 +225,7 @@ fn render_wave(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn color_for_row(
     row: usize,
     height: usize,
@@ -205,6 +233,8 @@ fn color_for_row(
     color_mode: &str,
     colors: &[String],
     accent: Color,
+    gradient_rgb_cache: Option<&GradientRgbCache>,
+    dither_col: usize,
 ) -> Color {
     let mode = color_mode.trim().to_lowercase();
     match mode.as_str() {
@@ -216,7 +246,13 @@ fn color_for_row(
             // Theme palette gradient: dimmed → foreground → accent (top).
             // This stays "in theme" and works well with dynamic accent mode.
             let stops = [theme.dimmed, theme.foreground, accent];
-            gradient_color(stops.as_slice(), row, height)
+            gradient_color(
+                stops.as_slice(),
+                row,
+                height,
+                gradient_rgb_cache,
+                dither_col,
+            )
         }
         "gradient_height" => {
             if colors.is_empty() {
@@ -226,13 +262,25 @@ fn color_for_row(
                 return parse_color_spec(&colors[0], accent);
             }
             let parsed: Vec<Color> = colors.iter().map(|c| parse_color_spec(c, accent)).collect();
-            gradient_color(&parsed, row, height)
+            gradient_color(
+                &parsed,
+                row,
+                height,
+                gradient_rgb_cache,
+                dither_col,
+            )
         }
         _ => accent, // "accent"
     }
 }
 
-fn gradient_color(stops: &[Color], row: usize, height: usize) -> Color {
+fn gradient_color(
+    stops: &[Color],
+    row: usize,
+    height: usize,
+    cache: Option<&GradientRgbCache>,
+    dither_col: usize,
+) -> Color {
     if stops.is_empty() {
         return Color::Reset;
     }
@@ -247,27 +295,41 @@ fn gradient_color(stops: &[Color], row: usize, height: usize) -> Color {
     let frac = pos - (i as f32);
     let a = stops[i];
     let b = stops[(i + 1).min(stops.len() - 1)];
-    lerp_color(a, b, frac)
+    lerp_color(a, b, frac, cache, row, dither_col)
 }
 
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    match (a, b) {
-        (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => {
-            let lerp = |x: u8, y: u8| -> u8 {
+/// Bayer 4×4 for ordered dither when OSC readback is missing or incomplete.
+const BAYER4: [[u8; 4]; 4] = [
+    [0, 8, 2, 10],
+    [12, 4, 14, 6],
+    [3, 11, 1, 9],
+    [15, 7, 13, 5],
+];
+
+#[inline]
+fn dither_two_colors(a: Color, b: Color, frac: f32, row: usize, col: usize) -> Color {
+    let m = BAYER4[row % 4][col % 4] as f32;
+    if frac * 16.0 > m { b } else { a }
+}
+
+fn lerp_color(
+    a: Color,
+    b: Color,
+    t: f32,
+    cache: Option<&GradientRgbCache>,
+    row: usize,
+    col: usize,
+) -> Color {
+    match (stop_to_rgb(a, cache), stop_to_rgb(b, cache)) {
+        (Some((ar, ag, ab)), Some((br, bg, bb))) => {
+            let lerp_u8 = |x: u8, y: u8| -> u8 {
                 (x as f32 + (y as f32 - x as f32) * t)
                     .round()
                     .clamp(0.0, 255.0) as u8
             };
-            Color::Rgb(lerp(ar, br), lerp(ag, bg), lerp(ab, bb))
+            Color::Rgb(lerp_u8(ar, br), lerp_u8(ag, bg), lerp_u8(ab, bb))
         }
-        // For indexed/other color types, fall back to nearest stop (discrete gradient).
-        _ => {
-            if t < 0.5 {
-                a
-            } else {
-                b
-            }
-        }
+        _ => dither_two_colors(a, b, t, row, col),
     }
 }
 

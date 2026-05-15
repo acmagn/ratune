@@ -13,6 +13,7 @@ pub mod popup;
 pub mod queue;
 pub mod status_bar;
 pub mod tab_bar;
+pub mod terminal_palette;
 pub mod tracks;
 pub mod visualizer;
 

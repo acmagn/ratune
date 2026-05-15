@@ -318,6 +318,9 @@ location = "right"
 #   - "gradient_theme" ignores this list and uses theme dimmed→foreground→accent.
 #   - "#RRGGBB" uses truecolor.
 #   - "0".."255" uses 256-color indices.
+# tmux + gradient_theme / gradient_height with indexed or reset colours: enable palette readback
+#   on the outer terminal by adding to ~/.tmux.conf:  set -g allow-passthrough on
+#   (tmux 3.2+). Ratune wraps OSC queries in DCS passthrough when $TMUX is set.
 type = "spectrum"
 fps = 30
 fft_size = 2048

@@ -209,6 +209,7 @@ fn render_visualizer_pane(app: &App, frame: &mut Frame, area: Rect) {
         &app.config.visualizer_color_mode,
         &app.config.visualizer_colors,
         accent,
+        app.visualizer_gradient_rgb_cache.as_ref(),
     );
 }
 

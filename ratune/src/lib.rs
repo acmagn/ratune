@@ -59,6 +59,13 @@ pub async fn run() -> Result<()> {
         app.tmux_status_offset = tmux_status_offset();
     }
 
+    app.visualizer_gradient_rgb_cache =
+        ui::terminal_palette::try_query_visualizer_gradient_cache(
+            &app.theme,
+            &app.config,
+            app.in_tmux,
+        );
+
     // kitty-apc backend: probe before raw mode / alternate screen (see `kitty_art`).
     // `ratatui-image` uses `Picker::from_query_stdio()` after the alternate screen.
     match app.config.album_art_backend {
