@@ -2456,7 +2456,7 @@ dependencies = [
 
 [[package]]
 name = "ratune"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
