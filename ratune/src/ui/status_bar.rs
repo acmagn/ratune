@@ -46,7 +46,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 
     let line = if app.search_mode.active {
         Line::from(vec![
-            Span::styled("/ ", Style::default().fg(app.accent())),
+            Span::styled("Search: ", Style::default().fg(app.accent())),
             Span::styled(
                 app.search_mode.query.as_str(),
                 Style::default().fg(t.foreground),
@@ -54,12 +54,22 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled("_", Style::default().fg(app.accent())),
             Span::raw("   "),
             Span::styled("Enter", Style::default().fg(t.dimmed)),
-            Span::raw(" "),
-            Span::styled("Confirm", Style::default().fg(app.accent())),
-            Span::styled("  │  ", Style::default().fg(t.dimmed)),
+            Span::raw(" apply  "),
             Span::styled("Esc", Style::default().fg(t.dimmed)),
-            Span::raw(" "),
-            Span::styled("Cancel", Style::default().fg(app.accent())),
+            Span::raw(" / "),
+            Span::styled("Ctrl+C", Style::default().fg(t.dimmed)),
+            Span::raw(" cancel"),
+        ])
+    } else if app.search_filter.is_some() {
+        let q = app.search_filter.as_deref().unwrap_or("");
+        Line::from(vec![
+            Span::styled("Filter: ", Style::default().fg(app.accent())),
+            Span::styled(q, Style::default().fg(t.foreground)),
+            Span::raw("   "),
+            Span::styled("Esc", Style::default().fg(t.dimmed)),
+            Span::raw(" / "),
+            Span::styled("Ctrl+C", Style::default().fg(t.dimmed)),
+            Span::raw(" clear"),
         ])
     } else if app.library_index_refreshing {
         let w = area.width as usize;

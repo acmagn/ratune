@@ -3,7 +3,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, BrowserColumn};
 use crate::state::{LibraryState, LoadingState};
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
@@ -49,11 +49,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         }
         LoadingState::Loaded(artists) => {
             // Build (original_index, name) pairs, filtered when search is active.
-            let visible: Vec<(usize, &str)> = if let Some(q) = &app.search_filter {
+            let visible: Vec<(usize, &str)> =
+                if let Some(q) = app.browser_column_filter(BrowserColumn::Artists) {
                 artists
                     .iter()
                     .enumerate()
-                    .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
+                    .filter(|(_, a)| a.name.to_lowercase().contains(q))
                     .map(|(i, a)| (i, a.name.as_str()))
                     .collect()
             } else {

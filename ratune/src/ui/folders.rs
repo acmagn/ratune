@@ -3,7 +3,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, BrowserColumn};
 use crate::config::BrowseMode;
 use crate::state::{FolderBrowseState, LoadingState};
 
@@ -63,10 +63,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             LoadingState::Loaded(roots) => {
                 if roots.is_empty() {
                     vec!["No music folders".into()]
-                } else if let Some(q) = &app.search_filter {
+                } else if let Some(q) = app.browser_column_filter(BrowserColumn::Artists) {
                     roots
                         .iter()
-                        .filter(|r| r.name.to_lowercase().contains(q.as_str()))
+                        .filter(|r| r.name.to_lowercase().contains(q))
                         .map(|r| r.name.clone())
                         .collect()
                 } else {
@@ -84,11 +84,13 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             }
             Some(LoadingState::Loaded(listing)) => {
                 let mut out = vec!["..".to_string()];
-                let dirs: Vec<String> = if let Some(q) = &app.search_filter {
+                let dirs: Vec<String> = if let Some(q) =
+                    app.browser_column_filter(BrowserColumn::Artists)
+                {
                     listing
                         .directories
                         .iter()
-                        .filter(|(_, name)| name.to_lowercase().contains(q.as_str()))
+                        .filter(|(_, name)| name.to_lowercase().contains(q))
                         .map(|(_, name)| name.clone())
                         .collect()
                 } else {

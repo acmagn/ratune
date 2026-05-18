@@ -134,6 +134,21 @@ pub enum BrowserColumn {
     Tracks,
 }
 
+impl App {
+    /// Filter string for a browser column, if search was confirmed while that column was focused.
+    pub fn browser_column_filter(&self, column: BrowserColumn) -> Option<&str> {
+        match (&self.search_filter, self.search_filter_column) {
+            (Some(q), Some(col)) if col == column => Some(q.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn clear_browser_search(&mut self) {
+        self.search_filter = None;
+        self.search_filter_column = None;
+    }
+}
+
 impl BrowserColumn {
     pub fn left(self) -> Self {
         match self {
@@ -363,9 +378,13 @@ pub struct App {
     pub player_join: Option<std::thread::JoinHandle<()>>,
     pub should_quit: bool,
     pub search_mode: SearchMode,
-    /// Active filter applied to the current browser column after a search confirm.
+    /// Active filter applied to one browser column after a search confirm.
     /// `None` = show all items; `Some(q)` = show only items whose name contains `q`.
     pub search_filter: Option<String>,
+    /// Column that owns `search_filter` (filters apply only to that column).
+    pub search_filter_column: Option<BrowserColumn>,
+    /// Filter active before `/` opened search input; restored on Esc cancel.
+    search_filter_before_edit: Option<(BrowserColumn, String)>,
     /// Whether the running terminal supports the Kitty graphics protocol.
     /// Set once by `main` before the TUI loop starts.
     pub kitty_supported: bool,
@@ -585,6 +604,8 @@ impl App {
             should_quit: false,
             search_mode: SearchMode::default(),
             search_filter: None,
+            search_filter_column: None,
+            search_filter_before_edit: None,
             kitty_supported: false,
             in_tmux: false,
             tmux_status_offset: 0,
@@ -1099,11 +1120,13 @@ impl App {
             if roots.is_empty() {
                 return None;
             }
-            let indices: Vec<usize> = if let Some(q) = &self.search_filter {
+            let indices: Vec<usize> = if let Some(q) =
+                self.browser_column_filter(BrowserColumn::Artists)
+            {
                 roots
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| r.name.to_lowercase().contains(q.as_str()))
+                    .filter(|(_, r)| r.name.to_lowercase().contains(q))
                     .map(|(i, _)| i)
                     .collect()
             } else {
@@ -1131,12 +1154,14 @@ impl App {
                 LoadingState::Loaded(l) => l,
                 _ => return None,
             };
-            let dir_indices: Vec<usize> = if let Some(q) = &self.search_filter {
+            let dir_indices: Vec<usize> = if let Some(q) =
+                self.browser_column_filter(BrowserColumn::Artists)
+            {
                 listing
                     .directories
                     .iter()
                     .enumerate()
-                    .filter(|(_, (_, name))| name.to_lowercase().contains(q.as_str()))
+                    .filter(|(_, (_, name))| name.to_lowercase().contains(q))
                     .map(|(i, _)| i)
                     .collect()
             } else {
@@ -1265,7 +1290,10 @@ impl App {
             Some(LoadingState::Loaded(l)) => l,
             _ => return,
         };
-        let rows = folder_preview_rows(listing, self.search_filter.as_deref());
+        let rows = folder_preview_rows(
+            listing,
+            self.browser_column_filter(BrowserColumn::Tracks),
+        );
         if rows.is_empty() {
             return;
         }
@@ -1293,6 +1321,65 @@ impl App {
         }
     }
 
+    /// Tracks from the folder preview pane for queue bulk-add (`A` / Ctrl+r).
+    fn folder_preview_songs_for_queue(&mut self) -> Option<Vec<ratune_subsonic::Song>> {
+        self.sync_folder_preview_from_left();
+        let id = match self.folders.preview_dir_id.clone() {
+            Some(id) => id,
+            None => {
+                self.flash_status("Select a folder to preview");
+                return None;
+            }
+        };
+        let listing = match self.folders.listings.get(&id) {
+            Some(LoadingState::Loaded(l)) => l,
+            Some(LoadingState::Loading) => {
+                self.flash_status_secs("Folder still loading…", 3);
+                return None;
+            }
+            _ => {
+                self.flash_status("No tracks in this folder");
+                return None;
+            }
+        };
+        let filter = self.browser_column_filter(BrowserColumn::Tracks);
+        let mut songs: Vec<ratune_subsonic::Song> = if filter.is_some() {
+            folder_preview_rows(listing, filter)
+                .into_iter()
+                .filter_map(|row| match row {
+                    FolderPreviewRow::Track(i) => listing.tracks.get(i).cloned(),
+                    FolderPreviewRow::Dir(_) => None,
+                })
+                .collect()
+        } else {
+            listing.tracks.clone()
+        };
+        if songs.is_empty() {
+            self.flash_status(if filter.is_some() {
+                "No matching tracks"
+            } else {
+                "No tracks in this folder"
+            });
+            return None;
+        }
+        songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
+        Some(songs)
+    }
+
+    fn flash_queue_bulk_add(&mut self, n: usize, replaced: bool) {
+        if replaced {
+            if n == 1 {
+                self.flash_status_secs("Replaced queue with 1 track", 3);
+            } else {
+                self.flash_status_secs(format!("Replaced queue with {n} tracks"), 3);
+            }
+        } else if n == 1 {
+            self.flash_status_secs("Added 1 track to queue", 3);
+        } else {
+            self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
+        }
+    }
+
     /// Open the **music folder row** using its API `id` (scoped via `getIndexes?musicFolderId=`).
     pub fn folder_enter_music_library_root(
         &mut self,
@@ -1312,7 +1399,10 @@ impl App {
         match self.folders.listings.get(&id) {
             Some(LoadingState::Loaded(listing)) => {
                 self.folders.folder_default_row_pending = false;
-                let row = folder_left_default_row(listing, self.search_filter.as_deref());
+                let row = folder_left_default_row(
+                    listing,
+                    self.browser_column_filter(BrowserColumn::Artists),
+                );
                 self.folders.selected_dir = Some(row);
             }
             Some(LoadingState::Loading) => {
@@ -1362,7 +1452,10 @@ impl App {
         match self.folders.listings.get(&cur) {
             Some(LoadingState::Loaded(listing)) => {
                 self.folders.folder_default_row_pending = false;
-                let row = folder_left_default_row(listing, self.search_filter.as_deref());
+                let row = folder_left_default_row(
+                    listing,
+                    self.browser_column_filter(BrowserColumn::Artists),
+                );
                 self.folders.selected_dir = Some(row);
             }
             Some(LoadingState::Loading) => {
@@ -1396,11 +1489,13 @@ impl App {
                 LoadingState::Loaded(r) => r,
                 _ => return,
             };
-            let indices: Vec<usize> = if let Some(q) = &self.search_filter {
+            let indices: Vec<usize> = if let Some(q) =
+                self.browser_column_filter(BrowserColumn::Artists)
+            {
                 roots
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| r.name.to_lowercase().contains(q.as_str()))
+                    .filter(|(_, r)| r.name.to_lowercase().contains(q))
                     .map(|(i, _)| i)
                     .collect()
             } else {
@@ -1429,12 +1524,14 @@ impl App {
             self.folder_go_up();
             return;
         }
-        let dir_indices: Vec<usize> = if let Some(q) = &self.search_filter {
+        let dir_indices: Vec<usize> = if let Some(q) =
+            self.browser_column_filter(BrowserColumn::Artists)
+        {
             listing
                 .directories
                 .iter()
                 .enumerate()
-                .filter(|(_, (_, name))| name.to_lowercase().contains(q.as_str()))
+                .filter(|(_, (_, name))| name.to_lowercase().contains(q))
                 .map(|(i, _)| i)
                 .collect()
         } else {
@@ -2069,13 +2166,17 @@ impl App {
                         if self.browse_files() && self.folders.current_dir_id() == Some(id.as_str())
                         {
                             if self.folders.folder_default_row_pending {
-                                let row =
-                                    folder_left_default_row(listing, self.search_filter.as_deref());
+                                let row = folder_left_default_row(
+                                    listing,
+                                    self.browser_column_filter(BrowserColumn::Artists),
+                                );
                                 self.folders.selected_dir = Some(row);
                                 self.folders.folder_default_row_pending = false;
                             } else if self.folders.selected_dir.is_none() {
-                                let row =
-                                    folder_left_default_row(listing, self.search_filter.as_deref());
+                                let row = folder_left_default_row(
+                                    listing,
+                                    self.browser_column_filter(BrowserColumn::Artists),
+                                );
                                 self.folders.selected_dir = Some(row);
                             }
                         }
@@ -2097,7 +2198,10 @@ impl App {
                     if self.browse_files()
                         && self.folders.preview_dir_id.as_deref() == Some(id.as_str())
                     {
-                        let rows = folder_preview_rows(listing, self.search_filter.as_deref());
+                        let rows = folder_preview_rows(
+                            listing,
+                            self.browser_column_filter(BrowserColumn::Tracks),
+                        );
                         let max_r = rows.len().saturating_sub(1);
                         self.folders.preview_selected_row =
                             self.folders.preview_selected_row.min(max_r);
@@ -2703,7 +2807,7 @@ impl App {
                 self.playlist_picker = None;
                 self.clear_art_on_tab_switch();
                 self.active_tab = self.active_tab.next();
-                self.search_filter = None;
+                self.clear_browser_search();
                 if self.active_tab == Tab::Home {
                     self.refresh_home_data();
                     self.home_art_needs_redraw = true;
@@ -2714,7 +2818,7 @@ impl App {
                 self.playlist_picker = None;
                 self.clear_art_on_tab_switch();
                 self.active_tab = self.active_tab.prev();
-                self.search_filter = None;
+                self.clear_browser_search();
                 if self.active_tab == Tab::Home {
                     self.refresh_home_data();
                     self.home_art_needs_redraw = true;
@@ -2727,7 +2831,7 @@ impl App {
                     let _ = crate::ui::kitty_art::clear_image(self.in_tmux);
                 }
                 self.active_tab = Tab::Home;
-                self.search_filter = None;
+                self.clear_browser_search();
                 self.refresh_home_data();
                 self.home_art_needs_redraw = true;
             }
@@ -2736,7 +2840,7 @@ impl App {
                 self.playlist_picker = None;
                 self.clear_art_on_tab_switch();
                 self.active_tab = Tab::Browser;
-                self.search_filter = None;
+                self.clear_browser_search();
                 self.apply_pending_artist_select();
             }
             Action::ToggleBrowserFolder => {
@@ -2757,7 +2861,7 @@ impl App {
                         _ => BrowseMode::Files,
                     };
                     self.active_tab = Tab::Browser;
-                    self.search_filter = None;
+                    self.clear_browser_search();
                     if self.browser_browse_mode == BrowseMode::Files {
                         if matches!(
                             &self.folders.roots,
@@ -2784,7 +2888,7 @@ impl App {
                 self.playlist_picker = None;
                 self.clear_art_on_tab_switch();
                 self.active_tab = Tab::NowPlaying;
-                self.search_filter = None;
+                self.clear_browser_search();
             }
             Action::FocusLeft => self.handle_focus_left(),
             Action::FocusRight => self.handle_focus_right(),
@@ -2889,11 +2993,16 @@ impl App {
             }
             Action::SearchStart => {
                 self.pending_gg = false;
+                self.search_filter_before_edit = match (&self.search_filter, self.search_filter_column)
+                {
+                    (Some(q), Some(col)) => Some((col, q.clone())),
+                    _ => None,
+                };
                 self.search_mode.active = true;
                 self.search_mode.query.clear();
                 self.search_mode.selected = 0;
-                // Starting a new search clears the previous filter.
-                self.search_filter = None;
+                // Starting a new search clears the previous filter while typing.
+                self.clear_browser_search();
             }
             Action::SearchInput(ch) => {
                 if self.search_mode.active {
@@ -2911,13 +3020,15 @@ impl App {
                 if self.search_mode.active {
                     let q = self.search_mode.query.to_lowercase();
                     if q.is_empty() {
-                        self.search_filter = None;
+                        self.clear_browser_search();
                     } else {
                         self.search_filter = Some(q);
+                        self.search_filter_column = Some(self.browser_focus);
                     }
                     self.handle_search_confirm();
                     self.search_mode.active = false;
                     self.search_mode.query.clear();
+                    self.search_filter_before_edit = None;
                 }
             }
             Action::SearchCancel => {
@@ -2925,7 +3036,16 @@ impl App {
                 self.search_mode.active = false;
                 self.search_mode.query.clear();
                 self.search_mode.selected = 0;
-                self.search_filter = None;
+                if let Some((col, q)) = self.search_filter_before_edit.take() {
+                    self.search_filter = Some(q);
+                    self.search_filter_column = Some(col);
+                } else {
+                    let had_filter = self.search_filter.is_some();
+                    self.clear_browser_search();
+                    if had_filter {
+                        self.flash_status_secs("Search cleared", 2);
+                    }
+                }
             }
             Action::ToggleLyrics => {
                 // Only active on NowPlaying tab; silently ignored on Browser.
@@ -3228,7 +3348,6 @@ impl App {
         if self.active_tab != Tab::Browser {
             return;
         }
-        self.search_filter = None;
         if self.browse_files() {
             match self.browser_focus {
                 BrowserColumn::Artists => {
@@ -3272,7 +3391,6 @@ impl App {
         if self.active_tab != Tab::Browser {
             return;
         }
-        self.search_filter = None;
         if self.browse_files() {
             match self.browser_focus {
                 BrowserColumn::Tracks => {
@@ -3434,11 +3552,13 @@ impl App {
             BrowserColumn::Artists => {
                 let result = if let LoadingState::Loaded(artists) = &self.library.artists {
                     // Build navigable index set — filtered or full.
-                    let indices: Vec<usize> = if let Some(q) = &self.search_filter {
+                    let indices: Vec<usize> = if let Some(q) =
+                        self.browser_column_filter(BrowserColumn::Artists)
+                    {
                         artists
                             .iter()
                             .enumerate()
-                            .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
+                            .filter(|(_, a)| a.name.to_lowercase().contains(q))
                             .map(|(i, _)| i)
                             .collect()
                     } else {
@@ -3486,11 +3606,13 @@ impl App {
                     };
                     if let Some(LoadingState::Loaded(albums)) = self.library.albums.get(&artist_id)
                     {
-                        let indices: Vec<usize> = if let Some(q) = &self.search_filter {
+                        let indices: Vec<usize> = if let Some(q) =
+                            self.browser_column_filter(BrowserColumn::Albums)
+                        {
                             albums
                                 .iter()
                                 .enumerate()
-                                .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
+                                .filter(|(_, a)| a.name.to_lowercase().contains(q))
                                 .map(|(i, _)| i)
                                 .collect()
                         } else {
@@ -3536,11 +3658,13 @@ impl App {
                     None => return,
                 };
                 if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
-                    let indices: Vec<usize> = if let Some(q) = &self.search_filter {
+                    let indices: Vec<usize> = if let Some(q) =
+                        self.browser_column_filter(BrowserColumn::Tracks)
+                    {
                         songs
                             .iter()
                             .enumerate()
-                            .filter(|(_, s)| s.title.to_lowercase().contains(q.as_str()))
+                            .filter(|(_, s)| s.title.to_lowercase().contains(q))
                             .map(|(i, _)| i)
                             .collect()
                     } else {
@@ -3576,10 +3700,12 @@ impl App {
                 let len = if self.folders.path.is_empty() {
                     match &self.folders.roots {
                         LoadingState::Loaded(roots) => {
-                            if let Some(q) = &self.search_filter {
+                            if let Some(q) =
+                                self.browser_column_filter(BrowserColumn::Artists)
+                            {
                                 roots
                                     .iter()
-                                    .filter(|r| r.name.to_lowercase().contains(q.as_str()))
+                                    .filter(|r| r.name.to_lowercase().contains(q))
                                     .count()
                             } else {
                                 roots.len()
@@ -3590,11 +3716,13 @@ impl App {
                 } else {
                     match self.folders.current_listing() {
                         Some(LoadingState::Loaded(listing)) => {
-                            let sub = if let Some(q) = &self.search_filter {
+                            let sub = if let Some(q) =
+                                self.browser_column_filter(BrowserColumn::Artists)
+                            {
                                 listing
                                     .directories
                                     .iter()
-                                    .filter(|(_, name)| name.to_lowercase().contains(q.as_str()))
+                                    .filter(|(_, name)| name.to_lowercase().contains(q))
                                     .count()
                             } else {
                                 listing.directories.len()
@@ -3625,7 +3753,10 @@ impl App {
                     return;
                 };
                 if let Some(LoadingState::Loaded(listing)) = self.folders.listings.get(pid) {
-                    let rows = folder_preview_rows(listing, self.search_filter.as_deref());
+                    let rows = folder_preview_rows(
+                        listing,
+                        self.browser_column_filter(BrowserColumn::Tracks),
+                    );
                     if rows.is_empty() {
                         return;
                     }
@@ -3705,7 +3836,7 @@ impl App {
                     }
                     self.pending_artist_select = Some(artist_name);
                     self.active_tab = Tab::Browser;
-                    self.search_filter = None;
+                    self.clear_browser_search();
                     self.apply_pending_artist_select();
                 }
             }
@@ -3792,7 +3923,7 @@ impl App {
                     self.clear_ratatui_art_state();
                 }
                 self.active_tab = Tab::Browser;
-                self.search_filter = None;
+                self.clear_browser_search();
             }
             HomeSection::Rediscover => {
                 // Pre-select the chosen artist in the Browser, then switch.
@@ -3808,7 +3939,7 @@ impl App {
                 }
                 self.active_tab = Tab::Browser;
                 self.apply_pending_artist_select();
-                self.search_filter = None;
+                self.clear_browser_search();
             }
         }
     }
@@ -3819,7 +3950,7 @@ impl App {
         if self.browse_files() {
             if let Some(song) = self
                 .folders
-                .current_preview_track(self.search_filter.as_deref())
+                .current_preview_track(self.browser_column_filter(BrowserColumn::Tracks))
                 .cloned()
             {
                 let was_empty = self.queue.songs.is_empty();
@@ -3870,20 +4001,10 @@ impl App {
 
     fn handle_add_all_to_queue(&mut self, mode: AddAllMode) {
         if self.browse_files() {
-            let id = match self.folders.preview_dir_id.clone() {
-                Some(id) => id,
-                None => {
-                    self.flash_status("Nothing to add");
-                    return;
-                }
+            let Some(songs) = self.folder_preview_songs_for_queue() else {
+                return;
             };
-            let songs = match self.folders.listings.get(&id) {
-                Some(LoadingState::Loaded(l)) if !l.tracks.is_empty() => l.tracks.clone(),
-                _ => {
-                    self.flash_status("No tracks in this folder");
-                    return;
-                }
-            };
+            let n = songs.len();
             let prepend = matches!(mode, AddAllMode::Prepend);
             match mode {
                 AddAllMode::ReplaceAlbum | AddAllMode::ReplaceArtist => {
@@ -3899,6 +4020,7 @@ impl App {
                     if !self.queue.songs.is_empty() {
                         self.play_current();
                     }
+                    self.flash_queue_bulk_add(n, true);
                 }
                 AddAllMode::Append | AddAllMode::Prepend => {
                     let was_empty = self.queue.songs.is_empty();
@@ -3913,6 +4035,7 @@ impl App {
                         self.queue.cursor = 0;
                         self.play_current();
                     }
+                    self.flash_queue_bulk_add(n, false);
                 }
             }
             return;
@@ -4066,51 +4189,30 @@ impl App {
                         BrowserColumn::Artists | BrowserColumn::Albums => {
                             if self.folders.path.is_empty() {
                                 if let LoadingState::Loaded(roots) = &self.folders.roots {
-                                    let filtered_slots: Vec<usize> =
-                                        if let Some(sf) = &self.search_filter {
-                                            roots
-                                                .iter()
-                                                .enumerate()
-                                                .filter(|(_, r)| {
-                                                    r.name.to_lowercase().contains(sf.as_str())
-                                                })
-                                                .map(|(i, _)| i)
-                                                .collect()
-                                        } else {
-                                            (0..roots.len()).collect()
-                                        };
-                                    if let Some(visible_pos) =
-                                        filtered_slots.iter().position(|&slot| {
-                                            roots[slot].name.to_lowercase().contains(&q)
-                                        })
-                                    {
+                                    if let Some(visible_pos) = roots.iter().position(|r| {
+                                        r.name.to_lowercase().contains(&q)
+                                    }) {
                                         self.folders.selected_dir = Some(visible_pos);
                                     }
                                 }
                             } else if let Some(LoadingState::Loaded(listing)) =
                                 self.folders.current_listing()
                             {
-                                let dir_indices: Vec<usize> = if let Some(sf) = &self.search_filter
+                                if let Some(dp) = listing
+                                    .directories
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, (_, n))| n.to_lowercase().contains(&q))
+                                    .map(|(i, _)| i)
+                                    .enumerate()
+                                    .map(|(visible, _)| visible)
+                                    .next()
                                 {
-                                    listing
-                                        .directories
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, (_, n))| {
-                                            n.to_lowercase().contains(sf.as_str())
-                                        })
-                                        .map(|(i, _)| i)
-                                        .collect()
-                                } else {
-                                    (0..listing.directories.len()).collect()
-                                };
-                                if let Some(dp) = dir_indices.iter().position(|&orig_i| {
-                                    listing.directories[orig_i].1.to_lowercase().contains(&q)
-                                }) {
                                     self.folders.selected_dir = Some(1 + dp);
                                 }
                             }
                             self.folders.folder_default_row_pending = false;
+                            self.folders.preview_selected_row = 0;
                             self.sync_folder_preview_from_left();
                         }
                         BrowserColumn::Tracks => {
@@ -4118,8 +4220,10 @@ impl App {
                                 if let Some(LoadingState::Loaded(listing)) =
                                     self.folders.listings.get(pid)
                                 {
-                                    let rows =
-                                        folder_preview_rows(listing, self.search_filter.as_deref());
+                                    let rows = folder_preview_rows(
+                                        listing,
+                                        self.browser_column_filter(BrowserColumn::Tracks),
+                                    );
                                     if let Some(ix) = rows.iter().position(|row| match row {
                                         FolderPreviewRow::Dir(i) => {
                                             listing.directories[*i].1.to_lowercase().contains(&q)
@@ -4145,6 +4249,16 @@ impl App {
                                     .position(|a| a.name.to_lowercase().contains(&q))
                                 {
                                     self.library.selected_artist = Some(idx);
+                                    self.library.selected_album = Some(0);
+                                    self.library.selected_track = Some(0);
+                                    let artist_id = artists[idx].id.clone();
+                                    if !self.library.albums.contains_key(&artist_id) {
+                                        self.library.albums.insert(
+                                            artist_id.clone(),
+                                            LoadingState::Loading,
+                                        );
+                                        self.fetch_albums(artist_id);
+                                    }
                                 }
                             }
                         }
@@ -4161,6 +4275,15 @@ impl App {
                                     .position(|a| a.name.to_lowercase().contains(&q))
                                 {
                                     self.library.selected_album = Some(idx);
+                                    self.library.selected_track = Some(0);
+                                    let album_id = albums[idx].id.clone();
+                                    if !self.library.tracks.contains_key(&album_id) {
+                                        self.library.tracks.insert(
+                                            album_id.clone(),
+                                            LoadingState::Loading,
+                                        );
+                                        self.fetch_tracks(album_id);
+                                    }
                                 }
                             }
                         }
@@ -4293,7 +4416,10 @@ impl App {
             Some(LoadingState::Loaded(l)) => l,
             _ => return,
         };
-        let rows = folder_preview_rows(listing, self.search_filter.as_deref());
+        let rows = folder_preview_rows(
+            listing,
+            self.browser_column_filter(BrowserColumn::Tracks),
+        );
         if rows.is_empty() {
             return;
         }
@@ -4597,7 +4723,7 @@ impl App {
             Action::BrowserAddToPlaylist => {
                 let song = if self.browse_files() {
                     self.folders
-                        .current_preview_track(self.search_filter.as_deref())
+                        .current_preview_track(self.browser_column_filter(BrowserColumn::Tracks))
                 } else {
                     self.library.current_track()
                 };

@@ -21,7 +21,7 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("1 / 2 / 3", "Go to Home / Browse / Now Playing"),
                 ("Tab", "Next tab"),
                 ("Shift-Tab", "Previous tab"),
-                ("/", "Search current column"),
+                ("/", "Search column (Enter apply · Esc/Ctrl+C clear filter)"),
                 ("Enter", "Select / expand"),
                 (
                     "Ctrl+b",
@@ -52,7 +52,8 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
             "Queue",
             vec![
                 ("a", "Add track to queue"),
-                ("A", "On artist / album add to queue"),
+                ("A", "Add all (artist/album or folder preview)"),
+                ("Ctrl+r", "Replace queue with album or folder preview"),
                 ("Ctrl+a", "Append full index to queue (y/n)"),
                 ("D", "Clear queue"),
             ],

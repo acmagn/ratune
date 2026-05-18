@@ -3,7 +3,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, BrowserColumn};
 use crate::state::{LibraryState, LoadingState};
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
@@ -74,11 +74,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 format!("{}{}{}", num, s.title, dur)
             };
 
-            let visible: Vec<(usize, String)> = if let Some(q) = &app.search_filter {
+            let visible: Vec<(usize, String)> =
+                if let Some(q) = app.browser_column_filter(BrowserColumn::Tracks) {
                 songs
                     .iter()
                     .enumerate()
-                    .filter(|(_, s)| s.title.to_lowercase().contains(q.as_str()))
+                    .filter(|(_, s)| s.title.to_lowercase().contains(q))
                     .map(|(i, s)| (i, make_label(s)))
                     .collect()
             } else {

@@ -3,7 +3,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, BrowserColumn};
 use crate::config::BrowseMode;
 use crate::state::{folder_preview_rows, FolderBrowseState, FolderPreviewRow, LoadingState};
 
@@ -91,7 +91,10 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 format!("{}{}", s.title, dur)
             };
 
-            let rows = folder_preview_rows(listing, app.search_filter.as_deref());
+            let rows = folder_preview_rows(
+                listing,
+                app.browser_column_filter(BrowserColumn::Tracks),
+            );
 
             let visible: Vec<(FolderPreviewRow, String)> = rows
                 .into_iter()
@@ -107,7 +110,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 .collect();
 
             let items: Vec<ListItem> = if visible.is_empty() {
-                vec![ListItem::new("Empty folder").style(Style::default().fg(t.dimmed))]
+                let msg = if app.browser_column_filter(BrowserColumn::Tracks).is_some() {
+                    "No matches"
+                } else {
+                    "Empty folder"
+                };
+                vec![ListItem::new(msg).style(Style::default().fg(t.dimmed))]
             } else {
                 visible
                     .iter()

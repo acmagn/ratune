@@ -651,7 +651,11 @@ async fn run_loop(
                                     let action = if app.help_visible {
                                         map_help_key(key.code, key.modifiers, &app.keybinds)
                                     } else if app.search_mode.active {
-                                        map_search_key(key.code)
+                                        map_search_key(key.code, key.modifiers)
+                                    } else if app.search_filter.is_some()
+                                        && search_clear_key(key.code, key.modifiers)
+                                    {
+                                        Action::SearchCancel
                                     } else if let Some(pending) = app.pending_global_confirm {
                                         match pending {
                                             GlobalConfirm::LibraryIndexRefresh => {
@@ -917,7 +921,7 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
                         app.clear_ratatui_art_state();
                     }
                     app.active_tab = app::Tab::Browser;
-                    app.search_filter = None;
+                    app.clear_browser_search();
                 } else {
                     app.home.album_selected_index = album_index;
                 }
@@ -1301,7 +1305,15 @@ fn map_key(
     Action::None
 }
 
-fn map_search_key(code: KeyCode) -> Action {
+fn search_clear_key(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    (modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c'))
+        || (code == KeyCode::Esc && modifiers.is_empty())
+}
+
+fn map_search_key(code: KeyCode, modifiers: KeyModifiers) -> Action {
+    if search_clear_key(code, modifiers) {
+        return Action::SearchCancel;
+    }
     match code {
         KeyCode::Esc => Action::SearchCancel,
         KeyCode::Enter => Action::SearchConfirm,
@@ -1524,11 +1536,13 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                     // Artists: compute ratatui's auto-scroll offset and map click.
                     let orig_idx: Option<usize> = {
                         if let LoadingState::Loaded(artists) = &app.library.artists {
-                            let visible: Vec<usize> = if let Some(q) = &app.search_filter {
+                            let visible: Vec<usize> = if let Some(q) =
+                                app.browser_column_filter(crate::app::BrowserColumn::Artists)
+                            {
                                 artists
                                     .iter()
                                     .enumerate()
-                                    .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
+                                    .filter(|(_, a)| a.name.to_lowercase().contains(q))
                                     .map(|(i, _)| i)
                                     .collect()
                             } else {
@@ -1561,11 +1575,13 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                         if let Some(LoadingState::Loaded(albums)) =
                             app.library.albums.get(&artist_id)
                         {
-                            let visible: Vec<usize> = if let Some(q) = &app.search_filter {
+                            let visible: Vec<usize> = if let Some(q) =
+                                app.browser_column_filter(crate::app::BrowserColumn::Albums)
+                            {
                                 albums
                                     .iter()
                                     .enumerate()
-                                    .filter(|(_, a)| a.name.to_lowercase().contains(q.as_str()))
+                                    .filter(|(_, a)| a.name.to_lowercase().contains(q))
                                     .map(|(i, _)| i)
                                     .collect()
                             } else {
@@ -1595,11 +1611,13 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                         };
                         if let Some(LoadingState::Loaded(songs)) = app.library.tracks.get(&album_id)
                         {
-                            let visible: Vec<usize> = if let Some(q) = &app.search_filter {
+                            let visible: Vec<usize> = if let Some(q) =
+                                app.browser_column_filter(crate::app::BrowserColumn::Tracks)
+                            {
                                 songs
                                     .iter()
                                     .enumerate()
-                                    .filter(|(_, s)| s.title.to_lowercase().contains(q.as_str()))
+                                    .filter(|(_, s)| s.title.to_lowercase().contains(q))
                                     .map(|(i, _)| i)
                                     .collect()
                             } else {
