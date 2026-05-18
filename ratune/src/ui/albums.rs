@@ -63,19 +63,19 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
 
             let visible: Vec<(usize, String)> =
                 if let Some(q) = app.browser_column_filter(BrowserColumn::Albums) {
-                albums
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, a)| a.name.to_lowercase().contains(q))
-                    .map(|(i, a)| (i, make_label(a)))
-                    .collect()
-            } else {
-                albums
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| (i, make_label(a)))
-                    .collect()
-            };
+                    albums
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| a.name.to_lowercase().contains(q))
+                        .map(|(i, a)| (i, make_label(a)))
+                        .collect()
+                } else {
+                    albums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (i, make_label(a)))
+                        .collect()
+                };
 
             let items: Vec<ListItem> = if visible.is_empty() {
                 vec![ListItem::new("No matches").style(Style::default().fg(t.dimmed))]

@@ -84,22 +84,21 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             }
             Some(LoadingState::Loaded(listing)) => {
                 let mut out = vec!["..".to_string()];
-                let dirs: Vec<String> = if let Some(q) =
-                    app.browser_column_filter(BrowserColumn::Artists)
-                {
-                    listing
-                        .directories
-                        .iter()
-                        .filter(|(_, name)| name.to_lowercase().contains(q))
-                        .map(|(_, name)| name.clone())
-                        .collect()
-                } else {
-                    listing
-                        .directories
-                        .iter()
-                        .map(|(_, name)| name.clone())
-                        .collect()
-                };
+                let dirs: Vec<String> =
+                    if let Some(q) = app.browser_column_filter(BrowserColumn::Artists) {
+                        listing
+                            .directories
+                            .iter()
+                            .filter(|(_, name)| name.to_lowercase().contains(q))
+                            .map(|(_, name)| name.clone())
+                            .collect()
+                    } else {
+                        listing
+                            .directories
+                            .iter()
+                            .map(|(_, name)| name.clone())
+                            .collect()
+                    };
                 out.extend(dirs);
                 out
             }

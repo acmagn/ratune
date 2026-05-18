@@ -76,19 +76,19 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
 
             let visible: Vec<(usize, String)> =
                 if let Some(q) = app.browser_column_filter(BrowserColumn::Tracks) {
-                songs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| s.title.to_lowercase().contains(q))
-                    .map(|(i, s)| (i, make_label(s)))
-                    .collect()
-            } else {
-                songs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| (i, make_label(s)))
-                    .collect()
-            };
+                    songs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| s.title.to_lowercase().contains(q))
+                        .map(|(i, s)| (i, make_label(s)))
+                        .collect()
+                } else {
+                    songs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, s)| (i, make_label(s)))
+                        .collect()
+                };
 
             let items: Vec<ListItem> = if visible.is_empty() {
                 vec![ListItem::new("No matches").style(Style::default().fg(t.dimmed))]

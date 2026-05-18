@@ -91,10 +91,8 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 format!("{}{}", s.title, dur)
             };
 
-            let rows = folder_preview_rows(
-                listing,
-                app.browser_column_filter(BrowserColumn::Tracks),
-            );
+            let rows =
+                folder_preview_rows(listing, app.browser_column_filter(BrowserColumn::Tracks));
 
             let visible: Vec<(FolderPreviewRow, String)> = rows
                 .into_iter()

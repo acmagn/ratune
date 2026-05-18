@@ -51,19 +51,19 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             // Build (original_index, name) pairs, filtered when search is active.
             let visible: Vec<(usize, &str)> =
                 if let Some(q) = app.browser_column_filter(BrowserColumn::Artists) {
-                artists
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, a)| a.name.to_lowercase().contains(q))
-                    .map(|(i, a)| (i, a.name.as_str()))
-                    .collect()
-            } else {
-                artists
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| (i, a.name.as_str()))
-                    .collect()
-            };
+                    artists
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| a.name.to_lowercase().contains(q))
+                        .map(|(i, a)| (i, a.name.as_str()))
+                        .collect()
+                } else {
+                    artists
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (i, a.name.as_str()))
+                        .collect()
+                };
 
             let items: Vec<ListItem> = if visible.is_empty() {
                 vec![ListItem::new("No matches").style(Style::default().fg(t.dimmed))]
