@@ -62,6 +62,8 @@ pub struct KeybindsSection {
     pub shuffle: Option<String>,
     pub unshuffle: Option<String>,
     pub clear_queue: Option<String>,
+    /// Remove highlighted track from queue (Now Playing tab). Default: d
+    pub remove_from_queue: Option<String>,
     pub search: Option<String>,
     pub volume_up: Option<String>,
     pub volume_down: Option<String>,
@@ -93,6 +95,8 @@ pub struct KeybindsSection {
     pub playlist_overlay: Option<String>,
     /// Browser: add track to playlist. Default: >
     pub browser_add_to_playlist: Option<String>,
+    /// Playlist overlay (tracks pane): remove highlighted track. Default: <
+    pub remove_from_playlist: Option<String>,
     /// Home: next panel section. Default: Shift+j (`J` in TOML is fine)
     pub home_section_next: Option<String>,
     /// Home: previous panel section. Default: Shift+k
@@ -1198,6 +1202,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # shuffle       = "x"
 # unshuffle     = "z"
 # clear_queue   = "Shift+d"
+# remove_from_queue = "d"
 # search        = "/"
 # volume_up     = "+"
 # volume_down   = "-"
@@ -1216,6 +1221,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # toggle_visualizer = "Shift+v"
 # playlist_overlay = "Shift+p"
 # browser_add_to_playlist = ">"
+# remove_from_playlist = "<"
 # home_section_next = "Shift+j"
 # home_section_prev = "Shift+k"
 # home_refresh = "r"

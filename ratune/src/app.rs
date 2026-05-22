@@ -2956,6 +2956,7 @@ impl App {
                 ));
             }
             Action::ClearQueue => self.handle_clear_queue(),
+            Action::RemoveFromQueue => self.handle_remove_from_queue(),
             Action::Shuffle => self.handle_shuffle(),
             Action::Unshuffle => self.handle_unshuffle(),
             Action::SeekForward => {
@@ -4318,6 +4319,59 @@ impl App {
         self.playback.elapsed = std::time::Duration::ZERO;
         self.playback.paused = false;
         self.playback.player_loaded = false;
+    }
+
+    fn handle_remove_from_queue(&mut self) {
+        if self.queue.songs.is_empty() {
+            return;
+        }
+        let idx = self.queue.cursor;
+        let removed_playing = self
+            .playback
+            .current_song
+            .as_ref()
+            .zip(self.queue.songs.get(idx))
+            .is_some_and(|(cur, at_cursor)| cur.id == at_cursor.id);
+        let was_active = self.playback.player_loaded && !self.playback.paused;
+
+        if self.queue.remove_at(idx).is_none() {
+            return;
+        }
+        self.queue
+            .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
+
+        if self.queue.songs.is_empty() {
+            self.handle_clear_queue();
+            return;
+        }
+
+        if removed_playing {
+            if was_active {
+                self.play_current();
+            } else {
+                self.sync_playback_display_to_queue_cursor();
+            }
+        }
+    }
+
+    /// Update now-playing display to match the queue cursor without starting playback.
+    fn sync_playback_display_to_queue_cursor(&mut self) {
+        let Some(song) = self.queue.current().cloned() else {
+            return;
+        };
+        let duration = song
+            .duration
+            .map(|s| std::time::Duration::from_secs(u64::from(s)));
+        if let Some(cover_id) = &song.cover_art {
+            self.fetch_cover_art(cover_id.clone());
+        }
+        self.playback.current_song = Some(song);
+        self.playback.total = duration;
+        self.playback.elapsed = std::time::Duration::ZERO;
+        if self.playback.player_loaded {
+            let _ = self.player_tx.send(PlayerCommand::Stop);
+            self.playback.player_loaded = false;
+        }
     }
 
     fn handle_unshuffle(&mut self) {

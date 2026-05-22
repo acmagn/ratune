@@ -56,6 +56,7 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("Ctrl+r", "Replace queue with album or folder preview"),
                 ("Ctrl+a", "Append full index to queue (y/n)"),
                 ("D", "Clear queue"),
+                ("d", "Remove highlighted track (Now Playing)"),
             ],
         ),
         (

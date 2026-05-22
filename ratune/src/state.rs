@@ -308,6 +308,28 @@ impl QueueState {
         }
         self.cursor += n;
     }
+
+    /// Remove the song at `idx`, adjusting `cursor` and `pre_shuffle_order`.
+    pub fn remove_at(&mut self, idx: usize) -> Option<Song> {
+        if idx >= self.songs.len() {
+            return None;
+        }
+        let removed = self.songs.remove(idx);
+        if let Some(orig) = &mut self.pre_shuffle_order {
+            if let Some(orig_idx) = orig.iter().position(|s| s.id == removed.id) {
+                orig.remove(orig_idx);
+            }
+        }
+        if self.songs.is_empty() {
+            self.cursor = 0;
+            self.scroll = 0;
+        } else if idx < self.cursor {
+            self.cursor -= 1;
+        } else if idx == self.cursor && self.cursor >= self.songs.len() {
+            self.cursor = self.songs.len() - 1;
+        }
+        Some(removed)
+    }
 }
 
 /// Pending confirmation for destructive / expensive actions (outside playlist overlay).
@@ -388,4 +410,80 @@ pub struct PlaybackState {
     /// True once a `PlayUrl` has been sent to the engine for this track.
     /// False after restore (current_song is set but engine has nothing loaded).
     pub player_loaded: bool,
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::QueueState;
+    use ratune_subsonic::Song;
+
+    fn song(id: &str) -> Song {
+        Song {
+            id: id.to_string(),
+            title: id.to_string(),
+            album: None,
+            artist: None,
+            album_id: None,
+            artist_id: None,
+            track: None,
+            disc_number: None,
+            year: None,
+            genre: None,
+            cover_art: None,
+            duration: None,
+            bit_rate: None,
+            content_type: None,
+            suffix: None,
+            size: None,
+            path: None,
+            starred: None,
+        }
+    }
+
+    #[test]
+    fn remove_before_cursor_shifts_cursor_down() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 2;
+        assert!(q.remove_at(0).is_some());
+        assert_eq!(q.songs.len(), 2);
+        assert_eq!(q.cursor, 1);
+        assert_eq!(q.songs[1].id, "c");
+    }
+
+    #[test]
+    fn remove_at_cursor_keeps_next_track_selected() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 1;
+        assert!(q.remove_at(1).is_some());
+        assert_eq!(q.cursor, 1);
+        assert_eq!(q.songs[q.cursor].id, "c");
+    }
+
+    #[test]
+    fn remove_last_track_empties_queue() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        assert!(q.remove_at(0).is_some());
+        assert!(q.songs.is_empty());
+        assert_eq!(q.cursor, 0);
+    }
+
+    #[test]
+    fn remove_syncs_pre_shuffle_order() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        assert!(q.remove_at(1).is_some());
+        let orig = q.pre_shuffle_order.as_ref().unwrap();
+        assert_eq!(orig.len(), 2);
+        assert_eq!(orig[0].id, "a");
+        assert_eq!(orig[1].id, "c");
+    }
 }

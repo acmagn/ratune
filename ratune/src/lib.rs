@@ -1012,8 +1012,9 @@ fn map_playlist_key(
                 KeyCode::Char('X') | KeyCode::Char('x') if code == KeyCode::Char('X') || shift => {
                     Action::PlaylistDelete
                 }
-                // <: remove highlighted track from playlist (tracks pane)
-                KeyCode::Char('<') if matches!(focus, PlaylistFocus::Tracks) => {
+                _ if kb.remove_from_playlist.matches(code, modifiers)
+                    && matches!(focus, PlaylistFocus::Tracks) =>
+                {
                     Action::PlaylistRemoveTrack
                 }
                 KeyCode::Enter => match focus {
@@ -1269,6 +1270,9 @@ fn map_key(
     }
     if kb.clear_queue.matches(code, modifiers) {
         return Action::ClearQueue;
+    }
+    if active_tab == Tab::NowPlaying && kb.remove_from_queue.matches(code, modifiers) {
+        return Action::RemoveFromQueue;
     }
     if kb.search.matches(code, modifiers) {
         return Action::SearchStart;

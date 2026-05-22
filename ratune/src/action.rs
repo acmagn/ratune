@@ -43,6 +43,8 @@ pub enum Action {
     VolumeUp,
     VolumeDown,
     ClearQueue,
+    /// Remove the highlighted track from the queue (Now Playing tab).
+    RemoveFromQueue,
     Shuffle,
     Unshuffle,
     SeekForward,

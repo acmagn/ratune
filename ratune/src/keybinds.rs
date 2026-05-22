@@ -147,6 +147,7 @@ pub struct Keybinds {
     pub shuffle: KeySpec,
     pub unshuffle: KeySpec,
     pub clear_queue: KeySpec,
+    pub remove_from_queue: KeySpec,
     pub search: KeySpec,
     pub volume_up: KeySpec,
     pub volume_down: KeySpec,
@@ -175,6 +176,8 @@ pub struct Keybinds {
     pub playlist_overlay: KeySpec,
     /// Browser: add focused track to playlist (`>`).
     pub browser_add_to_playlist: KeySpec,
+    /// Playlist overlay (tracks pane): remove highlighted track (`<`).
+    pub remove_from_playlist: KeySpec,
     pub home_section_next: KeySpec,
     pub home_section_prev: KeySpec,
     pub home_refresh: KeySpec,
@@ -310,6 +313,10 @@ impl Keybinds {
                     modifiers: KeyModifiers::SHIFT,
                 },
             ),
+            remove_from_queue: resolve(
+                sec.remove_from_queue.as_deref(),
+                KeySpec::new(KeyCode::Char('d')),
+            ),
             search: resolve(sec.search.as_deref(), KeySpec::new(KeyCode::Char('/'))),
             volume_up: resolve(sec.volume_up.as_deref(), KeySpec::new(KeyCode::Char('+'))),
             volume_down: resolve(sec.volume_down.as_deref(), KeySpec::new(KeyCode::Char('-'))),
@@ -360,6 +367,10 @@ impl Keybinds {
             browser_add_to_playlist: resolve(
                 sec.browser_add_to_playlist.as_deref(),
                 KeySpec::new(KeyCode::Char('>')),
+            ),
+            remove_from_playlist: resolve(
+                sec.remove_from_playlist.as_deref(),
+                KeySpec::new(KeyCode::Char('<')),
             ),
             home_section_next: resolve(
                 sec.home_section_next.as_deref(),
