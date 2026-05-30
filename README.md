@@ -162,7 +162,7 @@ Set Subsonic **url** and **username**, then choose how to supply the secret (mos
 [server]
 url = "https://your-navidrome.example.com"
 username = "you"
-password = ""
+password = "" # or remove entirely
 ```
 
 **External secret store (`password_command`):** when you already use a wallet (e.g. GNOME Keyring via `secret-tool`, `pass`, KeePassXC):
@@ -171,7 +171,6 @@ password = ""
 [server]
 url = "https://your-navidrome.example.com"
 username = "you"
-password = ""
 password_command = "secret-tool lookup --label=ratune service subsonic user you"
 ```
 
