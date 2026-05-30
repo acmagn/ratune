@@ -150,18 +150,38 @@ Press `q` or Esc to exit.
 
 On first start, ratune creates a short default file at `~/.config/ratune/config.toml` (server fields plus common UI defaults). For every key with comments, use the sample file and copy the sections you need: [`docs/sample-config.toml`](docs/sample-config.toml).
 
-Set Subsonic URL and username. For the secret you can either put it in the file (**plaintext**) or leave **`password` empty** (**default**) and use the OS keyring:
+Set Subsonic **url** and **username**, then choose how to supply the secret (most secure first):
 
-**Plaintext in config:**
+1. **OS keyring (default)** — leave `password = ""` or remove field entirely.
+2. **`password_command`** — run a shell command; stdout is the secret (e.g. `secret-tool`, `pass`, KeePassXC CLI).
+3. **Plaintext** — `password = "..."` in the file, or env vars (convenient for scripts; avoid in shared configs).
+
+**Keyring:** leave `password` empty. Ratune uses [`keyring-core`](https://crates.io/crates/keyring-core) with a platform store: [**kernel keyutils**](https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/) on Linux (no Secret Service or gnome-keyring), **Keychain** on macOS, **Credential Manager** on Windows. On first run you are prompted once ([inquire](https://crates.io/crates/inquire)); the secret is stored under service **`ratune`** and user **`{url}|{username}`** — not in `config.toml`. Linux keys live in the kernel keyring ([persistence](https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/#persistence)); a reboot may require entering the secret again. If the store is unavailable (e.g. container), you get a one-time session prompt — use **`password_command`** or **`SUBSONIC_PASS`** instead.
 
 ```toml
 [server]
 url = "https://your-navidrome.example.com"
 username = "you"
-password = "your_password"
+password = ""
 ```
 
-**Keyring (default starter config):** leave `password = ""`. The app uses [`keyring-core`](https://crates.io/crates/keyring-core) with a platform store: [**kernel keyutils**](https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/) on Linux (no Secret Service, D-Bus, or gnome-keyring), **Keychain** on macOS, **Credential Manager** on Windows. Linux uses the in-kernel keyring ([persistence and lifetimes](https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/#persistence)); a reboot clears keys, so you may be prompted again after restart. On first run you are prompted (via [inquire](https://crates.io/crates/inquire)); the secret is stored under service **`ratune`** and user **`{url}|{username}`** (not in `config.toml`). If the store cannot be opened (e.g. restricted container), you get a session-only prompt — use **`SUBSONIC_PASS`** or **`password`** in config. On macOS/Windows you can remove the saved login from the usual credential UI; on Linux, clearing happens on reboot or when kernel keyring entries expire per the docs linked above.
+**External secret store (`password_command`):** when you already use a wallet (e.g. GNOME Keyring via `secret-tool`, `pass`, KeePassXC):
+
+```toml
+[server]
+url = "https://your-navidrome.example.com"
+username = "you"
+password = ""
+password_command = "secret-tool lookup --label=ratune service subsonic user you"
+```
+
+The command runs under `/bin/sh -c` on Unix (or `cmd /C` on Windows); only trimmed stdout is used. Plaintext `password` or `SUBSONIC_PASS` take precedence if set.
+
+**Plaintext:**
+
+```toml
+password = "your_password"
+```
 
 Subsonic auth uses a random salt per request and `MD5(secret + salt)` ([Navidrome / Subsonic API](https://www.navidrome.org/docs/developers/subsonic-api/)).
 

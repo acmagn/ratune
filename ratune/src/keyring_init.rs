@@ -12,7 +12,7 @@ pub fn install_default_keyring_store() {
             Err(e) => {
                 eprintln!(
                     "warning: could not open Linux kernel keyutils store: {e}\n\
-                     Keyring storage disabled for this run — use a session password or [server].password / SUBSONIC_PASS."
+                     Keyring storage disabled for this run — use password_command, a session password, [server].password, or SUBSONIC_PASS."
                 );
             }
         }
@@ -49,7 +49,7 @@ pub fn install_default_keyring_store() {
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         eprintln!(
-            "warning: no keyring backend is bundled for this OS; use [server].password or SUBSONIC_PASS."
+            "warning: no keyring backend is bundled for this OS; use [server].password_command, [server].password, or SUBSONIC_PASS."
         );
     }
 }

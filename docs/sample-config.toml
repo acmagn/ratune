@@ -49,9 +49,15 @@
 #
 # url       — Base URL of the server (no trailing path required in most setups).
 # username  — Subsonic username.
-# password  — Subsonic password or token. Empty (default) = keyring-core + native store (Linux:
-#             kernel keyutils; macOS: Keychain; Windows: Credential Manager) when available; else a
-#             one-time session prompt. Non-empty = plaintext. SUBSONIC_PASS overrides.
+#
+# Secret (pick one):
+#   password = "" (default) — OS keyring via keyring-core (Linux: kernel keyutils; macOS:
+#             Keychain; Windows: Credential Manager). First run prompts once; stored as service
+#             "ratune", user "{url}|{username}". Needs url + username set.
+#   password_command — Shell command; stdout (trimmed) is the secret. Good for secret-tool,
+#             pass, KeePassXC CLI, etc. Example:
+#             password_command = "secret-tool lookup --label=ratune service subsonic user you"
+#   password — Plaintext in config (least secure). SUBSONIC_PASS / TERMUSIC_SUBSONIC_PASS override.
 #
 # Subsonic API auth (v1.16.1): random salt per request + MD5(secret+salt). See:
 # https://www.navidrome.org/docs/developers/subsonic-api/
@@ -60,6 +66,7 @@
 url = ""
 username = ""
 password = ""
+# password_command = "secret-tool lookup service subsonic user you"
 
 # -----------------------------------------------------------------------------
 # [player]

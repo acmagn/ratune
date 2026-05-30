@@ -53,6 +53,21 @@ pub async fn run() -> Result<()> {
     });
     let mut app = App::new(config)?;
 
+    if let Err(e) = app.subsonic.ping().await {
+        eprintln!(
+            "error: could not connect to Subsonic server at {}",
+            app.config.subsonic_url
+        );
+        if ratune_subsonic::is_auth_failure(e.as_ref()) {
+            eprintln!(
+                "Authentication failed (wrong username or password).\n\
+                 Check [server] url, username, password, password_command, OS keyring, or SUBSONIC_PASS."
+            );
+        }
+        eprintln!("{e:#}");
+        process::exit(1);
+    }
+
     // Detect tmux first: $TMUX is set when running inside a tmux session.
     app.in_tmux = std::env::var("TMUX").is_ok();
     if app.in_tmux {

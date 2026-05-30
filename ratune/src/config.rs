@@ -661,10 +661,14 @@ struct ServerSection {
     url: String,
     #[serde(default)]
     username: String,
-    /// Plain Subsonic password or token. Leave empty (default) to use the OS keyring: prompted
-    /// once ([`inquire`]), then stored under service `ratune` and user `{url}|{username}`.
+    /// Plain Subsonic password or token (least secure). Prefer empty `password` with OS keyring
+    /// or `password_command`. `SUBSONIC_PASS` overrides this field.
     #[serde(default)]
     password: String,
+    /// Shell command whose stdout is the Subsonic secret (trimmed). Used when `password` is empty.
+    /// Example: `secret-tool lookup --label=ratune service subsonic`.
+    #[serde(default)]
+    password_command: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -823,7 +827,7 @@ impl Config {
 
         let subsonic_pass = resolve_subsonic_secret(&file_cfg.server).with_context(|| {
             format!(
-                "Subsonic credentials failed (config {}). Hint: with password empty you need [server].url, [server].username, a working OS keyring, and a TTY for the first-time password prompt.",
+                "Subsonic credentials failed (config {}). Hint: set [server].password_command, leave password empty for the OS keyring (needs url + username + TTY on first run), or set SUBSONIC_PASS.",
                 config_path.display()
             )
         })?;
@@ -832,8 +836,8 @@ impl Config {
         if subsonic_pass.is_empty() {
             bail!(
                 "No Subsonic password configured.\n\
-                 Set [server].password in {} or SUBSONIC_PASS / TERMUSIC_SUBSONIC_PASS,\n\
-                 or leave password empty and use the keyring prompt (needs url + username).",
+                 In {} set [server].password_command, SUBSONIC_PASS / TERMUSIC_SUBSONIC_PASS,\n\
+                 [server].password (plaintext), or leave password empty for the keyring (needs url + username).",
                 config_path.display()
             );
         }
@@ -1324,30 +1328,82 @@ fn subsonic_keyring_user(server_url: &str, username: &str) -> String {
     format!("{}|{}", server_url.trim_end_matches('/'), username.trim())
 }
 
-/// Plaintext `[server].password` or env `SUBSONIC_PASS` wins; otherwise OS keyring (`ratune` /
-/// `subsonic_keyring_user`) or interactive prompt via [`inquire`]. If the keyring is unavailable
-/// (e.g. no Secret Service / D-Bus), prompt once and keep the secret in memory for this process only.
+/// Resolution order: plaintext `[server].password` (incl. env `SUBSONIC_PASS`), then
+/// `[server].password_command`, then OS keyring (`ratune` / `subsonic_keyring_user`) or
+/// interactive prompt via [`inquire`].
 fn resolve_subsonic_secret(server: &ServerSection) -> Result<String> {
     let pass = server.password.trim();
     if !pass.is_empty() {
         return Ok(pass.to_string());
     }
 
+    let cmd = server.password_command.trim();
+    if !cmd.is_empty() {
+        return run_password_command(cmd);
+    }
+
+    resolve_subsonic_secret_from_keyring(server)
+}
+
+fn run_password_command(shell_cmd: &str) -> Result<String> {
+    let output = {
+        #[cfg(unix)]
+        {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(shell_cmd)
+                .output()
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", shell_cmd])
+                .output()
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            anyhow::bail!("password_command is not supported on this platform");
+        }
+    }
+    .with_context(|| format!("running [server].password_command: {shell_cmd}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let hint = stderr.trim();
+        bail!(
+            "[server].password_command exited with {}: {}",
+            output.status,
+            if hint.is_empty() { "(no stderr)" } else { hint }
+        );
+    }
+
+    let secret = String::from_utf8(output.stdout)
+        .context("password_command stdout is not valid UTF-8")?
+        .trim()
+        .to_string();
+    if secret.is_empty() {
+        bail!("[server].password_command produced empty output");
+    }
+    Ok(secret)
+}
+
+/// OS keyring or one-time [`inquire`] prompt when `password` and `password_command` are empty.
+fn resolve_subsonic_secret_from_keyring(server: &ServerSection) -> Result<String> {
     let url = server.url.trim();
     let user = server.username.trim();
     if url.is_empty() && user.is_empty() {
         bail!(
-            "With an empty [server].password, you must set [server].url and [server].username (or SUBSONIC_URL and SUBSONIC_USER) for keyring auth — both are still empty."
+            "With empty [server].password and no password_command, set [server].url and [server].username (or SUBSONIC_URL and SUBSONIC_USER) for keyring auth — both are still empty."
         );
     }
     if url.is_empty() {
         bail!(
-            "With an empty [server].password, [server].url must be set (or SUBSONIC_URL) for keyring auth."
+            "With empty [server].password and no password_command, [server].url must be set (or SUBSONIC_URL) for keyring auth."
         );
     }
     if user.is_empty() {
         bail!(
-            "With an empty [server].password, [server].username must be set (or SUBSONIC_USER) for keyring auth."
+            "With empty [server].password and no password_command, [server].username must be set (or SUBSONIC_USER) for keyring auth."
         );
     }
 
@@ -1377,7 +1433,7 @@ fn resolve_subsonic_secret(server: &ServerSection) -> Result<String> {
             eprintln!(
                 "warning: keyring store is not available ({e}).\n\
                  Using a one-time password prompt; the secret is not saved and applies only to this run.\n\
-                 To persist without typing each time: set [server].password or SUBSONIC_PASS."
+                 To persist without typing each time: set [server].password_command, [server].password, or SUBSONIC_PASS."
             );
             inquire_subsonic_password_session()
         }
@@ -1475,6 +1531,34 @@ password = "secret"
         assert_eq!(fc.server.url, "http://music.example:4533");
         assert_eq!(fc.server.username, "alice");
         assert_eq!(fc.server.password, "secret");
+    }
+
+    #[test]
+    fn parses_password_command() {
+        let text = r#"
+[server]
+password_command = "secret-tool lookup service ratune"
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        assert_eq!(
+            fc.server.password_command,
+            "secret-tool lookup service ratune"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn password_command_shell_output() {
+        let server = ServerSection {
+            url: String::new(),
+            username: String::new(),
+            password: String::new(),
+            password_command: "printf '%s' 'from-cmd'".into(),
+        };
+        assert_eq!(
+            resolve_subsonic_secret(&server).expect("command"),
+            "from-cmd"
+        );
     }
 
     #[test]
