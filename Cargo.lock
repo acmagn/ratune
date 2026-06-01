@@ -2474,6 +2474,7 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "ratune-player",
+ "ratune-scrobble",
  "ratune-subsonic",
  "reqwest",
  "rustfft",
@@ -2492,6 +2493,17 @@ dependencies = [
  "anyhow",
  "reqwest",
  "rodio",
+]
+
+[[package]]
+name = "ratune-scrobble"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "md5",
+ "reqwest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

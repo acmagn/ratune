@@ -34,6 +34,8 @@ struct FileConfig {
     pub cache: CacheSection,
     #[serde(default)]
     pub library: LibrarySection,
+    #[serde(default)]
+    pub scrobble: ScrobbleSection,
 }
 
 // ── [keybinds] ────────────────────────────────────────────────────────────────
@@ -228,6 +230,56 @@ impl Default for LibrarySection {
             fetch_artist_parallelism: default_library_fetch_artist_parallelism(),
             navidrome_skip_unchanged_scan: false,
             notify_on_forced_index_refresh: default_library_notify_on_forced_refresh(),
+        }
+    }
+}
+
+// ── [scrobble] — Last.fm / Libre.fm + Subsonic play counts ───────────────────
+
+/// Audioscrobbler and server-side scrobbling settings from config.toml.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ScrobbleSection {
+    /// Enable scrobbling to Last.fm or Libre.fm. Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// `lastfm` (default) or `librefm`.
+    #[serde(default = "default_scrobble_service")]
+    pub service: String,
+    /// Application API key from your Last.fm / Libre.fm account.
+    #[serde(default)]
+    pub api_key: String,
+    /// API shared secret (required to sign POST requests).
+    #[serde(default)]
+    pub api_secret: String,
+    /// Session key from `auth.getSession` (see docs). Prefer keyring / command over plaintext.
+    #[serde(default)]
+    pub session_key: String,
+    /// Shell command whose stdout is the session key (trimmed).
+    #[serde(default)]
+    pub session_key_command: String,
+    /// Call the Subsonic `/scrobble` endpoint when a listen is recorded. Default: true.
+    #[serde(default = "default_scrobble_to_server")]
+    pub scrobble_to_server: bool,
+}
+
+fn default_scrobble_service() -> String {
+    "lastfm".into()
+}
+
+fn default_scrobble_to_server() -> bool {
+    true
+}
+
+impl Default for ScrobbleSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            service: default_scrobble_service(),
+            api_key: String::new(),
+            api_secret: String::new(),
+            session_key: String::new(),
+            session_key_command: String::new(),
+            scrobble_to_server: default_scrobble_to_server(),
         }
     }
 }
@@ -803,6 +855,14 @@ pub struct Config {
     pub browse_mode: BrowseMode,
     /// When true, folder browsing can be toggled with the keybind and used from the Browse tab.
     pub browse_folder_navigation: bool,
+    /// Scrobble listens to Last.fm or Libre.fm when enabled and credentials are configured.
+    pub scrobble_enabled: bool,
+    pub scrobble_service: ratune_scrobble::ScrobbleService,
+    pub scrobble_api_key: String,
+    pub scrobble_api_secret: String,
+    pub scrobble_session_key: String,
+    /// Notify the Subsonic server (Navidrome play counts) when a listen is recorded.
+    pub scrobble_to_server: bool,
 }
 
 impl Config {
@@ -1071,6 +1131,24 @@ impl Config {
             .and_then(|b| b.folder_navigation)
             .unwrap_or(false);
 
+        let scrobble = &file_cfg.scrobble;
+        let scrobble_enabled = scrobble.enabled;
+        let scrobble_service = ratune_scrobble::ScrobbleService::parse(&scrobble.service)
+            .unwrap_or(ratune_scrobble::ScrobbleService::LastFm);
+        let (scrobble_api_key, scrobble_api_secret, scrobble_session_key) =
+            if scrobble_enabled {
+                resolve_scrobble_credentials(scrobble).unwrap_or_else(|e| {
+                    eprintln!("warning: scrobbling disabled — {e:#}");
+                    (String::new(), String::new(), String::new())
+                })
+            } else {
+                (String::new(), String::new(), String::new())
+            };
+        let scrobble_enabled = scrobble_enabled
+            && !scrobble_api_key.is_empty()
+            && !scrobble_api_secret.is_empty()
+            && !scrobble_session_key.is_empty();
+
         Ok(Config {
             subsonic_url: file_cfg.server.url,
             subsonic_user: file_cfg.server.username,
@@ -1129,7 +1207,26 @@ impl Config {
             home_panels,
             browse_mode,
             browse_folder_navigation,
+            scrobble_enabled,
+            scrobble_service,
+            scrobble_api_key,
+            scrobble_api_secret,
+            scrobble_session_key,
+            scrobble_to_server: scrobble.scrobble_to_server,
         })
+    }
+
+    /// Build an authenticated Audioscrobbler client when scrobbling is enabled.
+    pub fn audioscrobbler_client(&self) -> Option<ratune_scrobble::AudioscrobblerClient> {
+        if !self.scrobble_enabled {
+            return None;
+        }
+        Some(ratune_scrobble::AudioscrobblerClient::new(
+            self.scrobble_service,
+            self.scrobble_api_key.clone(),
+            self.scrobble_api_secret.clone(),
+            self.scrobble_session_key.clone(),
+        ))
     }
 
     /// Tab bar position and now-playing height for [`crate::ui::layout::build_layout`].
@@ -1316,6 +1413,15 @@ location = "right"
 [cache]
 enabled     = true
 max_size_gb = 2   # maximum total cache size in gigabytes
+
+# [scrobble]
+# enabled = false
+# service = "lastfm"          # or "librefm"
+# api_key = ""
+# api_secret = ""
+# session_key = ""            # run `ratune scrobble-auth` once; prefer session_key_command
+# session_key_command = ""
+# scrobble_to_server = true   # Subsonic /scrobble for Navidrome play counts
 "##;
     std::fs::write(path, default_toml)
         .with_context(|| format!("writing default config to {}", path.display()))?;
@@ -1506,6 +1612,84 @@ fn merge_env_overrides(cfg: &mut FileConfig) {
     {
         cfg.server.password = v;
     }
+    if let Ok(v) = std::env::var("LASTFM_API_KEY").or_else(|_| std::env::var("LIBREFM_API_KEY")) {
+        cfg.scrobble.api_key = v;
+    }
+    if let Ok(v) = std::env::var("LASTFM_API_SECRET")
+        .or_else(|_| std::env::var("LASTFM_SHARED_SECRET"))
+        .or_else(|_| std::env::var("LIBREFM_API_SECRET"))
+    {
+        cfg.scrobble.api_secret = v;
+    }
+    if let Ok(v) = std::env::var("LASTFM_SESSION_KEY").or_else(|_| std::env::var("LIBREFM_SESSION_KEY"))
+    {
+        cfg.scrobble.session_key = v;
+    }
+}
+
+/// Resolve Audioscrobbler credentials when `[scrobble].enabled` is true.
+fn resolve_scrobble_credentials(sec: &ScrobbleSection) -> Result<(String, String, String)> {
+    let api_key = sec.api_key.trim();
+    if api_key.is_empty() {
+        bail!("[scrobble].api_key is empty (or set LASTFM_API_KEY / LIBREFM_API_KEY)");
+    }
+    let api_secret = sec.api_secret.trim();
+    if api_secret.is_empty() {
+        bail!("[scrobble].api_secret is empty (or set LASTFM_API_SECRET)");
+    }
+    let session_key = if !sec.session_key.trim().is_empty() {
+        sec.session_key.trim().to_string()
+    } else if !sec.session_key_command.trim().is_empty() {
+        run_password_command(sec.session_key_command.trim())?
+    } else {
+        bail!(
+            "[scrobble].session_key is empty — run `ratune scrobble-auth`, or set session_key, session_key_command, or LASTFM_SESSION_KEY"
+        );
+    };
+    Ok((
+        api_key.to_string(),
+        api_secret.to_string(),
+        session_key,
+    ))
+}
+
+/// Load `[scrobble]` application credentials for the browser auth flow.
+///
+/// Does not require a session key or Subsonic password.
+pub fn load_scrobble_app_credentials() -> Result<(ratune_scrobble::ScrobbleService, String, String)> {
+    let config_path = config_file_path()?;
+    if !config_path.exists() {
+        bail!(
+            "config file not found at {} — create it first (ratune writes a starter on first run)",
+            config_path.display()
+        );
+    }
+    let text = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let mut file_cfg: FileConfig = toml::from_str(&text)
+        .with_context(|| format!("parsing {}", config_path.display()))?;
+    merge_env_overrides(&mut file_cfg);
+
+    let sec = &file_cfg.scrobble;
+    let service = ratune_scrobble::ScrobbleService::parse(&sec.service)
+        .unwrap_or(ratune_scrobble::ScrobbleService::LastFm);
+
+    let api_key = sec.api_key.trim();
+    if api_key.is_empty() {
+        bail!(
+            "[scrobble].api_key is empty in {} (or set LASTFM_API_KEY / LIBREFM_API_KEY)",
+            config_path.display()
+        );
+    }
+    let api_secret = sec.api_secret.trim();
+    if api_secret.is_empty() {
+        bail!(
+            "[scrobble].api_secret is empty in {} (or set LASTFM_API_SECRET)",
+            config_path.display()
+        );
+    }
+
+    Ok((service, api_key.to_string(), api_secret.to_string()))
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 [workspace]
-members = ["ratune-subsonic", "ratune-player", "ratune"]
+members = ["ratune-subsonic", "ratune-player", "ratune-scrobble", "ratune"]
 resolver = "2"
 
 # https://github.com/crate-ci/cargo-release — GitHub/binary releases only until you publish to crates.io.

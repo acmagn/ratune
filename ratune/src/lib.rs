@@ -12,6 +12,7 @@ mod library_index;
 mod lyrics;
 mod mpris;
 mod persist;
+mod scrobble;
 mod state;
 mod theme;
 mod ui;
@@ -857,6 +858,47 @@ async fn run_loop(
     if let Err(e) = app.history.save(&history_path) {
         eprintln!("warn: could not save history: {e}");
     }
+    Ok(())
+}
+
+/// Obtain a Last.fm / Libre.fm session key via the browser authorization flow.
+pub async fn scrobble_auth() -> Result<()> {
+    use std::io::{self, Write};
+
+    use ratune_scrobble::AuthClient;
+
+    let (service, api_key, api_secret) = config::load_scrobble_app_credentials()?;
+    let client = AuthClient::new(service, api_key, api_secret);
+
+    eprintln!(
+        "Requesting auth token from {}…",
+        client.service().display_name()
+    );
+    let token = client.get_token().await?;
+    let url = client.authorize_url(&token);
+
+    eprintln!();
+    eprintln!("Open this URL in a browser and approve access:");
+    eprintln!("  {url}");
+    eprintln!();
+    eprint!("Press Enter after authorizing… ");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+
+    eprintln!("Exchanging token for session key…");
+    let session = client.get_session(&token).await?;
+
+    eprintln!();
+    eprintln!("Authorized as: {}", session.username);
+    eprintln!();
+    eprintln!("Add to ~/.config/ratune/config.toml under [scrobble]:");
+    eprintln!("  enabled = true");
+    eprintln!("  session_key = \"{}\"", session.key);
+    eprintln!();
+    eprintln!("Or export for the current shell:");
+    eprintln!("  export LASTFM_SESSION_KEY=\"{}\"", session.key);
+
     Ok(())
 }
 

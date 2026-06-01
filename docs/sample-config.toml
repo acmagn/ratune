@@ -403,3 +403,43 @@ notify_on_forced_index_refresh = true
 [cache]
 enabled = true
 max_size_gb = 2.0
+
+# -----------------------------------------------------------------------------
+# [scrobble] — Last.fm / Libre.fm + Subsonic play counts
+# -----------------------------------------------------------------------------
+#
+# Ratune owns playback, so scrobbling is reliable (no MPRIS guessing).
+#
+# enabled — Submit listens to Last.fm or Libre.fm. Default: false.
+# service — "lastfm" (default) or "librefm". Same Audioscrobbler API; only the
+#           base URL differs.
+#
+# Credentials for Audioscrobbler (all three required when enabled):
+#   api_key     — From https://www.last.fm/api/account/create (or Libre.fm equivalent)
+#   api_secret  — Shared secret paired with api_key (signs POST requests)
+#   session_key — From `ratune scrobble-auth` (browser flow) or auth.getSession
+#
+# Run once after setting api_key and api_secret:
+#   ratune scrobble-auth
+#
+# Prefer session_key_command over plaintext session_key (same idea as password_command):
+#   session_key_command = "secret-tool lookup service lastfm user you"
+#
+# Environment overrides (applied after the file):
+#   LASTFM_API_KEY / LIBREFM_API_KEY
+#   LASTFM_API_SECRET / LASTFM_SHARED_SECRET / LIBREFM_API_SECRET
+#   LASTFM_SESSION_KEY / LIBREFM_SESSION_KEY
+#
+# scrobble_to_server — When true (default), also call the Subsonic /scrobble REST
+#                      endpoint so Navidrome (etc.) records play counts. Uses the
+#                      local listen threshold (min(50%, 30 s)), independent of
+#                      Last.fm's min(50%, 4 min) rule.
+
+[scrobble]
+enabled = false
+service = "lastfm"
+# api_key = ""
+# api_secret = ""
+# session_key = ""
+# session_key_command = ""
+scrobble_to_server = true

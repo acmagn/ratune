@@ -8,6 +8,21 @@ const PKG_NAME: &str = env!("CARGO_PKG_NAME");
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PKG_REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 
+fn print_help() {
+    println!("{PKG_NAME} {PKG_VERSION}");
+    println!();
+    println!("Usage:");
+    println!("  {PKG_NAME}              Start the terminal music player");
+    println!("  {PKG_NAME} scrobble-auth  Obtain a Last.fm / Libre.fm session key");
+    println!();
+    println!("Configuration: ~/.config/ratune/config.toml");
+    println!("{PKG_REPOSITORY}");
+    println!();
+    println!("Options:");
+    println!("  -V, --version  Print version and exit");
+    println!("  -h, --help     Print this help and exit");
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -19,19 +34,10 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             "-h" | "--help" => {
-                println!("{PKG_NAME} {PKG_VERSION}");
-                println!();
-                println!("Usage: {PKG_NAME}");
-                println!();
-                println!("Terminal music player for Subsonic-compatible servers.");
-                println!("Configuration: ~/.config/ratune/config.toml");
-                println!("{PKG_REPOSITORY}");
-                println!();
-                println!("Options:");
-                println!("  -V, --version  Print version and exit");
-                println!("  -h, --help     Print this help and exit");
+                print_help();
                 return Ok(());
             }
+            "scrobble-auth" => return ratune::scrobble_auth().await,
             other => {
                 eprintln!("{PKG_NAME}: unknown argument '{other}'");
                 eprintln!("Try '{PKG_NAME} --help' for usage.");
