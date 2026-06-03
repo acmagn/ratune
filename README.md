@@ -38,6 +38,7 @@ Ratune was built to bring together a combination of features often missing from 
 - **Folder navigation**: Optional Browse layout that follows server music folders for servers that provide it.
 - **Customization**: Keybinds, theme, layout, now-playing lines, queue row template inspired by ncmpcpp.
 - **Integration**: Linux MPRIS (media keys, `playerctl`).
+- **Scrobbling**: Last.fm and Libre.fm (Audioscrobbler), plus optional Subsonic `/scrobble` for Navidrome play counts — no MPRIS guessing; Ratune owns playback.
 
 ---
 
@@ -240,6 +241,70 @@ folder_navigation = true
 
 **Toggle at runtime:** default **`Ctrl+b`** (`toggle_folder_browse` in `[keybinds]`). Switches between folder view and artist browsing and jumps to the Browse tab. If you start in `files` mode, the first toggle to artists loads the artist list if it was not fetched yet.
 
+### Scrobbling
+
+Ratune can scrobble listens to Last.fm or Libre.fm and optionally notify your Subsonic server so Navidrome records play counts. Because Ratune controls playback directly, scrobbles are based on actual listen progress — not MPRIS metadata.
+
+Full reference: [`[scrobble]`](docs/sample-config.toml) in the sample config.
+
+#### Enable
+
+Register an API account at [Last.fm](https://www.last.fm/api/account/create) (or Libre.fm equivalent), then add a `[scrobble]` block. 
+
+```toml
+[scrobble]
+enabled = true
+service = "lastfm"   # or "librefm"
+api_key = "your_application_key"
+scrobble_to_server = true   # Subsonic /scrobble (default: true; works without Last.fm)
+```
+
+Same options for secret handling as Subsonic password are provided.
+
+#### keyring or secret commands
+
+To not store secrets in the file (synced dotfiles, shared machines, etc.), leave `api_secret` / `session_key` empty and use either command in config or ratune functions to save to the keyring.
+
+| Secret | Resolution order |
+|--------|------------------|
+| `api_secret` | config → `api_secret_command` → OS keyring (`lastfm\|api_secret`) |
+| `session_key` | config → `session_key_command` → OS keyring (`lastfm\|session`) |
+
+Keyring entries use service **`ratune`**. Env vars (`LASTFM_API_SECRET`, `LASTFM_SESSION_KEY`, …) override the file, same as Subsonic.
+
+```sh
+# save directly to keyring
+ratune scrobble-api-secret --save-keyring
+ratune scrobble-auth --save-keyring
+```
+
+Without `--save-keyring`, each command prints the value to paste into config instead.
+
+#### plaintext
+
+You can optionally store either/both of these as plaintext instead.
+
+```toml
+[scrobble]
+enabled = true
+service = "lastfm"   # or "librefm"
+api_key = "your_application_key"
+api_secret = "your_shared_secret"
+session_key = "your_session_key"   # from `ratune scrobble-auth`
+scrobble_to_server = true   # Subsonic /scrobble (default: true; works without Last.fm)
+```
+
+Get `session_key` once with `ratune scrobble-auth` (prints the key for config unless you pass `--save-keyring`).
+
+#### Behaviour
+
+- **Now playing** is sent when a track starts.
+- **Scrobble** fires at min(`min_percent`% of track length, `max_listen_seconds`). Defaults for Last.fm: 50%, 4 minutes. Tracks ≤ `min_track_seconds` (default 30 s) are skipped.
+- **Subsonic scrobble** (if enabled) uses a separate local threshold (default: 50%, 30 s cap).
+- Both sets of thresholds are optional under `[scrobble.thresholds.local]` and `[scrobble.thresholds.audioscrobbler]` — see the sample config. Audioscrobbler defaults follow [Last.fm’s scrobbling rules](https://www.last.fm/api/scrobbling); deviating may cause ignored scrobbles.
+- Failed Last.fm submissions are queued in `~/.local/share/ratune/scrobble-queue.json` and retried on the next launch (entries older than 14 days are dropped).
+- The status bar shows the service name when scrobbling is enabled; a **✓** appears briefly after a successful submit. Pending queue items show as `Last.fm (N)`.
+
 ---
 
 ## Default keybinds
@@ -334,12 +399,13 @@ set -g focus-events on
 
 ## Project layout
 
-This repository is a Cargo workspace with three crates:
+This repository is a Cargo workspace with four crates:
 
 | Crate | Role |
 | --- | --- |
-| [`ratune`](ratune/) | TUI, event loop, state, art, fzf, MPRIS |
+| [`ratune`](ratune/) | TUI, event loop, state, art, fzf, MPRIS, scrobbling |
 | [`ratune-subsonic`](ratune-subsonic/) | Subsonic HTTP client and models |
+| [`ratune-scrobble`](ratune-scrobble/) | Last.fm / Libre.fm Audioscrobbler client and play thresholds |
 | [`ratune-player`](ratune-player/) | Audio (rodio), gapless, sample tap for the visualizer |
 
 Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -353,6 +419,7 @@ Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `~/.config/ratune/config.toml` | Config |
 | `~/.config/ratune/state.json` | UI state, queue, browser position |
 | `~/.local/share/ratune/history.json` | Play history |
+| `~/.local/share/ratune/scrobble-queue.json` | Pending Last.fm scrobbles (offline retry) |
 | `~/.cache/ratune/` | Track cache, library index JSON, etc. |
 
 ---

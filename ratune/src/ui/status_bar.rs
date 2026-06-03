@@ -39,6 +39,46 @@ fn library_fetch_status_text(app: &App) -> String {
     format!("Fetching full library {sp}  ·  {secs}s")
 }
 
+fn scrobble_service_name(app: &App) -> &'static str {
+    match app.config.scrobble_service {
+        ratune_scrobble::ScrobbleService::LastFm => "Last.fm",
+        ratune_scrobble::ScrobbleService::LibreFm => "Libre.fm",
+    }
+}
+
+fn scrobble_status_width(app: &App) -> usize {
+    if !app.config.scrobble_enabled {
+        return 0;
+    }
+    let mut w = scrobble_service_name(app).len();
+    if app.scrobble_recently_ok() {
+        w += " ✓".len();
+    }
+    if !app.scrobble_queue.is_empty() {
+        w += format!(" ({})", app.scrobble_queue.len()).len();
+    }
+    w
+}
+
+fn push_scrobble_status_spans(app: &App, spans: &mut Vec<Span>, accent: ratatui::style::Color, dimmed: ratatui::style::Color) {
+    if !app.config.scrobble_enabled {
+        return;
+    }
+    spans.push(Span::styled(
+        scrobble_service_name(app).to_string(),
+        Style::default().fg(dimmed),
+    ));
+    if app.scrobble_recently_ok() {
+        spans.push(Span::styled(" ✓", Style::default().fg(accent)));
+    }
+    if !app.scrobble_queue.is_empty() {
+        spans.push(Span::styled(
+            format!(" ({})", app.scrobble_queue.len()),
+            Style::default().fg(dimmed),
+        ));
+    }
+}
+
 // ── Public render ─────────────────────────────────────────────────────────────
 
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
@@ -88,19 +128,6 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     } else {
         let hint = "i — help";
         let sep = "  ·  ";
-        let scrobble_label = if app.config.scrobble_enabled {
-            let name = match app.config.scrobble_service {
-                ratune_scrobble::ScrobbleService::LastFm => "Last.fm",
-                ratune_scrobble::ScrobbleService::LibreFm => "Libre.fm",
-            };
-            if app.scrobble_queue.is_empty() {
-                name.to_string()
-            } else {
-                format!("{name} ({})", app.scrobble_queue.len())
-            }
-        } else {
-            String::new()
-        };
         let host = app
             .config
             .subsonic_url
@@ -112,8 +139,9 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         if app.config.show_volume_indicator {
             right_w += sep.len() + vol_label.len();
         }
-        if !scrobble_label.is_empty() {
-            right_w += sep.len() + scrobble_label.len();
+        let scrobble_w = scrobble_status_width(app);
+        if scrobble_w > 0 {
+            right_w += sep.len() + scrobble_w;
         }
 
         let host_w = 2 + host.len();
@@ -124,11 +152,8 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled(host.to_string(), Style::default().fg(t.dimmed)),
             Span::raw(" ".repeat(gap)),
         ];
-        if !scrobble_label.is_empty() {
-            spans.push(Span::styled(
-                scrobble_label,
-                Style::default().fg(t.dimmed),
-            ));
+        if app.config.scrobble_enabled {
+            push_scrobble_status_spans(app, &mut spans, app.accent(), t.dimmed);
             spans.push(Span::styled(sep, Style::default().fg(t.dimmed)));
         }
         if app.config.show_volume_indicator {

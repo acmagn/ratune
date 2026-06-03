@@ -536,6 +536,8 @@ pub struct App {
     /// Failed scrobbles persisted for retry when offline.
     pub scrobble_queue: crate::scrobble_queue::ScrobbleQueue,
     scrobble_queue_path: std::path::PathBuf,
+    /// Show a ✓ on the status bar until this instant after a successful scrobble.
+    scrobble_ok_until: Option<Instant>,
 
     // ── Dynamic accent (Feature 5.1) ──────────────────────────────────────────
     /// Dominant colour extracted from the current track's album art.
@@ -676,6 +678,7 @@ impl App {
             scrobble_client,
             scrobble_queue,
             scrobble_queue_path,
+            scrobble_ok_until: None,
             lyrics_visible,
             lyrics_cache: None,
             lyrics_scroll: 0,
@@ -2323,7 +2326,7 @@ impl App {
 
         if !self.play_recorded {
             let threshold =
-                ratune_scrobble::play_threshold(total, ratune_scrobble::ThresholdProfile::Local);
+                ratune_scrobble::play_threshold(total, self.config.scrobble_local_threshold);
             if elapsed >= threshold {
                 let record = PlayRecord {
                     song_id: song.id.clone(),
@@ -2345,11 +2348,14 @@ impl App {
 
         if !self.audioscrobbler_scrobbled
             && self.scrobble_client.is_some()
-            && ratune_scrobble::audioscrobbler_eligible(total)
+            && ratune_scrobble::audioscrobbler_eligible(
+                total,
+                self.config.scrobble_audioscrobbler_rules,
+            )
         {
             let threshold = ratune_scrobble::play_threshold(
                 total,
-                ratune_scrobble::ThresholdProfile::Audioscrobbler,
+                self.config.scrobble_audioscrobbler_rules.listen,
             );
             if elapsed >= threshold {
                 if let Some(client) = self.scrobble_client.clone() {
@@ -2403,6 +2409,7 @@ impl App {
             Ok(()) => {
                 self.scrobble_queue.entries.retain(|e| e != &entry);
                 self.persist_scrobble_queue();
+                self.scrobble_ok_until = Some(Instant::now() + Duration::from_secs(10));
                 let msg = if from_live {
                     format!("Scrobbled: {artist} — {title}")
                 } else {
@@ -4639,6 +4646,18 @@ impl App {
                 self.status_flash = None;
             }
         }
+        if self
+            .scrobble_ok_until
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.scrobble_ok_until = None;
+        }
+    }
+
+    /// True briefly after a scrobble succeeds (status bar shows ✓).
+    pub fn scrobble_recently_ok(&self) -> bool {
+        self.scrobble_ok_until
+            .is_some_and(|deadline| Instant::now() < deadline)
     }
 
     // ── Playlist overlay ──────────────────────────────────────────────────────

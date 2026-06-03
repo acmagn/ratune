@@ -236,6 +236,93 @@ impl Default for LibrarySection {
 
 // ── [scrobble] — Last.fm / Libre.fm + Subsonic play counts ───────────────────
 
+/// Local listen threshold (history + Subsonic). Defaults: 50%, 30 s cap.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ScrobbleLocalThresholdSection {
+    /// Minimum fraction of track length before counting a listen (1–100). Default: 50.
+    #[serde(default = "default_scrobble_min_percent")]
+    pub min_percent: u8,
+    /// Upper cap on listen time (seconds). Default: 30.
+    #[serde(default = "default_local_max_listen_seconds")]
+    pub max_listen_seconds: u32,
+}
+
+impl Default for ScrobbleLocalThresholdSection {
+    fn default() -> Self {
+        Self {
+            min_percent: default_scrobble_min_percent(),
+            max_listen_seconds: default_local_max_listen_seconds(),
+        }
+    }
+}
+
+impl ScrobbleLocalThresholdSection {
+    pub fn resolve(&self) -> ratune_scrobble::ListenThreshold {
+        ratune_scrobble::ListenThreshold {
+            min_percent: self.min_percent.clamp(1, 100),
+            max_listen: std::time::Duration::from_secs(self.max_listen_seconds.max(1) as u64),
+        }
+    }
+}
+
+/// Last.fm / Libre.fm listen rules. Defaults match Last.fm’s documented scrobbling rules.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ScrobbleAudioscrobblerThresholdSection {
+    #[serde(default = "default_scrobble_min_percent")]
+    pub min_percent: u8,
+    #[serde(default = "default_audioscrobbler_max_listen_seconds")]
+    pub max_listen_seconds: u32,
+    /// Tracks this long or shorter are not scrobbled. Default: 30.
+    #[serde(default = "default_audioscrobbler_min_track_seconds")]
+    pub min_track_seconds: u32,
+}
+
+impl Default for ScrobbleAudioscrobblerThresholdSection {
+    fn default() -> Self {
+        Self {
+            min_percent: default_scrobble_min_percent(),
+            max_listen_seconds: default_audioscrobbler_max_listen_seconds(),
+            min_track_seconds: default_audioscrobbler_min_track_seconds(),
+        }
+    }
+}
+
+impl ScrobbleAudioscrobblerThresholdSection {
+    pub fn resolve(&self) -> ratune_scrobble::AudioscrobblerRules {
+        ratune_scrobble::AudioscrobblerRules {
+            listen: ratune_scrobble::ListenThreshold {
+                min_percent: self.min_percent.clamp(1, 100),
+                max_listen: std::time::Duration::from_secs(self.max_listen_seconds.max(1) as u64),
+            },
+            min_track_length: std::time::Duration::from_secs(self.min_track_seconds as u64),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ScrobbleThresholdsSection {
+    #[serde(default)]
+    pub local: ScrobbleLocalThresholdSection,
+    #[serde(default)]
+    pub audioscrobbler: ScrobbleAudioscrobblerThresholdSection,
+}
+
+fn default_scrobble_min_percent() -> u8 {
+    50
+}
+
+fn default_local_max_listen_seconds() -> u32 {
+    30
+}
+
+fn default_audioscrobbler_max_listen_seconds() -> u32 {
+    240
+}
+
+fn default_audioscrobbler_min_track_seconds() -> u32 {
+    30
+}
+
 /// Audioscrobbler and server-side scrobbling settings from config.toml.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ScrobbleSection {
@@ -263,6 +350,9 @@ pub struct ScrobbleSection {
     /// Call the Subsonic `/scrobble` endpoint when a listen is recorded. Default: true.
     #[serde(default = "default_scrobble_to_server")]
     pub scrobble_to_server: bool,
+    /// Optional listen thresholds (defaults follow Last.fm conventions).
+    #[serde(default)]
+    pub thresholds: ScrobbleThresholdsSection,
 }
 
 fn default_scrobble_service() -> String {
@@ -284,6 +374,7 @@ impl Default for ScrobbleSection {
             session_key: String::new(),
             session_key_command: String::new(),
             scrobble_to_server: default_scrobble_to_server(),
+            thresholds: ScrobbleThresholdsSection::default(),
         }
     }
 }
@@ -867,6 +958,10 @@ pub struct Config {
     pub scrobble_session_key: String,
     /// Notify the Subsonic server (Navidrome play counts) when a listen is recorded.
     pub scrobble_to_server: bool,
+    /// Threshold for local history + Subsonic scrobble.
+    pub scrobble_local_threshold: ratune_scrobble::ListenThreshold,
+    /// Threshold for Last.fm / Libre.fm scrobble.
+    pub scrobble_audioscrobbler_rules: ratune_scrobble::AudioscrobblerRules,
 }
 
 impl Config {
@@ -1217,6 +1312,8 @@ impl Config {
             scrobble_api_secret,
             scrobble_session_key,
             scrobble_to_server: scrobble.scrobble_to_server,
+            scrobble_local_threshold: scrobble.thresholds.local.resolve(),
+            scrobble_audioscrobbler_rules: scrobble.thresholds.audioscrobbler.resolve(),
         })
     }
 
@@ -1422,11 +1519,15 @@ max_size_gb = 2   # maximum total cache size in gigabytes
 # enabled = false
 # service = "lastfm"          # or "librefm"
 # api_key = ""
-# api_secret = ""             # or api_secret_command / keyring (lastfm|api_secret)
+# api_secret = ""            # plaintext supported; or api_secret_command / keyring
+# session_key = ""           # from `ratune scrobble-auth`; or session_key_command / keyring
 # api_secret_command = ""
-# session_key = ""            # run `ratune scrobble-auth` once; prefer session_key_command
 # session_key_command = ""
 # scrobble_to_server = true   # Subsonic /scrobble for Navidrome play counts
+#
+# CLI helpers (see README § Scrobbling):
+#   ratune scrobble-api-secret [--save-keyring]
+#   ratune scrobble-auth [--save-keyring]
 "##;
     std::fs::write(path, default_toml)
         .with_context(|| format!("writing default config to {}", path.display()))?;
@@ -1887,11 +1988,48 @@ password_command = "secret-tool lookup service ratune"
             session_key: String::new(),
             session_key_command: String::new(),
             scrobble_to_server: true,
+            thresholds: ScrobbleThresholdsSection::default(),
         };
         assert_eq!(
             resolve_scrobble_api_secret(&sec).expect("command"),
             "shh-secret"
         );
+    }
+
+    #[test]
+    fn parses_scrobble_thresholds() {
+        let text = r#"
+[scrobble.thresholds.local]
+min_percent = 40
+max_listen_seconds = 45
+
+[scrobble.thresholds.audioscrobbler]
+min_percent = 60
+max_listen_seconds = 180
+min_track_seconds = 20
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        assert_eq!(fc.scrobble.thresholds.local.min_percent, 40);
+        assert_eq!(fc.scrobble.thresholds.local.max_listen_seconds, 45);
+        assert_eq!(fc.scrobble.thresholds.audioscrobbler.min_percent, 60);
+        assert_eq!(fc.scrobble.thresholds.audioscrobbler.max_listen_seconds, 180);
+        assert_eq!(fc.scrobble.thresholds.audioscrobbler.min_track_seconds, 20);
+        let local = fc.scrobble.thresholds.local.resolve();
+        assert_eq!(local.min_percent, 40);
+        assert_eq!(local.max_listen, std::time::Duration::from_secs(45));
+        let rules = fc.scrobble.thresholds.audioscrobbler.resolve();
+        assert_eq!(rules.listen.min_percent, 60);
+        assert_eq!(rules.listen.max_listen, std::time::Duration::from_secs(180));
+        assert_eq!(rules.min_track_length, std::time::Duration::from_secs(20));
+    }
+
+    #[test]
+    fn scrobble_threshold_defaults_match_lastfm() {
+        let sec = ScrobbleThresholdsSection::default();
+        let local = sec.local.resolve();
+        assert_eq!(local, ratune_scrobble::ListenThreshold::local_default());
+        let rules = sec.audioscrobbler.resolve();
+        assert_eq!(rules, ratune_scrobble::AudioscrobblerRules::default());
     }
 
     #[test]
