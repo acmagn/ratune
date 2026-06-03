@@ -403,3 +403,74 @@ notify_on_forced_index_refresh = true
 [cache]
 enabled = true
 max_size_gb = 2.0
+
+# -----------------------------------------------------------------------------
+# [scrobble] — Last.fm / Libre.fm + Subsonic play counts
+# -----------------------------------------------------------------------------
+#
+# Ratune owns playback, so scrobbling is reliable (no MPRIS guessing).
+#
+# enabled — Submit listens to Last.fm or Libre.fm. Default: false.
+# service — "lastfm" (default) or "librefm". Same Audioscrobbler API; only the
+#           base URL differs.
+#
+# Credentials for Audioscrobbler (all required when enabled):
+#   api_key     — From https://www.last.fm/api/account/create (or Libre.fm equivalent)
+#   api_secret  — Shared secret paired with api_key (signs POST requests)
+#   session_key — Per-user token from `ratune scrobble-auth`
+#
+# Plaintext in this file is fine for personal setups (same idea as [server].password).
+# Prefer keyring or *_command when the config is synced or shared.
+#
+# Resolution order (first match wins):
+#   api_secret  — api_secret → api_secret_command → OS keyring (lastfm|api_secret)
+#   session_key — session_key → session_key_command → OS keyring (lastfm|session)
+# Keyring service name is always "ratune".
+#
+# Quick start (all in config):
+#   api_key = "…"
+#   api_secret = "…"
+#   session_key = "…"    # from `ratune scrobble-auth` (no --save-keyring)
+#
+# Optional — keep secrets out of the file:
+#   ratune scrobble-api-secret --save-keyring
+#   ratune scrobble-auth --save-keyring
+#   # then leave api_secret / session_key empty and use command or keyring instead
+#
+# Failed scrobbles are queued in ~/.local/share/ratune/scrobble-queue.json
+# and retried on the next startup (entries older than 14 days are dropped).
+#
+# Optional listen thresholds (omit for defaults):
+#   [scrobble.thresholds.local] — history + Subsonic /scrobble
+#     min_percent = 50          # fraction of track length (1–100)
+#     max_listen_seconds = 30   # cap on listen time
+#   [scrobble.thresholds.audioscrobbler] — Last.fm / Libre.fm
+#     min_percent = 50
+#     max_listen_seconds = 240  # 4 minutes (Last.fm convention)
+#     min_track_seconds = 30    # skip tracks this long or shorter
+# WARNING: Audioscrobbler defaults match Last.fm’s documented rules; changing them may
+# cause the service to ignore scrobbles.
+#
+# Examples:
+#   api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
+#   session_key_command = "secret-tool lookup service ratune user lastfm|session"
+#
+# Environment overrides (applied after the file):
+#   LASTFM_API_KEY / LIBREFM_API_KEY
+#   LASTFM_API_SECRET / LASTFM_SHARED_SECRET / LIBREFM_API_SECRET
+#   LASTFM_SESSION_KEY / LIBREFM_SESSION_KEY
+#
+# scrobble_to_server — When true (default), also call the Subsonic /scrobble REST
+#                      endpoint so Navidrome (etc.) records play counts. Uses the
+#                      local listen threshold (min(50%, 30 s)), independent of
+#                      Last.fm's min(50%, 4 min) rule.
+
+[scrobble]
+enabled = false
+service = "lastfm"
+# api_key = ""
+# api_secret = ""            # plaintext here is supported
+# session_key = ""           # from `ratune scrobble-auth`
+# api_secret_command = ""    # optional; checked if api_secret is empty
+# session_key_command = ""   # optional; checked if session_key is empty
+scrobble_to_server = true

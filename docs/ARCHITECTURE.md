@@ -1,16 +1,19 @@
 # Architecture
 
-ratune is a Cargo workspace with three crates:
+ratune is a Cargo workspace with four crates:
 
 | Crate | Role |
 |-------|------|
 | `ratune-subsonic` | Subsonic API client — authentication, endpoints, models |
+| `ratune-scrobble` | Last.fm / Libre.fm Audioscrobbler client, auth helpers, listen thresholds |
 | `ratune-player` | Audio engine — rodio-based playback on a dedicated thread, gapless transitions, sample tap for FFT |
-| `ratune` | Binary — TUI, event loop, state management, Kitty graphics |
+| `ratune` | Binary — TUI, event loop, state management, Kitty graphics, scrobble integration |
 
 ## Crate responsibilities
 
-**`ratune-subsonic`** is a pure HTTP client with no TUI or audio dependencies. It handles Subsonic API authentication (MD5 token + salt per request), and exposes endpoints for browsing artists/albums/tracks, streaming URLs, search, cover art, and playlist operations.
+**`ratune-subsonic`** is a pure HTTP client with no TUI or audio dependencies. It handles Subsonic API authentication (MD5 token + salt per request), and exposes endpoints for browsing artists/albums/tracks, streaming URLs, search, cover art, playlist operations, and server-side scrobbling.
+
+**`ratune-scrobble`** implements the Audioscrobbler API v2.0 (Last.fm and Libre.fm): signed POST requests, browser auth (`auth.getToken` / `auth.getSession`), `track.updateNowPlaying`, and `track.scrobble`. Shared threshold logic distinguishes Ratune local listens from Last.fm scrobble rules.
 
 **`ratune-player`** runs the audio engine on its own `std::thread` (not tokio). It communicates with the TUI through two channels:
 
@@ -22,6 +25,8 @@ Progress events fire on a ~500ms tick. Gapless playback is handled via `EnqueueN
 A `SampleTap` wrapper copies decoded samples into a shared ring buffer for FFT analysis by the visualizer.
 
 **`ratune`** (binary) owns the `App` struct, which holds all application state. The event loop runs on tokio and uses `select!` to race crossterm key/mouse events, player events, library update channels, and timer ticks.
+
+Scrobbling hooks into `PlayerEvent::TrackStarted` (now playing) and progress ticks (listen thresholds). Failed Audioscrobbler submissions are persisted under `~/.local/share/ratune/scrobble-queue.json` and retried on startup via background tokio tasks, using the same `LibraryUpdate` channel as other network work.
 
 ## Key patterns
 

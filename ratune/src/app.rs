@@ -330,6 +330,14 @@ pub enum LibraryUpdate {
         id: String,
         result: Result<DirectoryListing, String>,
     },
+    /// Audioscrobbler scrobble attempt (live or queue retry).
+    ScrobbleResult {
+        entry: crate::scrobble_queue::QueuedScrobble,
+        artist: String,
+        title: String,
+        result: Result<(), String>,
+        from_live: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -519,6 +527,17 @@ pub struct App {
     /// Reset to `false` on every `TrackStarted`; set to `true` once the
     /// scrobble threshold (50% or 30 s, whichever is shorter) is crossed.
     pub play_recorded: bool,
+    /// Unix seconds when the current track began playing (Audioscrobbler timestamp).
+    track_started_at: Option<i64>,
+    /// True once the current track has been submitted to Last.fm / Libre.fm.
+    audioscrobbler_scrobbled: bool,
+    /// Authenticated Audioscrobbler client when `[scrobble].enabled` is configured.
+    scrobble_client: Option<ratune_scrobble::AudioscrobblerClient>,
+    /// Failed scrobbles persisted for retry when offline.
+    pub scrobble_queue: crate::scrobble_queue::ScrobbleQueue,
+    scrobble_queue_path: std::path::PathBuf,
+    /// Show a ✓ on the status bar until this instant after a successful scrobble.
+    scrobble_ok_until: Option<Instant>,
 
     // ── Dynamic accent (Feature 5.1) ──────────────────────────────────────────
     /// Dominant colour extracted from the current track's album art.
@@ -586,6 +605,13 @@ impl App {
             BrowseMode::Files => BrowseMode::Files,
             BrowseMode::Artists => BrowseMode::Artists,
         };
+        let scrobble_client = config.audioscrobbler_client();
+        let scrobble_queue_path = crate::scrobble_queue::scrobble_queue_path();
+        let scrobble_queue = crate::scrobble_queue::ScrobbleQueue::load(&scrobble_queue_path)
+            .unwrap_or_else(|e| {
+                eprintln!("warn: could not load scrobble queue: {e:#}");
+                crate::scrobble_queue::ScrobbleQueue::default()
+            });
         Ok(Self {
             active_tab: Tab::Home,
             browser_focus: BrowserColumn::Artists,
@@ -647,6 +673,12 @@ impl App {
             help_scroll: 0,
             history: crate::history::PlayHistory::default(),
             play_recorded: false,
+            track_started_at: None,
+            audioscrobbler_scrobbled: false,
+            scrobble_client,
+            scrobble_queue,
+            scrobble_queue_path,
+            scrobble_ok_until: None,
             lyrics_visible,
             lyrics_cache: None,
             lyrics_scroll: 0,
@@ -2266,16 +2298,146 @@ impl App {
                     }
                 }
             }
+            LibraryUpdate::ScrobbleResult {
+                entry,
+                artist,
+                title,
+                result,
+                from_live,
+            } => self.handle_scrobble_result(entry, artist, title, result, from_live),
         }
     }
 
     // ── Player event ingestion ────────────────────────────────────────────────
 
+    fn scrobble_track_started(&mut self, song: &ratune_subsonic::Song) {
+        self.play_recorded = false;
+        self.audioscrobbler_scrobbled = false;
+        self.track_started_at = Some(ratune_scrobble::TrackInfo::now_secs());
+        if let Some(client) = self.scrobble_client.clone() {
+            crate::scrobble::spawn_now_playing(client, crate::scrobble::track_from_song(song));
+        }
+    }
+
+    fn try_record_listen(&mut self, elapsed: Duration, total: Option<Duration>) {
+        let Some(song) = self.playback.current_song.clone() else {
+            return;
+        };
+
+        if !self.play_recorded {
+            let threshold =
+                ratune_scrobble::play_threshold(total, self.config.scrobble_local_threshold);
+            if elapsed >= threshold {
+                let record = PlayRecord {
+                    song_id: song.id.clone(),
+                    album_id: song.album_id.clone().unwrap_or_default(),
+                    artist_id: song.artist_id.clone().unwrap_or_default(),
+                    artist_name: song.artist.clone().unwrap_or_default(),
+                    album_name: song.album.clone().unwrap_or_default(),
+                    track_name: song.title.clone(),
+                    played_at: PlayRecord::now_secs(),
+                    duration_secs: song.duration.map(|d| d as u64).unwrap_or(0),
+                };
+                self.history.record_play(record);
+                if self.config.scrobble_to_server {
+                    crate::scrobble::spawn_subsonic_scrobble(
+                        self.subsonic.clone(),
+                        song.id.clone(),
+                    );
+                }
+                self.play_recorded = true;
+            }
+        }
+
+        if !self.audioscrobbler_scrobbled
+            && self.scrobble_client.is_some()
+            && ratune_scrobble::audioscrobbler_eligible(
+                total,
+                self.config.scrobble_audioscrobbler_rules,
+            )
+        {
+            let threshold = ratune_scrobble::play_threshold(
+                total,
+                self.config.scrobble_audioscrobbler_rules.listen,
+            );
+            if elapsed >= threshold {
+                if let Some(client) = self.scrobble_client.clone() {
+                    let track = crate::scrobble::track_from_song(&song);
+                    let ts = self
+                        .track_started_at
+                        .unwrap_or_else(ratune_scrobble::TrackInfo::now_secs);
+                    crate::scrobble::spawn_audioscrobbler_scrobble(
+                        client,
+                        track,
+                        ts,
+                        self.library_tx.clone(),
+                        true,
+                    );
+                }
+                self.audioscrobbler_scrobbled = true;
+            }
+        }
+    }
+
+    pub fn spawn_scrobble_queue_flush(&mut self) {
+        if self.scrobble_client.is_none() || self.scrobble_queue.is_empty() {
+            return;
+        }
+        let entries = std::mem::take(&mut self.scrobble_queue.entries);
+        self.persist_scrobble_queue();
+        if let Some(client) = self.scrobble_client.clone() {
+            crate::scrobble::spawn_flush_scrobble_queue(client, entries, self.library_tx.clone());
+        }
+    }
+
+    pub fn persist_scrobble_queue(&self) {
+        if let Err(e) = self.scrobble_queue.save(&self.scrobble_queue_path) {
+            eprintln!("warn: could not save scrobble queue: {e:#}");
+        }
+    }
+
+    fn handle_scrobble_result(
+        &mut self,
+        entry: crate::scrobble_queue::QueuedScrobble,
+        artist: String,
+        title: String,
+        result: Result<(), String>,
+        from_live: bool,
+    ) {
+        match result {
+            Ok(()) => {
+                self.scrobble_queue.entries.retain(|e| e != &entry);
+                self.persist_scrobble_queue();
+                self.scrobble_ok_until = Some(Instant::now() + Duration::from_secs(10));
+                let msg = if from_live {
+                    format!("Scrobbled: {artist} — {title}")
+                } else {
+                    format!("Scrobble sent: {artist} — {title}")
+                };
+                self.flash_status_secs(msg, 4);
+                if !self.scrobble_queue.is_empty() {
+                    self.spawn_scrobble_queue_flush();
+                }
+            }
+            Err(e) => {
+                if from_live {
+                    self.scrobble_queue.push(entry);
+                    self.persist_scrobble_queue();
+                    let pending = self.scrobble_queue.len();
+                    self.flash_status_secs(format!("Scrobble queued ({pending} pending): {e}"), 6);
+                } else {
+                    self.scrobble_queue.push(entry);
+                    self.persist_scrobble_queue();
+                    eprintln!("scrobble: queue retry failed: {e}");
+                }
+            }
+        }
+    }
+
     pub fn handle_player_event(&mut self, event: PlayerEvent) {
         let progress_only = matches!(&event, PlayerEvent::Progress { .. });
         match event {
             PlayerEvent::TrackStarted => {
-                self.play_recorded = false;
                 self.playback.paused = false;
                 if let Some(song) = self.queue.current().cloned() {
                     // Fetch cover art when the track has one and it differs from cache.
@@ -2341,38 +2503,14 @@ impl App {
                             self.spawn_cache_download(&s_id, &a_id);
                         }
                     }
+                    self.scrobble_track_started(&song);
                     self.playback.current_song = Some(song);
                 }
             }
             PlayerEvent::Progress { elapsed, total } => {
                 self.playback.elapsed = elapsed;
                 self.playback.total = total;
-
-                // Record play once threshold is crossed (50% of duration OR 30 s).
-                if !self.play_recorded {
-                    let threshold = if let Some(dur) = total {
-                        let half = dur.as_secs_f64() * 0.5;
-                        std::time::Duration::from_secs_f64(half.min(30.0))
-                    } else {
-                        std::time::Duration::from_secs(30)
-                    };
-                    if elapsed >= threshold {
-                        if let Some(song) = self.playback.current_song.as_ref() {
-                            let record = crate::history::PlayRecord {
-                                song_id: song.id.clone(),
-                                album_id: song.album_id.clone().unwrap_or_default(),
-                                artist_id: song.artist_id.clone().unwrap_or_default(),
-                                artist_name: song.artist.clone().unwrap_or_default(),
-                                album_name: song.album.clone().unwrap_or_default(),
-                                track_name: song.title.clone(),
-                                played_at: crate::history::PlayRecord::now_secs(),
-                                duration_secs: song.duration.map(|d| d as u64).unwrap_or(0),
-                            };
-                            self.history.record_play(record);
-                        }
-                        self.play_recorded = true;
-                    }
-                }
+                self.try_record_listen(elapsed, total);
             }
             PlayerEvent::AboutToFinish => {
                 // Pre-load the next track for gapless playback.
@@ -2431,6 +2569,7 @@ impl App {
                             song.album.clone().unwrap_or_default(),
                         );
                     }
+                    self.scrobble_track_started(&song);
                     self.playback.current_song = Some(song);
                 }
             }
@@ -4503,6 +4642,18 @@ impl App {
                 self.status_flash = None;
             }
         }
+        if self
+            .scrobble_ok_until
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.scrobble_ok_until = None;
+        }
+    }
+
+    /// True briefly after a scrobble succeeds (status bar shows ✓).
+    pub fn scrobble_recently_ok(&self) -> bool {
+        self.scrobble_ok_until
+            .is_some_and(|deadline| Instant::now() < deadline)
     }
 
     // ── Playlist overlay ──────────────────────────────────────────────────────

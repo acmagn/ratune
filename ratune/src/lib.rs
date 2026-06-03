@@ -12,6 +12,8 @@ mod library_index;
 mod lyrics;
 mod mpris;
 mod persist;
+mod scrobble;
+mod scrobble_queue;
 mod state;
 mod theme;
 mod ui;
@@ -108,6 +110,16 @@ pub async fn run() -> Result<()> {
     match history::PlayHistory::load(&history_path) {
         Ok(h) => app.history = h,
         Err(e) => eprintln!("warn: could not load history: {e}"),
+    }
+
+    if app.config.scrobble_enabled {
+        if !app.scrobble_queue.is_empty() {
+            eprintln!(
+                "scrobble: retrying {} queued scrobble(s)…",
+                app.scrobble_queue.len()
+            );
+        }
+        app.spawn_scrobble_queue_flush();
     }
 
     // `refresh_home_data()` only ran when navigating to Home — not on cold start. If we restore
@@ -857,6 +869,139 @@ async fn run_loop(
     if let Err(e) = app.history.save(&history_path) {
         eprintln!("warn: could not save history: {e}");
     }
+    app.persist_scrobble_queue();
+    Ok(())
+}
+
+/// Obtain a Last.fm / Libre.fm session key via the browser authorization flow.
+pub async fn scrobble_auth(save_keyring: bool) -> Result<()> {
+    use std::io::{self, Write};
+
+    use ratune_scrobble::AuthClient;
+
+    keyring_init::install_default_keyring_store();
+
+    let (service, api_key, api_secret) = config::load_scrobble_app_credentials()?;
+    let client = AuthClient::new(service, api_key, api_secret);
+
+    eprintln!(
+        "Requesting auth token from {}…",
+        client.service().display_name()
+    );
+    let token = client.get_token().await?;
+    let url = client.authorize_url(&token);
+
+    eprintln!();
+    eprintln!("Open this URL in a browser and approve access:");
+    eprintln!("  {url}");
+    eprintln!();
+    eprint!("Press Enter after authorizing… ");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+
+    eprintln!("Exchanging token for session key…");
+    let session = client.get_session(&token).await?;
+
+    eprintln!();
+    eprintln!("Authorized as: {}", session.username);
+    eprintln!();
+
+    if save_keyring {
+        match config::store_scrobble_session_key(client.service(), &session.key) {
+            Ok(()) => {
+                eprintln!(
+                    "Session key saved to the OS keyring (service \"ratune\", user \"{}\").",
+                    scrobble_keyring_user_label(client.service(), "session")
+                );
+                eprintln!("You can leave session_key empty in config and set enabled = true.");
+            }
+            Err(e) => {
+                eprintln!("warning: could not save session key to keyring: {e:#}");
+                eprintln!("Add it manually to ~/.config/ratune/config.toml:");
+                eprintln!("  session_key = \"{}\"", session.key);
+            }
+        }
+    } else {
+        eprintln!("Add to ~/.config/ratune/config.toml under [scrobble]:");
+        eprintln!("  enabled = true");
+        eprintln!("  session_key = \"{}\"", session.key);
+        eprintln!();
+        eprintln!("Or store in the OS keyring and leave session_key empty:");
+        eprintln!("  ratune scrobble-auth --save-keyring");
+        eprintln!();
+        eprintln!("Or export for the current shell:");
+        eprintln!("  export LASTFM_SESSION_KEY=\"{}\"", session.key);
+    }
+
+    Ok(())
+}
+
+fn scrobble_service_display(service: ratune_scrobble::ScrobbleService) -> &'static str {
+    match service {
+        ratune_scrobble::ScrobbleService::LastFm => "Last.fm",
+        ratune_scrobble::ScrobbleService::LibreFm => "Libre.fm",
+    }
+}
+
+fn scrobble_keyring_user_label(service: ratune_scrobble::ScrobbleService, kind: &str) -> &str {
+    match (service, kind) {
+        (ratune_scrobble::ScrobbleService::LastFm, "api_secret") => "lastfm|api_secret",
+        (ratune_scrobble::ScrobbleService::LibreFm, "api_secret") => "librefm|api_secret",
+        (ratune_scrobble::ScrobbleService::LastFm, "session") => "lastfm|session",
+        (ratune_scrobble::ScrobbleService::LibreFm, "session") => "librefm|session",
+        (_, other) => other,
+    }
+}
+
+/// Prompt for the Last.fm / Libre.fm API shared secret.
+pub fn scrobble_api_secret(save_keyring: bool) -> Result<()> {
+    use inquire::Password;
+
+    keyring_init::install_default_keyring_store();
+
+    let (service, api_key) = config::load_scrobble_api_key()?;
+    eprintln!(
+        "{} API shared secret for application key {api_key}",
+        scrobble_service_display(service)
+    );
+
+    let secret = Password::new("API shared secret:")
+        .without_confirmation()
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let secret = secret.trim();
+    if secret.is_empty() {
+        anyhow::bail!("empty API secret");
+    }
+
+    if save_keyring {
+        match config::store_scrobble_api_secret(service, secret) {
+            Ok(()) => {
+                eprintln!(
+                    "API secret saved to the OS keyring (service \"ratune\", user \"{}\").",
+                    scrobble_keyring_user_label(service, "api_secret")
+                );
+                eprintln!("You can leave api_secret empty in config and unset LASTFM_API_SECRET.");
+            }
+            Err(e) => {
+                eprintln!("warning: could not save API secret to keyring: {e:#}");
+                eprintln!("Add it manually to ~/.config/ratune/config.toml:");
+                eprintln!("  api_secret = \"{secret}\"");
+            }
+        }
+    } else {
+        eprintln!();
+        eprintln!("Add to ~/.config/ratune/config.toml under [scrobble]:");
+        eprintln!("  api_secret = \"{secret}\"");
+        eprintln!();
+        eprintln!("Or store in the OS keyring and leave api_secret empty:");
+        eprintln!("  ratune scrobble-api-secret --save-keyring");
+        eprintln!();
+        eprintln!("Or export for the current shell:");
+        eprintln!("  export LASTFM_API_SECRET=\"{secret}\"");
+    }
+
     Ok(())
 }
 
