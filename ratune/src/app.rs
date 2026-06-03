@@ -2340,7 +2340,10 @@ impl App {
                 };
                 self.history.record_play(record);
                 if self.config.scrobble_to_server {
-                    crate::scrobble::spawn_subsonic_scrobble(self.subsonic.clone(), song.id.clone());
+                    crate::scrobble::spawn_subsonic_scrobble(
+                        self.subsonic.clone(),
+                        song.id.clone(),
+                    );
                 }
                 self.play_recorded = true;
             }
@@ -2383,11 +2386,7 @@ impl App {
         let entries = std::mem::take(&mut self.scrobble_queue.entries);
         self.persist_scrobble_queue();
         if let Some(client) = self.scrobble_client.clone() {
-            crate::scrobble::spawn_flush_scrobble_queue(
-                client,
-                entries,
-                self.library_tx.clone(),
-            );
+            crate::scrobble::spawn_flush_scrobble_queue(client, entries, self.library_tx.clone());
         }
     }
 
@@ -2425,10 +2424,7 @@ impl App {
                     self.scrobble_queue.push(entry);
                     self.persist_scrobble_queue();
                     let pending = self.scrobble_queue.len();
-                    self.flash_status_secs(
-                        format!("Scrobble queued ({pending} pending): {e}"),
-                        6,
-                    );
+                    self.flash_status_secs(format!("Scrobble queued ({pending} pending): {e}"), 6);
                 } else {
                     self.scrobble_queue.push(entry);
                     self.persist_scrobble_queue();

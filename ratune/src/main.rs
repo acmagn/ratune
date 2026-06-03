@@ -15,7 +15,9 @@ fn print_help() {
     println!("  {PKG_NAME}                               Start the terminal music player");
     println!("  {PKG_NAME} scrobble-api-secret             Prompt for API shared secret");
     println!("  {PKG_NAME} scrobble-api-secret --save-keyring  …and store it in the OS keyring");
-    println!("  {PKG_NAME} scrobble-auth                     Obtain a Last.fm / Libre.fm session key");
+    println!(
+        "  {PKG_NAME} scrobble-auth                     Obtain a Last.fm / Libre.fm session key"
+    );
     println!("  {PKG_NAME} scrobble-auth --save-keyring         …and store it in the OS keyring");
     println!();
     println!("Configuration: ~/.config/ratune/config.toml");

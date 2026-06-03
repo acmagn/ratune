@@ -1234,15 +1234,14 @@ impl Config {
         let scrobble_enabled = scrobble.enabled;
         let scrobble_service = ratune_scrobble::ScrobbleService::parse(&scrobble.service)
             .unwrap_or(ratune_scrobble::ScrobbleService::LastFm);
-        let (scrobble_api_key, scrobble_api_secret, scrobble_session_key) =
-            if scrobble_enabled {
-                resolve_scrobble_credentials(scrobble).unwrap_or_else(|e| {
-                    eprintln!("warning: scrobbling disabled — {e:#}");
-                    (String::new(), String::new(), String::new())
-                })
-            } else {
+        let (scrobble_api_key, scrobble_api_secret, scrobble_session_key) = if scrobble_enabled {
+            resolve_scrobble_credentials(scrobble).unwrap_or_else(|e| {
+                eprintln!("warning: scrobbling disabled — {e:#}");
                 (String::new(), String::new(), String::new())
-            };
+            })
+        } else {
+            (String::new(), String::new(), String::new())
+        };
         let scrobble_enabled = scrobble_enabled
             && !scrobble_api_key.is_empty()
             && !scrobble_api_secret.is_empty()
@@ -1727,7 +1726,8 @@ fn merge_env_overrides(cfg: &mut FileConfig) {
     {
         cfg.scrobble.api_secret = v;
     }
-    if let Ok(v) = std::env::var("LASTFM_SESSION_KEY").or_else(|_| std::env::var("LIBREFM_SESSION_KEY"))
+    if let Ok(v) =
+        std::env::var("LASTFM_SESSION_KEY").or_else(|_| std::env::var("LIBREFM_SESSION_KEY"))
     {
         cfg.scrobble.session_key = v;
     }
@@ -1741,11 +1741,7 @@ fn resolve_scrobble_credentials(sec: &ScrobbleSection) -> Result<(String, String
     }
     let api_secret = resolve_scrobble_api_secret(sec)?;
     let session_key = resolve_scrobble_session_key(sec)?;
-    Ok((
-        api_key.to_string(),
-        api_secret,
-        session_key,
-    ))
+    Ok((api_key.to_string(), api_secret, session_key))
 }
 
 fn scrobble_service_name(service: ratune_scrobble::ScrobbleService) -> &'static str {
@@ -1854,8 +1850,8 @@ pub fn store_scrobble_session_key(
         bail!("refusing to store empty session key");
     }
     let label = scrobble_keyring_label(service, "session");
-    let entry = keyring_core::Entry::new("ratune", &label)
-        .context("keyring entry for scrobble session")?;
+    let entry =
+        keyring_core::Entry::new("ratune", &label).context("keyring entry for scrobble session")?;
     entry
         .set_password(key)
         .context("storing scrobble session key in keyring")?;
@@ -1865,7 +1861,8 @@ pub fn store_scrobble_session_key(
 /// Load `[scrobble]` application credentials for the browser auth flow.
 ///
 /// Does not require a session key or Subsonic password.
-pub fn load_scrobble_app_credentials() -> Result<(ratune_scrobble::ScrobbleService, String, String)> {
+pub fn load_scrobble_app_credentials() -> Result<(ratune_scrobble::ScrobbleService, String, String)>
+{
     let config_path = config_file_path()?;
     if !config_path.exists() {
         bail!(
@@ -1875,8 +1872,8 @@ pub fn load_scrobble_app_credentials() -> Result<(ratune_scrobble::ScrobbleServi
     }
     let text = std::fs::read_to_string(&config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let mut file_cfg: FileConfig = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", config_path.display()))?;
+    let mut file_cfg: FileConfig =
+        toml::from_str(&text).with_context(|| format!("parsing {}", config_path.display()))?;
     merge_env_overrides(&mut file_cfg);
 
     let sec = &file_cfg.scrobble;
@@ -1907,8 +1904,8 @@ pub fn load_scrobble_api_key() -> Result<(ratune_scrobble::ScrobbleService, Stri
     }
     let text = std::fs::read_to_string(&config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let mut file_cfg: FileConfig = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", config_path.display()))?;
+    let mut file_cfg: FileConfig =
+        toml::from_str(&text).with_context(|| format!("parsing {}", config_path.display()))?;
     merge_env_overrides(&mut file_cfg);
 
     let sec = &file_cfg.scrobble;
@@ -2012,7 +2009,10 @@ min_track_seconds = 20
         assert_eq!(fc.scrobble.thresholds.local.min_percent, 40);
         assert_eq!(fc.scrobble.thresholds.local.max_listen_seconds, 45);
         assert_eq!(fc.scrobble.thresholds.audioscrobbler.min_percent, 60);
-        assert_eq!(fc.scrobble.thresholds.audioscrobbler.max_listen_seconds, 180);
+        assert_eq!(
+            fc.scrobble.thresholds.audioscrobbler.max_listen_seconds,
+            180
+        );
         assert_eq!(fc.scrobble.thresholds.audioscrobbler.min_track_seconds, 20);
         let local = fc.scrobble.thresholds.local.resolve();
         assert_eq!(local.min_percent, 40);

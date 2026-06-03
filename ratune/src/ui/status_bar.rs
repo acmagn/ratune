@@ -60,7 +60,12 @@ fn scrobble_status_width(app: &App) -> usize {
     w
 }
 
-fn push_scrobble_status_spans(app: &App, spans: &mut Vec<Span>, accent: ratatui::style::Color, dimmed: ratatui::style::Color) {
+fn push_scrobble_status_spans(
+    app: &App,
+    spans: &mut Vec<Span>,
+    accent: ratatui::style::Color,
+    dimmed: ratatui::style::Color,
+) {
     if !app.config.scrobble_enabled {
         return;
     }

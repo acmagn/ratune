@@ -76,7 +76,10 @@ impl AuthClient {
             .and_then(|n| n.as_str())
             .unwrap_or("")
             .to_string();
-        Ok(AuthSession { key, username: name })
+        Ok(AuthSession {
+            key,
+            username: name,
+        })
     }
 
     async fn post_signed(&self, mut params: BTreeMap<String, String>) -> Result<Value> {
@@ -110,10 +113,7 @@ impl AuthClient {
         }
 
         if !status.is_success() {
-            bail!(
-                "{} API HTTP {status}",
-                self.service.display_name()
-            );
+            bail!("{} API HTTP {status}", self.service.display_name());
         }
 
         Ok(body)
@@ -133,11 +133,7 @@ mod tests {
 
     #[test]
     fn authorize_url_lastfm() {
-        let client = AuthClient::new(
-            ScrobbleService::LastFm,
-            "abc123".into(),
-            "secret".into(),
-        );
+        let client = AuthClient::new(ScrobbleService::LastFm, "abc123".into(), "secret".into());
         assert_eq!(
             client.authorize_url("tok"),
             "https://www.last.fm/api/auth/?api_key=abc123&token=tok"
@@ -146,11 +142,7 @@ mod tests {
 
     #[test]
     fn authorize_url_librefm() {
-        let client = AuthClient::new(
-            ScrobbleService::LibreFm,
-            "abc123".into(),
-            "secret".into(),
-        );
+        let client = AuthClient::new(ScrobbleService::LibreFm, "abc123".into(), "secret".into());
         assert_eq!(
             client.authorize_url("tok"),
             "https://libre.fm/api/auth/?api_key=abc123&token=tok"

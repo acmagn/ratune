@@ -148,10 +148,7 @@ impl AudioscrobblerClient {
         }
 
         if !status.is_success() {
-            bail!(
-                "{} API HTTP {status}",
-                self.service.display_name()
-            );
+            bail!("{} API HTTP {status}", self.service.display_name());
         }
 
         Ok(())
@@ -190,8 +187,14 @@ mod tests {
 
     #[test]
     fn parses_service_names() {
-        assert_eq!(ScrobbleService::parse("Last.fm"), Some(ScrobbleService::LastFm));
-        assert_eq!(ScrobbleService::parse("librefm"), Some(ScrobbleService::LibreFm));
+        assert_eq!(
+            ScrobbleService::parse("Last.fm"),
+            Some(ScrobbleService::LastFm)
+        );
+        assert_eq!(
+            ScrobbleService::parse("librefm"),
+            Some(ScrobbleService::LibreFm)
+        );
         assert!(ScrobbleService::parse("spotify").is_none());
     }
 }
