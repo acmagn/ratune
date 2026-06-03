@@ -330,6 +330,14 @@ pub enum LibraryUpdate {
         id: String,
         result: Result<DirectoryListing, String>,
     },
+    /// Audioscrobbler scrobble attempt (live or queue retry).
+    ScrobbleResult {
+        entry: crate::scrobble_queue::QueuedScrobble,
+        artist: String,
+        title: String,
+        result: Result<(), String>,
+        from_live: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -525,6 +533,9 @@ pub struct App {
     audioscrobbler_scrobbled: bool,
     /// Authenticated Audioscrobbler client when `[scrobble].enabled` is configured.
     scrobble_client: Option<ratune_scrobble::AudioscrobblerClient>,
+    /// Failed scrobbles persisted for retry when offline.
+    pub scrobble_queue: crate::scrobble_queue::ScrobbleQueue,
+    scrobble_queue_path: std::path::PathBuf,
 
     // ── Dynamic accent (Feature 5.1) ──────────────────────────────────────────
     /// Dominant colour extracted from the current track's album art.
@@ -593,6 +604,12 @@ impl App {
             BrowseMode::Artists => BrowseMode::Artists,
         };
         let scrobble_client = config.audioscrobbler_client();
+        let scrobble_queue_path = crate::scrobble_queue::scrobble_queue_path();
+        let scrobble_queue = crate::scrobble_queue::ScrobbleQueue::load(&scrobble_queue_path)
+            .unwrap_or_else(|e| {
+                eprintln!("warn: could not load scrobble queue: {e:#}");
+                crate::scrobble_queue::ScrobbleQueue::default()
+            });
         Ok(Self {
             active_tab: Tab::Home,
             browser_focus: BrowserColumn::Artists,
@@ -657,6 +674,8 @@ impl App {
             track_started_at: None,
             audioscrobbler_scrobbled: false,
             scrobble_client,
+            scrobble_queue,
+            scrobble_queue_path,
             lyrics_visible,
             lyrics_cache: None,
             lyrics_scroll: 0,
@@ -2276,6 +2295,13 @@ impl App {
                     }
                 }
             }
+            LibraryUpdate::ScrobbleResult {
+                entry,
+                artist,
+                title,
+                result,
+                from_live,
+            } => self.handle_scrobble_result(entry, artist, title, result, from_live),
         }
     }
 
@@ -2331,9 +2357,76 @@ impl App {
                     let ts = self
                         .track_started_at
                         .unwrap_or_else(ratune_scrobble::TrackInfo::now_secs);
-                    crate::scrobble::spawn_audioscrobbler_scrobble(client, track, ts);
+                    crate::scrobble::spawn_audioscrobbler_scrobble(
+                        client,
+                        track,
+                        ts,
+                        self.library_tx.clone(),
+                        true,
+                    );
                 }
                 self.audioscrobbler_scrobbled = true;
+            }
+        }
+    }
+
+    pub fn spawn_scrobble_queue_flush(&mut self) {
+        if self.scrobble_client.is_none() || self.scrobble_queue.is_empty() {
+            return;
+        }
+        let entries = std::mem::take(&mut self.scrobble_queue.entries);
+        self.persist_scrobble_queue();
+        if let Some(client) = self.scrobble_client.clone() {
+            crate::scrobble::spawn_flush_scrobble_queue(
+                client,
+                entries,
+                self.library_tx.clone(),
+            );
+        }
+    }
+
+    pub fn persist_scrobble_queue(&self) {
+        if let Err(e) = self.scrobble_queue.save(&self.scrobble_queue_path) {
+            eprintln!("warn: could not save scrobble queue: {e:#}");
+        }
+    }
+
+    fn handle_scrobble_result(
+        &mut self,
+        entry: crate::scrobble_queue::QueuedScrobble,
+        artist: String,
+        title: String,
+        result: Result<(), String>,
+        from_live: bool,
+    ) {
+        match result {
+            Ok(()) => {
+                self.scrobble_queue.entries.retain(|e| e != &entry);
+                self.persist_scrobble_queue();
+                let msg = if from_live {
+                    format!("Scrobbled: {artist} — {title}")
+                } else {
+                    format!("Scrobble sent: {artist} — {title}")
+                };
+                self.flash_status_secs(msg, 4);
+                if !self.scrobble_queue.is_empty() {
+                    self.spawn_scrobble_queue_flush();
+                }
+            }
+            Err(e) => {
+                if from_live {
+                    self.scrobble_queue.push(entry);
+                    self.persist_scrobble_queue();
+                    let pending = self.scrobble_queue.len();
+                    self.flash_status_secs(
+                        format!("Scrobble queued ({pending} pending): {e}"),
+                        6,
+                    );
+                } else {
+                    self.scrobble_queue.push(entry);
+                    self.persist_scrobble_queue();
+                    eprintln!("scrobble: queue retry failed: {e}");
+                }
             }
         }
     }

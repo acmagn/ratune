@@ -251,6 +251,9 @@ pub struct ScrobbleSection {
     /// API shared secret (required to sign POST requests).
     #[serde(default)]
     pub api_secret: String,
+    /// Shell command whose stdout is the API shared secret (trimmed).
+    #[serde(default)]
+    pub api_secret_command: String,
     /// Session key from `auth.getSession` (see docs). Prefer keyring / command over plaintext.
     #[serde(default)]
     pub session_key: String,
@@ -277,6 +280,7 @@ impl Default for ScrobbleSection {
             service: default_scrobble_service(),
             api_key: String::new(),
             api_secret: String::new(),
+            api_secret_command: String::new(),
             session_key: String::new(),
             session_key_command: String::new(),
             scrobble_to_server: default_scrobble_to_server(),
@@ -1418,7 +1422,8 @@ max_size_gb = 2   # maximum total cache size in gigabytes
 # enabled = false
 # service = "lastfm"          # or "librefm"
 # api_key = ""
-# api_secret = ""
+# api_secret = ""             # or api_secret_command / keyring (lastfm|api_secret)
+# api_secret_command = ""
 # session_key = ""            # run `ratune scrobble-auth` once; prefer session_key_command
 # session_key_command = ""
 # scrobble_to_server = true   # Subsonic /scrobble for Navidrome play counts
@@ -1633,24 +1638,127 @@ fn resolve_scrobble_credentials(sec: &ScrobbleSection) -> Result<(String, String
     if api_key.is_empty() {
         bail!("[scrobble].api_key is empty (or set LASTFM_API_KEY / LIBREFM_API_KEY)");
     }
-    let api_secret = sec.api_secret.trim();
-    if api_secret.is_empty() {
-        bail!("[scrobble].api_secret is empty (or set LASTFM_API_SECRET)");
-    }
-    let session_key = if !sec.session_key.trim().is_empty() {
-        sec.session_key.trim().to_string()
-    } else if !sec.session_key_command.trim().is_empty() {
-        run_password_command(sec.session_key_command.trim())?
-    } else {
-        bail!(
-            "[scrobble].session_key is empty — run `ratune scrobble-auth`, or set session_key, session_key_command, or LASTFM_SESSION_KEY"
-        );
-    };
+    let api_secret = resolve_scrobble_api_secret(sec)?;
+    let session_key = resolve_scrobble_session_key(sec)?;
     Ok((
         api_key.to_string(),
-        api_secret.to_string(),
+        api_secret,
         session_key,
     ))
+}
+
+fn scrobble_service_name(service: ratune_scrobble::ScrobbleService) -> &'static str {
+    match service {
+        ratune_scrobble::ScrobbleService::LastFm => "lastfm",
+        ratune_scrobble::ScrobbleService::LibreFm => "librefm",
+    }
+}
+
+fn scrobble_keyring_label(service: ratune_scrobble::ScrobbleService, kind: &str) -> String {
+    format!("{}|{kind}", scrobble_service_name(service))
+}
+
+fn resolve_scrobble_service(sec: &ScrobbleSection) -> ratune_scrobble::ScrobbleService {
+    ratune_scrobble::ScrobbleService::parse(&sec.service)
+        .unwrap_or(ratune_scrobble::ScrobbleService::LastFm)
+}
+
+fn resolve_scrobble_api_secret(sec: &ScrobbleSection) -> Result<String> {
+    if !sec.api_secret.trim().is_empty() {
+        return Ok(sec.api_secret.trim().to_string());
+    }
+    if !sec.api_secret_command.trim().is_empty() {
+        return run_password_command(sec.api_secret_command.trim());
+    }
+    resolve_scrobble_api_secret_from_keyring(sec)
+}
+
+fn resolve_scrobble_api_secret_from_keyring(sec: &ScrobbleSection) -> Result<String> {
+    read_scrobble_keyring(
+        sec,
+        "api_secret",
+        "set api_secret / LASTFM_API_SECRET, api_secret_command, or run `ratune scrobble-api-secret --save-keyring`",
+    )
+}
+
+fn resolve_scrobble_session_key(sec: &ScrobbleSection) -> Result<String> {
+    if !sec.session_key.trim().is_empty() {
+        return Ok(sec.session_key.trim().to_string());
+    }
+    if !sec.session_key_command.trim().is_empty() {
+        return run_password_command(sec.session_key_command.trim());
+    }
+    resolve_scrobble_session_from_keyring(sec)
+}
+
+fn resolve_scrobble_session_from_keyring(sec: &ScrobbleSection) -> Result<String> {
+    read_scrobble_keyring(
+        sec,
+        "session",
+        "run `ratune scrobble-auth --save-keyring`, or set session_key / session_key_command / LASTFM_SESSION_KEY",
+    )
+}
+
+fn read_scrobble_keyring(sec: &ScrobbleSection, kind: &str, hint: &str) -> Result<String> {
+    use keyring_core::Error as KeyringError;
+
+    let service = resolve_scrobble_service(sec);
+    let label = scrobble_keyring_label(service, kind);
+    let entry = match keyring_core::Entry::new("ratune", &label) {
+        Ok(e) => e,
+        Err(KeyringError::NoDefaultStore) => {
+            bail!("no {kind} configured — {hint}");
+        }
+        Err(e) => return Err(e).context(format!("keyring entry for scrobble {kind}")),
+    };
+
+    match entry.get_password() {
+        Ok(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                bail!("keyring entry for scrobble {kind} is empty");
+            }
+            Ok(t.to_string())
+        }
+        Err(KeyringError::NoEntry) => bail!("no {kind} in keyring — {hint}"),
+        Err(e) => Err(e).context(format!("reading scrobble {kind} from keyring")),
+    }
+}
+
+/// Persist an API shared secret in the OS keyring (service `ratune`).
+pub fn store_scrobble_api_secret(
+    service: ratune_scrobble::ScrobbleService,
+    api_secret: &str,
+) -> Result<()> {
+    let secret = api_secret.trim();
+    if secret.is_empty() {
+        bail!("refusing to store empty API secret");
+    }
+    let label = scrobble_keyring_label(service, "api_secret");
+    let entry = keyring_core::Entry::new("ratune", &label)
+        .context("keyring entry for scrobble api_secret")?;
+    entry
+        .set_password(secret)
+        .context("storing scrobble api_secret in keyring")?;
+    Ok(())
+}
+
+/// Persist a scrobble session key in the OS keyring (service `ratune`).
+pub fn store_scrobble_session_key(
+    service: ratune_scrobble::ScrobbleService,
+    session_key: &str,
+) -> Result<()> {
+    let key = session_key.trim();
+    if key.is_empty() {
+        bail!("refusing to store empty session key");
+    }
+    let label = scrobble_keyring_label(service, "session");
+    let entry = keyring_core::Entry::new("ratune", &label)
+        .context("keyring entry for scrobble session")?;
+    entry
+        .set_password(key)
+        .context("storing scrobble session key in keyring")?;
+    Ok(())
 }
 
 /// Load `[scrobble]` application credentials for the browser auth flow.
@@ -1671,9 +1779,39 @@ pub fn load_scrobble_app_credentials() -> Result<(ratune_scrobble::ScrobbleServi
     merge_env_overrides(&mut file_cfg);
 
     let sec = &file_cfg.scrobble;
-    let service = ratune_scrobble::ScrobbleService::parse(&sec.service)
-        .unwrap_or(ratune_scrobble::ScrobbleService::LastFm);
+    let (service, api_key) = {
+        let service = resolve_scrobble_service(sec);
+        let api_key = sec.api_key.trim();
+        if api_key.is_empty() {
+            bail!(
+                "[scrobble].api_key is empty in {} (or set LASTFM_API_KEY / LIBREFM_API_KEY)",
+                config_path.display()
+            );
+        }
+        (service, api_key.to_string())
+    };
+    let api_secret = resolve_scrobble_api_secret(sec)?;
 
+    Ok((service, api_key, api_secret))
+}
+
+/// Load service + application API key (for `scrobble-auth` / store helpers).
+pub fn load_scrobble_api_key() -> Result<(ratune_scrobble::ScrobbleService, String)> {
+    let config_path = config_file_path()?;
+    if !config_path.exists() {
+        bail!(
+            "config file not found at {} — create it first (ratune writes a starter on first run)",
+            config_path.display()
+        );
+    }
+    let text = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let mut file_cfg: FileConfig = toml::from_str(&text)
+        .with_context(|| format!("parsing {}", config_path.display()))?;
+    merge_env_overrides(&mut file_cfg);
+
+    let sec = &file_cfg.scrobble;
+    let service = resolve_scrobble_service(sec);
     let api_key = sec.api_key.trim();
     if api_key.is_empty() {
         bail!(
@@ -1681,15 +1819,7 @@ pub fn load_scrobble_app_credentials() -> Result<(ratune_scrobble::ScrobbleServi
             config_path.display()
         );
     }
-    let api_secret = sec.api_secret.trim();
-    if api_secret.is_empty() {
-        bail!(
-            "[scrobble].api_secret is empty in {} (or set LASTFM_API_SECRET)",
-            config_path.display()
-        );
-    }
-
-    Ok((service, api_key.to_string(), api_secret.to_string()))
+    Ok((service, api_key.to_string()))
 }
 
 #[cfg(test)]
@@ -1742,6 +1872,38 @@ password_command = "secret-tool lookup service ratune"
         assert_eq!(
             resolve_subsonic_secret(&server).expect("command"),
             "from-cmd"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn api_secret_command_shell_output() {
+        let sec = ScrobbleSection {
+            enabled: false,
+            service: "lastfm".into(),
+            api_key: "key".into(),
+            api_secret: String::new(),
+            api_secret_command: "printf '%s' 'shh-secret'".into(),
+            session_key: String::new(),
+            session_key_command: String::new(),
+            scrobble_to_server: true,
+        };
+        assert_eq!(
+            resolve_scrobble_api_secret(&sec).expect("command"),
+            "shh-secret"
+        );
+    }
+
+    #[test]
+    fn parses_scrobble_api_secret_command() {
+        let text = r#"
+[scrobble]
+api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        assert_eq!(
+            fc.scrobble.api_secret_command,
+            "secret-tool lookup service ratune user lastfm|api_secret"
         );
     }
 

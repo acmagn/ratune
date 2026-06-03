@@ -414,16 +414,28 @@ max_size_gb = 2.0
 # service — "lastfm" (default) or "librefm". Same Audioscrobbler API; only the
 #           base URL differs.
 #
-# Credentials for Audioscrobbler (all three required when enabled):
-#   api_key     — From https://www.last.fm/api/account/create (or Libre.fm equivalent)
-#   api_secret  — Shared secret paired with api_key (signs POST requests)
-#   session_key — From `ratune scrobble-auth` (browser flow) or auth.getSession
+# Credentials for Audioscrobbler (all required when enabled):
+#   api_key     — Application id (semi-public; fine in config)
+#   api_secret  — Shared secret that signs POST requests (keep out of config if possible)
+#   session_key — Per-user token from `ratune scrobble-auth`
 #
-# Run once after setting api_key and api_secret:
-#   ratune scrobble-auth
+# api_secret resolution: api_secret → api_secret_command → OS keyring
+#   (service "ratune", user "lastfm|api_secret" or "librefm|api_secret").
+# session_key resolution: session_key → session_key_command → OS keyring
+#   (service "ratune", user "lastfm|session" or "librefm|session").
 #
-# Prefer session_key_command over plaintext session_key (same idea as password_command):
-#   session_key_command = "secret-tool lookup service lastfm user you"
+# Run once after setting api_key:
+#   ratune scrobble-api-secret --save-keyring   # stores api_secret in OS keyring
+#   ratune scrobble-api-secret                  # prints api_secret for config.toml
+#   ratune scrobble-auth --save-keyring         # stores session key in OS keyring
+#   ratune scrobble-auth                        # prints session_key for config.toml
+#
+# Failed scrobbles are queued in ~/.local/share/ratune/scrobble-queue.json
+# and retried on the next startup (entries older than 14 days are dropped).
+#
+# Examples:
+#   api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
+#   session_key_command = "secret-tool lookup service ratune user lastfm|session"
 #
 # Environment overrides (applied after the file):
 #   LASTFM_API_KEY / LIBREFM_API_KEY
@@ -440,6 +452,7 @@ enabled = false
 service = "lastfm"
 # api_key = ""
 # api_secret = ""
+# api_secret_command = ""
 # session_key = ""
 # session_key_command = ""
 scrobble_to_server = true

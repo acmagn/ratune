@@ -86,21 +86,37 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         let shown = fit_status_bar_text(msg, w);
         Line::from(vec![Span::styled(shown, Style::default().fg(app.accent()))])
     } else {
+        let hint = "i — help";
+        let sep = "  ·  ";
+        let scrobble_label = if app.config.scrobble_enabled {
+            let name = match app.config.scrobble_service {
+                ratune_scrobble::ScrobbleService::LastFm => "Last.fm",
+                ratune_scrobble::ScrobbleService::LibreFm => "Libre.fm",
+            };
+            if app.scrobble_queue.is_empty() {
+                name.to_string()
+            } else {
+                format!("{name} ({})", app.scrobble_queue.len())
+            }
+        } else {
+            String::new()
+        };
         let host = app
             .config
             .subsonic_url
             .trim_start_matches("http://")
             .trim_start_matches("https://");
-
-        let hint = "i — help";
-        let sep = "  ·  ";
         let vol_label = format!("{}%", app.config.default_volume);
-        let right_w = if app.config.show_volume_indicator {
-            vol_label.len() + sep.len() + hint.len()
-        } else {
-            hint.len()
-        };
-        let host_w = 2 + host.len(); // "● " + host
+
+        let mut right_w = hint.len();
+        if app.config.show_volume_indicator {
+            right_w += sep.len() + vol_label.len();
+        }
+        if !scrobble_label.is_empty() {
+            right_w += sep.len() + scrobble_label.len();
+        }
+
+        let host_w = 2 + host.len();
         let gap = (area.width as usize).saturating_sub(host_w + right_w);
 
         let mut spans = vec![
@@ -108,6 +124,13 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled(host.to_string(), Style::default().fg(t.dimmed)),
             Span::raw(" ".repeat(gap)),
         ];
+        if !scrobble_label.is_empty() {
+            spans.push(Span::styled(
+                scrobble_label,
+                Style::default().fg(t.dimmed),
+            ));
+            spans.push(Span::styled(sep, Style::default().fg(t.dimmed)));
+        }
         if app.config.show_volume_indicator {
             spans.push(Span::styled(vol_label, Style::default().fg(app.accent())));
             spans.push(Span::styled(sep, Style::default().fg(t.dimmed)));
