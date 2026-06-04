@@ -553,6 +553,9 @@ pub struct UiBrowseTabSection {
     /// applies when [`folder_navigation`](Self::folder_navigation) is true).
     #[serde(default)]
     pub mode: Option<String>,
+    /// Browse tab: list rows to move per mouse wheel tick (default: 1).
+    #[serde(default)]
+    pub mouse_wheel_scroll_lines: Option<usize>,
 }
 
 /// Optional nested `[ui.nptab]` (Now Playing tab) table.
@@ -950,6 +953,8 @@ pub struct Config {
     pub browse_mode: BrowseMode,
     /// When true, folder browsing can be toggled with the keybind and used from the Browse tab.
     pub browse_folder_navigation: bool,
+    /// Browse tab: list rows to move per mouse wheel tick.
+    pub browse_mouse_wheel_scroll_lines: usize,
     /// Scrobble listens to Last.fm or Libre.fm when enabled and credentials are configured.
     pub scrobble_enabled: bool,
     pub scrobble_service: ratune_scrobble::ScrobbleService,
@@ -1229,6 +1234,12 @@ impl Config {
             .as_ref()
             .and_then(|b| b.folder_navigation)
             .unwrap_or(false);
+        let browse_mouse_wheel_scroll_lines = ui
+            .browsetab
+            .as_ref()
+            .and_then(|b| b.mouse_wheel_scroll_lines)
+            .unwrap_or(1)
+            .max(1);
 
         let scrobble = &file_cfg.scrobble;
         let scrobble_enabled = scrobble.enabled;
@@ -1305,6 +1316,7 @@ impl Config {
             home_panels,
             browse_mode,
             browse_folder_navigation,
+            browse_mouse_wheel_scroll_lines,
             scrobble_enabled,
             scrobble_service,
             scrobble_api_key,

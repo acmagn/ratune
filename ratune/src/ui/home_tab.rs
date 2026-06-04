@@ -12,7 +12,9 @@ use ratatui_image::StatefulImage;
 use crate::app::{App, HomeSection, HomeState, RecentAlbum};
 use crate::config::{Config, HomePanel};
 use crate::theme::Theme;
-use crate::ui::kitty_art::{art_strip_layout, KITTY_STRIP_MAX_SLOTS, STRIP_GAP_COLS};
+use crate::ui::kitty_art::{
+    art_strip_layout, art_strip_thumb_hit, KITTY_STRIP_MAX_SLOTS, STRIP_GAP_COLS,
+};
 
 // ── Relative time formatting ──────────────────────────────────────────────────
 
@@ -137,6 +139,53 @@ pub fn compute_home_layout(area: Rect, cfg: &Config) -> Option<HomeLayout> {
         bottom_right_panel,
         bottom_h,
     })
+}
+
+/// Inner content rect of a home panel block (inside the border).
+pub fn home_panel_inner(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+/// Map a click inside the Recently Played panel to an album index, if any.
+pub fn home_recent_album_index_at(
+    x: u16,
+    y: u16,
+    inner: Rect,
+    show_art: bool,
+    scroll_offset: usize,
+    album_count: usize,
+) -> Option<usize> {
+    if album_count == 0
+        || y < inner.y
+        || y >= inner.y + inner.height
+        || x < inner.x
+        || x >= inner.x + inner.width
+    {
+        return None;
+    }
+
+    if !show_art {
+        let row = (y - inner.y) as usize;
+        let idx = scroll_offset + row;
+        return (idx < album_count).then_some(idx);
+    }
+
+    let layout = art_strip_layout(inner.width, inner.height);
+    let rel_x = x.saturating_sub(inner.x);
+    let rel_y = y.saturating_sub(inner.y);
+    let (row_in_grid, col_in_grid) = art_strip_thumb_hit(&layout, rel_x, rel_y)?;
+    let slot = (row_in_grid as usize) * layout.per_row + (col_in_grid as usize);
+    let max_slots = layout.total_visible.min(KITTY_STRIP_MAX_SLOTS);
+    if slot >= max_slots {
+        return None;
+    }
+    let idx = scroll_offset + slot;
+    (idx < album_count).then_some(idx)
 }
 
 // ── Top-level render ──────────────────────────────────────────────────────────

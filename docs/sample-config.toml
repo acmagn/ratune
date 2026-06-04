@@ -261,10 +261,14 @@ panels = ["recent_albums", "recent_tracks", "rediscover"]
 # mode — Default layout on startup when folder_navigation is true: "artists" or
 #   "files". When folder_navigation is false, the Browse tab always starts as
 #   artists. "genre" is still a stub.
+# mouse_wheel_scroll_lines — Rows to move per mouse wheel tick in Browse lists
+#   (artists, albums, tracks, and folder browse). Default: 1. Keyboard j/k always
+#   moves one row.
 
 [ui.browsetab]
 folder_navigation = false
 mode = "artists"
+# mouse_wheel_scroll_lines = 10
 
 # -----------------------------------------------------------------------------
 # [ui.nptab] — Now Playing tab overrides

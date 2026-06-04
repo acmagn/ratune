@@ -3542,7 +3542,7 @@ impl App {
     fn handle_navigate(&mut self, dir: Direction) {
         match self.active_tab {
             Tab::Home => self.handle_navigate_home(dir),
-            Tab::Browser => self.handle_navigate_browser(dir),
+            Tab::Browser => self.handle_navigate_browser(dir, 1),
             Tab::NowPlaying => self.handle_navigate_queue(dir),
         }
     }
@@ -3676,9 +3676,9 @@ impl App {
         };
     }
 
-    fn handle_navigate_browser(&mut self, dir: Direction) {
+    fn handle_navigate_browser(&mut self, dir: Direction, line_steps: usize) {
         if self.browse_files() {
-            self.handle_navigate_browser_files(dir);
+            self.handle_navigate_browser_files(dir, line_steps);
             return;
         }
         match self.browser_focus {
@@ -3706,8 +3706,8 @@ impl App {
                         .unwrap_or(0);
                     let page = self.browser_list_viewport_rows.max(1);
                     let new_pos = match dir {
-                        Direction::Up => cur_pos.saturating_sub(1),
-                        Direction::Down => (cur_pos + 1).min(indices.len() - 1),
+                        Direction::Up => cur_pos.saturating_sub(line_steps),
+                        Direction::Down => (cur_pos + line_steps).min(indices.len() - 1),
                         Direction::Top => 0,
                         Direction::Bottom => indices.len() - 1,
                         Direction::PageUp => cur_pos.saturating_sub(page),
@@ -3759,8 +3759,8 @@ impl App {
                             .unwrap_or(0);
                         let page = self.browser_list_viewport_rows.max(1);
                         let new_pos = match dir {
-                            Direction::Up => cur_pos.saturating_sub(1),
-                            Direction::Down => (cur_pos + 1).min(indices.len() - 1),
+                            Direction::Up => cur_pos.saturating_sub(line_steps),
+                            Direction::Down => (cur_pos + line_steps).min(indices.len() - 1),
                             Direction::Top => 0,
                             Direction::Bottom => indices.len() - 1,
                             Direction::PageUp => cur_pos.saturating_sub(page),
@@ -3810,8 +3810,8 @@ impl App {
                         .unwrap_or(0);
                     let page = self.browser_list_viewport_rows.max(1);
                     let new_pos = match dir {
-                        Direction::Up => cur_pos.saturating_sub(1),
-                        Direction::Down => (cur_pos + 1).min(indices.len() - 1),
+                        Direction::Up => cur_pos.saturating_sub(line_steps),
+                        Direction::Down => (cur_pos + line_steps).min(indices.len() - 1),
                         Direction::Top => 0,
                         Direction::Bottom => indices.len() - 1,
                         Direction::PageUp => cur_pos.saturating_sub(page),
@@ -3823,7 +3823,7 @@ impl App {
         }
     }
 
-    fn handle_navigate_browser_files(&mut self, dir: Direction) {
+    fn handle_navigate_browser_files(&mut self, dir: Direction, line_steps: usize) {
         let page = self.browser_list_viewport_rows.max(1);
         match self.browser_focus {
             BrowserColumn::Artists | BrowserColumn::Albums => {
@@ -3865,8 +3865,8 @@ impl App {
                 }
                 let cur = self.folders.selected_dir.unwrap_or(0).min(len - 1);
                 let new_pos = match dir {
-                    Direction::Up => cur.saturating_sub(1),
-                    Direction::Down => (cur + 1).min(len - 1),
+                    Direction::Up => cur.saturating_sub(line_steps),
+                    Direction::Down => (cur + line_steps).min(len - 1),
                     Direction::Top => 0,
                     Direction::Bottom => len - 1,
                     Direction::PageUp => cur.saturating_sub(page),
@@ -3890,8 +3890,8 @@ impl App {
                     }
                     let cur_pos = self.folders.preview_selected_row.min(rows.len() - 1);
                     let new_pos = match dir {
-                        Direction::Up => cur_pos.saturating_sub(1),
-                        Direction::Down => (cur_pos + 1).min(rows.len() - 1),
+                        Direction::Up => cur_pos.saturating_sub(line_steps),
+                        Direction::Down => (cur_pos + line_steps).min(rows.len() - 1),
                         Direction::Top => 0,
                         Direction::Bottom => rows.len() - 1,
                         Direction::PageUp => cur_pos.saturating_sub(page),
@@ -4532,6 +4532,11 @@ impl App {
     }
 
     // ── Mouse-click helpers (called from main.rs event handler) ──────────────
+
+    pub fn navigate_browser_wheel(&mut self, dir: Direction) {
+        let steps = self.config.browse_mouse_wheel_scroll_lines.max(1);
+        self.handle_navigate_browser(dir, steps);
+    }
 
     pub fn click_browser_artist(&mut self, orig_idx: usize) {
         if let LoadingState::Loaded(artists) = &self.library.artists {
