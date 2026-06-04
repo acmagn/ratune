@@ -743,12 +743,34 @@ async fn run_loop(
                                     }
                                 }
                             }
-                        Event::Mouse(mouse)
-                            if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
-                                let sz = terminal.size()?;
-                                let area = ratatui::layout::Rect::new(0, 0, sz.width, sz.height);
-                                handle_mouse_click(mouse.column, mouse.row, app, area);
+                        Event::Mouse(mouse) => {
+                            let sz = terminal.size()?;
+                            let area = Rect::new(0, 0, sz.width, sz.height);
+                            match mouse.kind {
+                                MouseEventKind::Down(MouseButton::Left) => {
+                                    handle_mouse_click(mouse.column, mouse.row, app, area);
+                                }
+                                MouseEventKind::ScrollUp => {
+                                    handle_mouse_wheel(
+                                        mouse.column,
+                                        mouse.row,
+                                        Direction::Up,
+                                        app,
+                                        area,
+                                    );
+                                }
+                                MouseEventKind::ScrollDown => {
+                                    handle_mouse_wheel(
+                                        mouse.column,
+                                        mouse.row,
+                                        Direction::Down,
+                                        app,
+                                        area,
+                                    );
+                                }
+                                _ => {}
                             }
+                        }
                         Event::Resize(_, _) => {
                             // Terminal resized — clear any displayed image and reset
                             // stored state so the art is re-encoded at the new size.
@@ -1038,53 +1060,28 @@ fn handle_home_click(x: u16, y: u16, app: &mut App, center: ratatui::layout::Rec
 }
 
 fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App) {
-    use crate::ui::kitty_art::{art_strip_layout, art_strip_thumb_hit, KITTY_STRIP_MAX_SLOTS};
-
     match panel {
         HomePanel::RecentAlbums => {
-            let inner = Rect {
-                x: area.x + 1,
-                y: area.y + 1,
-                width: area.width.saturating_sub(2),
-                height: area.height.saturating_sub(2),
+            let inner = crate::ui::home_tab::home_panel_inner(area);
+            let album_count = app.home.recent_albums.len();
+            let Some(album_index) = crate::ui::home_tab::home_recent_album_index_at(
+                x,
+                y,
+                inner,
+                app.config.home_recent_albums_show_art,
+                app.home.album_scroll_offset,
+                album_count,
+            ) else {
+                return;
             };
-            if y < inner.y
-                || y >= inner.y + inner.height
-                || x < inner.x
-                || x >= inner.x + inner.width
+            if app.home.active_section == app::HomeSection::RecentAlbums
+                && app.home.album_selected_index == album_index
             {
-                return;
-            }
-            app.home.active_section = app::HomeSection::RecentAlbums;
-            app.home.selected_index = 0;
-
-            let layout = art_strip_layout(inner.width, inner.height);
-            let rel_x = x.saturating_sub(inner.x);
-            let rel_y = y.saturating_sub(inner.y);
-            let Some((row_in_grid, col_in_grid)) = art_strip_thumb_hit(&layout, rel_x, rel_y)
-            else {
-                return;
-            };
-            let slot = (row_in_grid as usize) * layout.per_row + (col_in_grid as usize);
-            let max_slots = layout.total_visible.min(KITTY_STRIP_MAX_SLOTS);
-            if slot >= max_slots {
-                return;
-            }
-            let album_index = app.home.album_scroll_offset + slot;
-            if album_index < app.home.recent_albums.len() {
-                if app.home.album_selected_index == album_index {
-                    if app.kitty_apc_overlay_active() {
-                        let _ = crate::ui::kitty_art::clear_image(app.in_tmux);
-                        let _ = crate::ui::kitty_art::clear_art_strip(app.in_tmux);
-                    }
-                    if app.ratatui_art_ready() && !app.ratatui_uses_kitty_apc() {
-                        app.clear_ratatui_art_state();
-                    }
-                    app.active_tab = app::Tab::Browser;
-                    app.clear_browser_search();
-                } else {
-                    app.home.album_selected_index = album_index;
-                }
+                app.dispatch(Action::Select);
+            } else {
+                app.home.active_section = app::HomeSection::RecentAlbums;
+                app.home.selected_index = 0;
+                app.home.album_selected_index = album_index;
             }
         }
         HomePanel::RecentTracks => {
@@ -1509,6 +1506,91 @@ fn map_help_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action
     Action::None
 }
 
+// ── Browser column hit-test (shared by click + wheel) ─────────────────────────
+
+struct BrowserColumnHit {
+    focus: BrowserColumn,
+    col_idx: usize,
+    col_area: Rect,
+}
+
+fn browser_column_hit(
+    x: u16,
+    y: u16,
+    center: Rect,
+    browse_mode: BrowseMode,
+) -> Option<BrowserColumnHit> {
+    use ratatui::layout::{Constraint, Layout};
+
+    if y < center.y || y >= center.y + center.height {
+        return None;
+    }
+
+    let files_mode = browse_mode == BrowseMode::Files;
+    let browser_cols = if files_mode {
+        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(center)
+    } else {
+        Layout::horizontal([
+            Constraint::Percentage(30),
+            Constraint::Percentage(35),
+            Constraint::Percentage(35),
+        ])
+        .split(center)
+    };
+
+    let col_idx = if files_mode {
+        if x < browser_cols[1].x {
+            0usize
+        } else {
+            1
+        }
+    } else if x < browser_cols[1].x {
+        0usize
+    } else if x < browser_cols[2].x {
+        1
+    } else {
+        2
+    };
+
+    let col_area = browser_cols[col_idx];
+    if y <= col_area.y || y >= col_area.y + col_area.height - 1 {
+        return None;
+    }
+
+    let focus = if files_mode {
+        match col_idx {
+            0 => BrowserColumn::Artists,
+            _ => BrowserColumn::Tracks,
+        }
+    } else {
+        match col_idx {
+            0 => BrowserColumn::Artists,
+            1 => BrowserColumn::Albums,
+            _ => BrowserColumn::Tracks,
+        }
+    };
+
+    Some(BrowserColumnHit {
+        focus,
+        col_idx,
+        col_area,
+    })
+}
+
+fn handle_mouse_wheel(x: u16, y: u16, dir: Direction, app: &mut App, terminal_size: Rect) {
+    if app.active_tab != Tab::Browser {
+        return;
+    }
+
+    let areas = ui::layout::build_layout(terminal_size, &ui::layout::layout_options_for_app(app));
+    let Some(hit) = browser_column_hit(x, y, areas.center, app.browser_browse_mode) else {
+        return;
+    };
+
+    app.browser_focus = hit.focus;
+    app.navigate_browser_wheel(dir);
+}
+
 // ── Mouse click handler ───────────────────────────────────────────────────────
 //
 // CALL PATH DIAGNOSIS (tab-bar freeze, 2026-03-28)
@@ -1538,7 +1620,6 @@ fn map_help_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action
 //      the album scroll / selection changes.
 
 fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::layout::Rect) {
-    use ratatui::layout::{Constraint, Layout};
     use state::LoadingState;
 
     // Always use build_layout: the renderer uses it for all three tabs.
@@ -1628,55 +1709,13 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             handle_home_click(x, y, app, center);
         }
         Tab::Browser => {
-            let files_mode = app.browser_browse_mode == BrowseMode::Files;
-            let browser_cols = if files_mode {
-                Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
-                    .split(center)
-            } else {
-                Layout::horizontal([
-                    Constraint::Percentage(30),
-                    Constraint::Percentage(35),
-                    Constraint::Percentage(35),
-                ])
-                .split(center)
-            };
-
-            let col_idx = if files_mode {
-                if x < browser_cols[1].x {
-                    0usize
-                } else {
-                    1
-                }
-            } else if x < browser_cols[1].x {
-                0usize
-            } else if x < browser_cols[2].x {
-                1
-            } else {
-                2
-            };
-
-            let col_area = browser_cols[col_idx];
-            // Ignore clicks on the border rows.
-            if y <= col_area.y || y >= col_area.y + col_area.height - 1 {
+            let Some(hit) = browser_column_hit(x, y, center, app.browser_browse_mode) else {
                 return;
-            }
-
-            let visible_row = (y - col_area.y - 1) as usize;
-            let visible_height = col_area.height.saturating_sub(2) as usize;
-
-            // Switch focus to the clicked column.
-            app.browser_focus = if files_mode {
-                match col_idx {
-                    0 => BrowserColumn::Artists,
-                    _ => BrowserColumn::Tracks,
-                }
-            } else {
-                match col_idx {
-                    0 => BrowserColumn::Artists,
-                    1 => BrowserColumn::Albums,
-                    _ => BrowserColumn::Tracks,
-                }
             };
+            let visible_row = (y - hit.col_area.y - 1) as usize;
+            app.browser_focus = hit.focus;
+            let col_idx = hit.col_idx;
+            let files_mode = app.browser_browse_mode == BrowseMode::Files;
 
             if files_mode {
                 match col_idx {
@@ -1697,7 +1736,6 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
 
             match col_idx {
                 0 => {
-                    // Artists: compute ratatui's auto-scroll offset and map click.
                     let orig_idx: Option<usize> = {
                         if let LoadingState::Loaded(artists) = &app.library.artists {
                             let visible: Vec<usize> = if let Some(q) =
@@ -1712,15 +1750,7 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                             } else {
                                 (0..artists.len()).collect()
                             };
-                            let sel_pos = app
-                                .library
-                                .selected_artist
-                                .and_then(|s| visible.iter().position(|&i| i == s))
-                                .unwrap_or(0);
-                            // ratatui scrolls to keep selection visible from below:
-                            // scroll = max(0, sel_pos - (visible_height - 1))
-                            let scroll = sel_pos.saturating_sub(visible_height.saturating_sub(1));
-                            let clicked = scroll + visible_row;
+                            let clicked = app.library.artists_scroll + visible_row;
                             visible.get(clicked).copied()
                         } else {
                             None
@@ -1751,13 +1781,7 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                             } else {
                                 (0..albums.len()).collect()
                             };
-                            let sel_pos = app
-                                .library
-                                .selected_album
-                                .and_then(|s| visible.iter().position(|&i| i == s))
-                                .unwrap_or(0);
-                            let scroll = sel_pos.saturating_sub(visible_height.saturating_sub(1));
-                            let clicked = scroll + visible_row;
+                            let clicked = app.library.albums_scroll + visible_row;
                             visible.get(clicked).copied()
                         } else {
                             None
@@ -1787,13 +1811,7 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                             } else {
                                 (0..songs.len()).collect()
                             };
-                            let sel_pos = app
-                                .library
-                                .selected_track
-                                .and_then(|s| visible.iter().position(|&i| i == s))
-                                .unwrap_or(0);
-                            let scroll = sel_pos.saturating_sub(visible_height.saturating_sub(1));
-                            let clicked = scroll + visible_row;
+                            let clicked = app.library.tracks_scroll + visible_row;
                             visible.get(clicked).copied()
                         } else {
                             None
