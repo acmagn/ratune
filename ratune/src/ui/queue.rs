@@ -4,6 +4,7 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::theme::style_with_bg;
 
 const DEFAULT_QUEUE_TEMPLATE: &str = "{n}  {title:<40}  {artist:<25}  {duration:>5}";
 
@@ -34,7 +35,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(t.surface));
+        .style(style_with_bg(t.surface));
 
     if app.queue.songs.is_empty() {
         let mut msg = "Queue is empty — press 'a' to add tracks".to_string();
@@ -85,7 +86,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 .fg(app.accent())
                 .add_modifier(Modifier::BOLD),
         )
-        .style(Style::default().bg(t.surface));
+        .style(style_with_bg(t.surface));
 
     // Offset is handled by slicing, so keep ListState offset at 0 and select within window.
     let mut state = ListState::default();

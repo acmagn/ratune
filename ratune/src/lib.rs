@@ -499,7 +499,29 @@ async fn run_loop(
                             art_displayed = false;
                         }
                     } else if let Some(art_rect) = art_rect_opt {
-                        let placement = ui::kitty_art::album_art_placeholder_inner(art_rect);
+                        let inner = ui::kitty_art::album_art_placeholder_inner(art_rect);
+                        let font = app
+                            .art_picker
+                            .as_ref()
+                            .map(|p| p.font_size())
+                            .or(app.cell_px)
+                            .unwrap_or((10, 20));
+                        let placement = app
+                            .art_cache_decoded
+                            .as_ref()
+                            .map(|(_, img)| {
+                                ui::art_prepare::contain_fit_rect_in_cells(img, inner, font)
+                            })
+                            .unwrap_or_else(|| {
+                                image::load_from_memory(bytes)
+                                    .ok()
+                                    .map(|img| {
+                                        ui::art_prepare::contain_fit_rect_in_cells(
+                                            &img, inner, font,
+                                        )
+                                    })
+                                    .unwrap_or(inner)
+                            });
                         if placement.width == 0 || placement.height == 0 {
                             if art_displayed {
                                 let _ = ui::kitty_art::clear_image(app.in_tmux);
@@ -523,7 +545,7 @@ async fn run_loop(
                                     app.in_tmux,
                                     app.tmux_status_offset,
                                     app.cell_px,
-                                    crate::theme::color_to_rgba(app.theme.surface),
+                                    theme::surface_pad_rgba(app.theme.surface),
                                 ) {
                                     Ok(()) => {
                                         last_rendered_art = Some((fp, placement));
@@ -577,7 +599,7 @@ async fn run_loop(
                             albums_inner.x,
                             albums_inner.y,
                             app.in_tmux,
-                            crate::theme::color_to_rgba(app.theme.surface),
+                            theme::surface_pad_rgba(app.theme.surface),
                         );
                     }
                 } else if app.kitty_apc_overlay_active() {

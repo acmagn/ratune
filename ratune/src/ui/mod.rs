@@ -41,7 +41,13 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             status_bar::render(app, frame, areas.status_bar);
             // Tab bar (skip if terminal is too small).
             if total_rows >= 20 {
-                tab_bar::render_tab_bar(frame, areas.tab_bar, app.active_tab, app.accent());
+                tab_bar::render_tab_bar(
+                    frame,
+                    areas.tab_bar,
+                    app.active_tab,
+                    app.accent(),
+                    &app.theme,
+                );
             }
         }
         Tab::Browser => {
@@ -51,7 +57,13 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             status_bar::render(app, frame, areas.status_bar);
             // Tab bar (skip if terminal is too small).
             if total_rows >= 20 {
-                tab_bar::render_tab_bar(frame, areas.tab_bar, app.active_tab, app.accent());
+                tab_bar::render_tab_bar(
+                    frame,
+                    areas.tab_bar,
+                    app.active_tab,
+                    app.accent(),
+                    &app.theme,
+                );
             }
         }
         Tab::NowPlaying => {
@@ -61,7 +73,13 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             status_bar::render(app, frame, areas.status_bar);
             // Tab bar (skip if terminal is too small).
             if total_rows >= 20 {
-                tab_bar::render_tab_bar(frame, areas.tab_bar, app.active_tab, app.accent());
+                tab_bar::render_tab_bar(
+                    frame,
+                    areas.tab_bar,
+                    app.active_tab,
+                    app.accent(),
+                    &app.theme,
+                );
             }
         }
     }

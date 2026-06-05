@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::theme::style_with_bg;
 
 /// Width reserved for the key column (padded with spaces to align descriptions).
 const KEY_COL_W: usize = 12;
@@ -236,7 +237,7 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
             Line::from(Span::styled(right_title, Style::default().fg(accent))).right_aligned(),
         )
         .padding(Padding::horizontal(4))
-        .style(Style::default().bg(bg));
+        .style(style_with_bg(bg));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -249,9 +250,9 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
     let right_lines: Vec<Line<'static>> =
         right_all.iter().skip(scroll).take(col_h).cloned().collect();
 
-    let left_para = Paragraph::new(Text::from(left_lines)).style(Style::default().bg(bg));
+    let left_para = Paragraph::new(Text::from(left_lines)).style(style_with_bg(bg));
     frame.render_widget(left_para, cols[0]);
 
-    let right_para = Paragraph::new(Text::from(right_lines)).style(Style::default().bg(bg));
+    let right_para = Paragraph::new(Text::from(right_lines)).style(style_with_bg(bg));
     frame.render_widget(right_para, cols[1]);
 }

@@ -7,6 +7,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::theme::style_with_bg;
 
 /// Braille spinner — advances every ~80 ms for a visible “still working” cue.
 const LIB_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -169,7 +170,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         Line::from(spans)
     };
 
-    let para = Paragraph::new(line).style(Style::default().bg(t.background));
+    let para = Paragraph::new(line).style(style_with_bg(t.status_bar));
     frame.render_widget(para, area);
 }
 

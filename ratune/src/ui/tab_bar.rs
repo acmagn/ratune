@@ -5,16 +5,17 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::app::Tab;
+use crate::theme::{style_with_bg, Theme};
 
 // ── Tab indicator bar ─────────────────────────────────────────────────────────
 
 /// Render a single-line tab indicator bar.
 ///
 /// Active tab: `accent` background, `Color::Black` foreground, bold.
-/// Inactive tabs: `Color::DarkGray` foreground, no background.
-/// Separator: ` │ ` in `Color::DarkGray`.
-pub fn render_tab_bar(f: &mut Frame, area: Rect, active_tab: Tab, accent: Color) {
-    let separator = Span::styled(" │ ", Style::default().fg(Color::DarkGray));
+/// Inactive tabs: `theme.dimmed` foreground on `theme.tab_bar`.
+/// Separator: ` │ ` in `theme.dimmed`.
+pub fn render_tab_bar(f: &mut Frame, area: Rect, active_tab: Tab, accent: Color, theme: &Theme) {
+    let separator = Span::styled(" │ ", Style::default().fg(theme.dimmed));
 
     let label_home = " Home ";
     let label_browser = " Browse ";
@@ -29,7 +30,7 @@ pub fn render_tab_bar(f: &mut Frame, area: Rect, active_tab: Tab, accent: Color)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled(label_home, Style::default().fg(Color::DarkGray))
+        Span::styled(label_home, Style::default().fg(theme.dimmed))
     };
 
     let span_browser = if active_tab == Tab::Browser {
@@ -41,7 +42,7 @@ pub fn render_tab_bar(f: &mut Frame, area: Rect, active_tab: Tab, accent: Color)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled(label_browser, Style::default().fg(Color::DarkGray))
+        Span::styled(label_browser, Style::default().fg(theme.dimmed))
     };
 
     let span_nowplaying = if active_tab == Tab::NowPlaying {
@@ -53,7 +54,7 @@ pub fn render_tab_bar(f: &mut Frame, area: Rect, active_tab: Tab, accent: Color)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled(label_nowplaying, Style::default().fg(Color::DarkGray))
+        Span::styled(label_nowplaying, Style::default().fg(theme.dimmed))
     };
 
     let line = Line::from(vec![
@@ -64,6 +65,6 @@ pub fn render_tab_bar(f: &mut Frame, area: Rect, active_tab: Tab, accent: Color)
         span_nowplaying,
     ]);
 
-    let para = Paragraph::new(line);
+    let para = Paragraph::new(line).style(style_with_bg(theme.tab_bar));
     f.render_widget(para, area);
 }

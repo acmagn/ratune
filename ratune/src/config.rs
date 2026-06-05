@@ -793,11 +793,17 @@ pub struct ThemeSection {
     ///
     /// Optional colour fields merge on top of preset defaults. Values may be 6-digit hex (`#rrggbb`
     /// or `rrggbb`), a 256-colour index (`idx:N`, `indexed:N`, `ansi:N`, `color:N`, or `i:N` for N in 0..=255),
-    /// or `reset` / `inherit` / `default` for the terminal default fg/bg.
+    /// or `reset` / `inherit` / `default` / `unset` / `none` / `transparent` to leave a
+    /// background unpainted (for terminal transparency).
     #[serde(default)]
     pub preset: Option<String>,
     pub accent: Option<String>,
+    /// General chrome (popups, selection inverse fg). Also sets tab/status bars when they are unset.
     pub background: Option<String>,
+    /// Tab indicator bar (`Home | Browse | Now Playing`). Falls back to `background`.
+    pub tab_bar: Option<String>,
+    /// Bottom status bar. Falls back to `background`.
+    pub status_bar: Option<String>,
     pub surface: Option<String>,
     pub foreground: Option<String>,
     pub dimmed: Option<String>,
@@ -1441,8 +1447,11 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 
 [theme]
 # accent        = "#ff8c00"   # highlighted items, active borders, progress fill
-# background    = "#1a1a1a"   # outer background (status bar, now-playing bar)
+# background    = "#1a1a1a"   # popups, list fallbacks; legacy default for tab/status bars
+# tab_bar       = "#1a1a1a"   # Home | Browse | Now Playing strip (falls back to background)
+# status_bar    = "#1a1a1a"   # bottom status line (falls back to background)
 # surface       = "#161616"   # panel backgrounds (browser columns, queue)
+# surface       = "unset"     # omit painted panel bg (transparent terminals)
 # foreground    = "#d4d0c8"   # primary text
 # dimmed        = "#5a5858"   # muted / secondary text
 # border        = "#252525"   # inactive pane borders

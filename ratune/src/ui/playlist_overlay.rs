@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListSt
 use ratatui::Frame;
 
 use crate::app::PlaylistPicker;
+use crate::theme::style_with_bg;
 use crate::state::{
     ConfirmAction, LoadingState, PlaylistFocus, PlaylistInputMode, PlaylistOverlay,
 };
@@ -127,7 +128,7 @@ fn render_playlist_list(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(list_border)
-        .style(Style::default().bg(theme.background));
+        .style(style_with_bg(theme.background));
 
     let (items, sel) = match &overlay.playlists {
         LoadingState::NotLoaded => (vec![], None),
@@ -174,7 +175,7 @@ fn render_playlist_list(
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ")
-        .style(Style::default().bg(theme.background));
+        .style(style_with_bg(theme.background));
 
     let mut state = ListState::default();
     state.select(sel);
@@ -193,7 +194,7 @@ fn render_playlist_list(
             .borders(Borders::ALL)
             .border_type(BorderType::Plain)
             .border_style(Style::default().fg(accent))
-            .style(Style::default().bg(theme.background));
+            .style(style_with_bg(theme.background));
         let input_line = Line::from(vec![
             Span::styled(buffer, Style::default().fg(theme.foreground)),
             Span::styled("_", Style::default().fg(accent)),
@@ -241,7 +242,7 @@ fn render_track_list(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(list_border)
-        .style(Style::default().bg(theme.background));
+        .style(style_with_bg(theme.background));
 
     let (items, sel) = match &overlay.tracks {
         LoadingState::NotLoaded => (
@@ -288,7 +289,7 @@ fn render_track_list(
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ")
-        .style(Style::default().bg(theme.background));
+        .style(style_with_bg(theme.background));
 
     let mut state = ListState::default();
     state.select(sel);
@@ -320,7 +321,7 @@ fn render_confirm_dialog(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(theme.background));
+        .style(style_with_bg(theme.background));
     let para = Paragraph::new(Line::from(Span::styled(
         message,
         Style::default().fg(theme.foreground),
@@ -378,7 +379,7 @@ pub fn render_playlist_picker(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(theme.background));
+        .style(style_with_bg(theme.background));
 
     let list = List::new(items)
         .block(block)
@@ -389,7 +390,7 @@ pub fn render_playlist_picker(
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ")
-        .style(Style::default().bg(theme.background));
+        .style(style_with_bg(theme.background));
 
     let mut state = ListState::default();
     state.select(sel);

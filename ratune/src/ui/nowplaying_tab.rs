@@ -3,7 +3,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
-use ratatui_image::picker::ProtocolType;
 use ratatui_image::thread::ThreadProtocol;
 use ratatui_image::StatefulImage;
 
@@ -12,6 +11,7 @@ use super::queue;
 use super::visualizer::render_visualizer_ex as render_visualizer;
 
 use crate::app::App;
+use crate::theme::style_with_bg;
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     let boxed = app
@@ -64,8 +64,25 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     }
 }
 
-fn sync_np_ratatui_protocol(app: &mut App, inner: Rect) {
-    if !app.ratatui_art_ready() || inner.width == 0 || inner.height == 0 {
+fn np_art_contain_rect(app: &App, inner: Rect) -> Rect {
+    let font = app
+        .art_picker
+        .as_ref()
+        .map(|p| p.font_size())
+        .unwrap_or((10, 20));
+    if let Some((_, img)) = app.art_cache_decoded.as_ref() {
+        return crate::ui::art_prepare::contain_fit_rect_in_cells(img, inner, font);
+    }
+    if let Some((_, bytes)) = app.art_cache.as_ref() {
+        if let Ok(img) = image::load_from_memory(bytes) {
+            return crate::ui::art_prepare::contain_fit_rect_in_cells(&img, inner, font);
+        }
+    }
+    inner
+}
+
+fn sync_np_ratatui_protocol(app: &mut App, art_rect: Rect) {
+    if !app.ratatui_art_ready() || art_rect.width == 0 || art_rect.height == 0 {
         return;
     }
     if app.ratatui_uses_kitty_apc() {
@@ -74,7 +91,7 @@ fn sync_np_ratatui_protocol(app: &mut App, inner: Rect) {
         return;
     }
     if let Some(p) = app.art_picker.as_mut() {
-        p.set_background_color(crate::theme::color_to_rgba(app.theme.surface));
+        p.set_background_color(crate::theme::surface_pad_rgba(app.theme.surface));
     }
     if app.art_cache.is_none() {
         app.np_art_state = None;
@@ -87,7 +104,7 @@ fn sync_np_ratatui_protocol(app: &mut App, inner: Rect) {
         return;
     };
     let (_, bytes) = app.art_cache.as_ref().unwrap();
-    let key = (fp, inner.width, inner.height);
+    let key = (fp, art_rect.width, art_rect.height);
     if app.np_art_prep_key.as_ref() == Some(&key) && app.np_art_state.is_some() {
         return;
     }
@@ -117,26 +134,9 @@ fn sync_np_ratatui_protocol(app: &mut App, inner: Rect) {
             img
         }
     };
-    let img = if matches!(picker.protocol_type(), ProtocolType::Sixel) {
-        let pad = crate::theme::color_to_rgba(app.theme.surface);
-        let fw = fs.0 as u32;
-        let fh = fs.1 as u32;
-        let need_w = inner.width as u32 * fw;
-        let need_h = inner.height as u32 * fh;
-        if (need_w as u128).saturating_mul(need_h as u128)
-            <= crate::ui::art_prepare::MAX_SIXEL_PREP_PIXELS
-        {
-            crate::ui::art_prepare::prepare_art_image_for_exact_pixels_contain_centered(
-                base_img, need_w, need_h, pad,
-            )
-        } else {
-            crate::ui::art_prepare::prepare_art_image_for_rect_contain_centered(
-                base_img, inner, fs, pad,
-            )
-        }
-    } else {
-        crate::ui::art_prepare::prepare_art_image_for_rect(base_img, inner, fs)
-    };
+    let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
+        base_img, art_rect, fs,
+    );
     let proto = picker.new_resize_protocol(img);
     app.np_art_state = Some(ThreadProtocol::new(tx, Some(proto)));
     app.np_art_prep_key = Some(key);
@@ -146,8 +146,7 @@ fn render_art_placeholder(app: &mut App, frame: &mut Frame, area: Rect) {
     let t = &app.theme;
     let block = crate::ui::kitty_art::album_art_block()
         .title_style(Style::default().fg(t.dimmed).add_modifier(Modifier::BOLD))
-        .border_style(Style::default().fg(t.border))
-        .style(Style::default().bg(t.surface));
+        .border_style(Style::default().fg(t.border));
     frame.render_widget(block, area);
 
     if app.ratatui_art_ready()
@@ -157,22 +156,13 @@ fn render_art_placeholder(app: &mut App, frame: &mut Frame, area: Rect) {
     {
         let inner = crate::ui::kitty_art::album_art_placeholder_inner(area);
         if inner.width > 0 && inner.height > 0 {
-            if app
-                .art_picker
-                .as_ref()
-                .is_some_and(|p| matches!(p.protocol_type(), ProtocolType::Sixel))
-            {
-                frame.render_widget(
-                    Block::default().style(Style::default().bg(app.theme.surface)),
-                    inner,
-                );
-            }
-            sync_np_ratatui_protocol(app, inner);
+            let art_rect = np_art_contain_rect(app, inner);
+            sync_np_ratatui_protocol(app, art_rect);
             let img_resize = app.ratatui_stateful_resize();
             if let Some(ref mut state) = app.np_art_state {
-                // Source is pre-fitted in `art_prepare`; `ratatui_stateful_resize` fills cells (see App).
+                // Bitmap is contain-fit to `art_rect`; widget area matches so gutters stay clear.
                 let w = StatefulImage::default().resize(img_resize);
-                frame.render_stateful_widget(w, inner, state);
+                frame.render_stateful_widget(w, art_rect, state);
             }
         }
     }
@@ -190,7 +180,7 @@ fn render_visualizer_pane(app: &App, frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(t.surface));
+        .style(style_with_bg(t.surface));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -225,7 +215,7 @@ fn render_lyrics_pane(app: &App, frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(t.surface));
+        .style(style_with_bg(t.surface));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -319,7 +309,7 @@ fn render_synced(
         .collect();
 
     let para = Paragraph::new(display)
-        .style(Style::default().bg(t.surface))
+        .style(style_with_bg(t.surface))
         .alignment(Alignment::Center);
     frame.render_widget(para, area);
 }
@@ -353,7 +343,7 @@ fn render_unsynced(
         })
         .collect();
 
-    let para = Paragraph::new(display).style(Style::default().bg(t.surface));
+    let para = Paragraph::new(display).style(style_with_bg(t.surface));
     frame.render_widget(para, area);
 }
 

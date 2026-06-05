@@ -452,19 +452,14 @@ pub fn album_art_placeholder_inner(outer: Rect) -> Rect {
 ///
 /// `cell_px` — terminal cell size in pixels (`CSI 16 t` or ratatui-image picker). `None` → 10×20.
 ///
-/// `pad` letterboxes the cover so bitmap aspect matches the **physical** `c×r` cell grid; otherwise
-/// Kitty stretches a wrong-aspect bitmap to fill the placement.
-///
-/// When `in_tmux` is `false`: direct APC placement (`a=T` with `c=`/`r=`).
-///
-/// When `in_tmux` is `true`: Unicode placeholder method (`a=t` + `a=p,U=1` + row diacritics).
+/// `pad` is retained for API compatibility; letterboxing uses the caller's contain-fit `placement`.
 pub fn render_image(
     bytes: &[u8],
     placement: Rect,
     in_tmux: bool,
     tmux_status_offset: u16,
     cell_px: Option<(u16, u16)>,
-    pad: Rgba<u8>,
+    _pad: Rgba<u8>,
 ) -> Result<()> {
     use base64::Engine;
     use flate2::write::ZlibEncoder;
@@ -493,17 +488,13 @@ pub fn render_image(
         .filter(|&h| h > 0)
         .unwrap_or(20);
 
-    let phys_w = inner_w as u32 * fw;
-    let phys_h = place_rows as u32 * fh;
-    let (tw, th) = crate::ui::art_prepare::uniform_scale_dimensions_to_max_edge(
-        phys_w,
-        phys_h,
-        crate::ui::art_prepare::MAX_ART_EDGE_PX,
-    );
-
     let img = image::load_from_memory(bytes)?;
-    let img = crate::ui::art_prepare::prepare_art_image_for_exact_pixels_contain_centered(
-        img, tw, th, pad,
+    let font = (
+        fw.min(u16::MAX as u32) as u16,
+        fh.min(u16::MAX as u32) as u16,
+    );
+    let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
+        img, placement, font,
     );
     let img_rgba = img.to_rgba8();
     let (w, h) = img_rgba.dimensions();
@@ -939,6 +930,24 @@ pub fn art_strip_thumb_hit(layout: &ArtStripLayout, rel_x: u16, rel_y: u16) -> O
     Some((row_in_grid, col))
 }
 
+/// Terminal [`Rect`] for strip slot `slot_index` (full thumb cell grid).
+pub fn art_strip_slot_thumb_rect(
+    layout: &ArtStripLayout,
+    strip_area: Rect,
+    slot_index: usize,
+) -> Rect {
+    let row_in_grid = (slot_index / layout.per_row) as u16;
+    let col_in_grid = (slot_index % layout.per_row) as u16;
+    let x = strip_area
+        .x
+        .saturating_add(layout.pad_x)
+        .saturating_add(col_in_grid * (layout.thumb_cols + STRIP_GAP_COLS));
+    let y = strip_area
+        .y
+        .saturating_add(layout.thumb_row_top_dy(row_in_grid));
+    Rect::new(x, y, layout.thumb_cols, layout.thumb_rows)
+}
+
 /// How many thumbnails fit horizontally in `terminal_cols` columns (already the inner width).
 pub fn visible_thumbnail_count(terminal_cols: u16, thumb_cols: u16, gap_cols: u16) -> usize {
     if thumb_cols + gap_cols == 0 {
@@ -951,9 +960,10 @@ pub fn visible_thumbnail_count(terminal_cols: u16, thumb_cols: u16, gap_cols: u1
 /// Cached resize + zlib for one Home-strip thumbnail (Kitty image id is chosen per slot at draw time).
 #[derive(Debug, Clone)]
 pub struct StripThumbPrepared {
-    /// Bitmap width/height when this payload was built (must match current strip geometry).
-    pub target_w: u32,
-    pub target_h: u32,
+    pub thumb_cols: u16,
+    pub thumb_rows: u16,
+    pub art_cols: u16,
+    pub art_rows: u16,
     pub img_w: u32,
     pub img_h: u32,
     /// Base64 of zlib-compressed RGBA — built once so tab redraws skip re-encoding.
@@ -961,32 +971,47 @@ pub struct StripThumbPrepared {
 }
 
 impl StripThumbPrepared {
-    pub fn matches_size(&self, tw: u32, th: u32) -> bool {
-        self.target_w == tw && self.target_h == th
+    pub fn matches_geometry(
+        &self,
+        thumb_cols: u16,
+        thumb_rows: u16,
+        art_rect: Rect,
+    ) -> bool {
+        self.thumb_cols == thumb_cols
+            && self.thumb_rows == thumb_rows
+            && self.art_cols == art_rect.width
+            && self.art_rows == art_rect.height
     }
 
-    /// Decode cover bytes, contain+letterbox to `tw×th` (matches `c×r` cell aspect), zlib RGBA.
-    pub fn build(cover_bytes: &[u8], tw: u32, th: u32, pad: Rgba<u8>) -> Option<Self> {
+    /// Decode cover bytes and contain-fit to `art_rect` (no letterbox pad).
+    pub fn build(
+        cover_bytes: &[u8],
+        thumb_cols: u16,
+        thumb_rows: u16,
+        art_rect: Rect,
+        font: (u16, u16),
+    ) -> Option<Self> {
         use base64::Engine;
         use flate2::write::ZlibEncoder;
         use flate2::Compression;
         use std::io::Write;
 
         let img = image::load_from_memory(cover_bytes).ok()?;
-        let img = crate::ui::art_prepare::prepare_art_image_for_exact_pixels_contain_centered(
-            img, tw, th, pad,
+        let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
+            img, art_rect, font,
         );
         let img_rgba = img.to_rgba8();
         let (w, h) = img_rgba.dimensions();
         let raw = img_rgba.into_raw();
-        // Fast zlib: Kitty only needs valid compressed RGBA; size difference is tiny vs decode cost.
         let mut enc = ZlibEncoder::new(Vec::new(), Compression::fast());
         enc.write_all(&raw).ok()?;
         let zlib_body = enc.finish().ok()?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&zlib_body);
         Some(Self {
-            target_w: tw,
-            target_h: th,
+            thumb_cols,
+            thumb_rows,
+            art_cols: art_rect.width,
+            art_rows: art_rect.height,
             img_w: w,
             img_h: h,
             b64,
@@ -1009,10 +1034,10 @@ pub fn render_art_strip(
     prepared: &mut HashMap<String, StripThumbPrepared>,
     strip_area: ratatui::layout::Rect,
     cell_px: Option<(u16, u16)>,
-    terminal_col_offset: u16,
-    terminal_row_offset: u16,
+    _terminal_col_offset: u16,
+    _terminal_row_offset: u16,
     in_tmux: bool,
-    pad: Rgba<u8>,
+    _pad: Rgba<u8>,
 ) {
     // Pre-clear previous art strip images/placements before drawing new ones.
     if in_tmux {
@@ -1035,14 +1060,7 @@ pub fn render_art_strip(
         .map(|(_, h)| h as u32)
         .filter(|&h| h > 0)
         .unwrap_or(20);
-    // Physical size of one thumb slot — bitmap aspect must match or Kitty stretches (square thumbs were wrong).
-    let phys_w = thumb_cols as u32 * fw;
-    let phys_h = thumb_rows as u32 * fh;
-    let (tw, th) = crate::ui::art_prepare::uniform_scale_dimensions_to_max_edge(
-        phys_w,
-        phys_h,
-        crate::ui::art_prepare::MAX_ART_EDGE_PX,
-    );
+    let font = (fw.min(u16::MAX as u32) as u16, fh.min(u16::MAX as u32) as u16);
 
     for i in 0..visible_count {
         let album_index = scroll_offset + i;
@@ -1052,23 +1070,28 @@ pub fn render_art_strip(
         let album_id = &albums[album_index].album_id;
         let kitty_id: u32 = KITTY_STRIP_ID_BASE + i as u32;
 
-        let row_in_grid = (i / layout.per_row) as u16;
-        let col_in_grid = (i % layout.per_row) as u16;
-        let col = terminal_col_offset
-            .saturating_add(layout.pad_x)
-            .saturating_add(col_in_grid * (thumb_cols + STRIP_GAP_COLS));
-        let base_row = terminal_row_offset.saturating_add(layout.thumb_row_top_dy(row_in_grid));
+        let thumb_rect = art_strip_slot_thumb_rect(&layout, strip_area, i);
 
         if let Some(bytes) = art_cache.get(album_id) {
+            let img = match image::load_from_memory(bytes) {
+                Ok(img) => img,
+                Err(_) => continue,
+            };
+            let art_rect =
+                crate::ui::art_prepare::contain_fit_rect_in_cells(&img, thumb_rect, font);
+
             let prep = match prepared.remove(album_id) {
-                Some(p) if p.matches_size(tw, th) => p,
-                _ => match StripThumbPrepared::build(bytes, tw, th, pad) {
+                Some(p) if p.matches_geometry(thumb_cols, thumb_rows, art_rect) => p,
+                _ => match StripThumbPrepared::build(bytes, thumb_cols, thumb_rows, art_rect, font)
+                {
                     Some(p) => p,
                     None => continue,
                 },
             };
             let w = prep.img_w;
             let h = prep.img_h;
+            let place_cols = art_rect.width;
+            let place_rows = art_rect.height;
 
             let mut out = io::stdout().lock();
 
@@ -1096,34 +1119,32 @@ pub fn render_art_strip(
 
             if in_tmux {
                 // ── Unicode placeholder path (tmux) ───────────────────────────
-                // Virtual placement with U=1 — tmux sees placeholder chars as normal text.
                 let _ = write!(
                     out,
                     "{}",
                     apc(
-                        &format!("a=p,U=1,i={kitty_id},c={thumb_cols},r={thumb_rows},q=2"),
+                        &format!("a=p,U=1,i={kitty_id},c={place_cols},r={place_rows},q=2"),
                         true
                     )
                 );
-                // Write placeholder characters row-by-row at the thumbnail position.
-                for pr in 0..thumb_rows {
+                for pr in 0..place_rows {
                     let _ = write!(
                         out,
                         "\x1b[{};{}H{}",
-                        base_row + 1 + pr,
-                        col + 1,
-                        placeholder_row(thumb_cols, kitty_id, pr as usize)
+                        art_rect.y + 1 + pr,
+                        art_rect.x + 1,
+                        placeholder_row(place_cols, kitty_id, pr as usize)
                     );
                 }
             } else {
-                // ── Direct placement path (non-tmux) — unchanged ──────────────
+                // ── Direct placement path (non-tmux) ────────────────────────
                 let _ = write!(
                     out,
                     "\x1b[{};{}H{}",
-                    base_row + 1,
-                    col + 1,
+                    art_rect.y + 1,
+                    art_rect.x + 1,
                     apc(
-                        &format!("a=p,i={kitty_id},p=1,c={thumb_cols},r={thumb_rows},q=2;"),
+                        &format!("a=p,i={kitty_id},p=1,c={place_cols},r={place_rows},q=2;"),
                         false
                     )
                 );

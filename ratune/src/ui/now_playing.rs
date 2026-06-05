@@ -7,6 +7,7 @@ use ratatui::Frame;
 use super::now_playing_format::{format_now_playing_line, NowPlayingContext};
 
 use crate::app::{App, Tab};
+use crate::theme::style_with_bg;
 
 /// Blank rows between the block title bar and the first metadata line (boxed pane only).
 const BOXED_TITLE_GAP_ROWS: u16 = 1;
@@ -73,7 +74,7 @@ pub fn interaction_rects_pane(app: &App, pane: Rect) -> NowPlayingChromeRects {
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(t.surface));
+        .style(style_with_bg(t.surface));
 
     let inner = block.inner(pane);
     chrome_rects_boxed_inner(inner, app, show_c, show_p, c_in, p_in)
@@ -229,7 +230,7 @@ pub fn render_boxed_pane(app: &App, frame: &mut Frame, pane: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(t.surface));
+        .style(style_with_bg(t.surface));
 
     let inner = block.inner(pane);
     frame.render_widget(block, pane);
@@ -309,7 +310,7 @@ fn render_boxed_bottom_bar_only(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     frame.render_widget(
-        Paragraph::new(Line::from("")).style(Style::default().bg(t.surface)),
+        Paragraph::new(Line::from("")).style(style_with_bg(t.surface)),
         area,
     );
 
@@ -329,7 +330,7 @@ fn render_boxed_bottom_bar_only(app: &App, frame: &mut Frame, area: Rect) {
         .split(footer);
         render_controls_widget(app, frame, rows[0]);
         frame.render_widget(
-            Paragraph::new(Line::from("")).style(Style::default().bg(t.surface)),
+            Paragraph::new(Line::from("")).style(style_with_bg(t.surface)),
             rows[1],
         );
         render_progress_widget(app, frame, rows[2]);
@@ -484,7 +485,7 @@ fn render_row(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     frame.render_widget(
-        Paragraph::new(padded).style(Style::default().bg(t.surface)),
+        Paragraph::new(padded).style(style_with_bg(t.surface)),
         cols.info,
     );
 
@@ -539,7 +540,7 @@ fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
         frame.render_widget(
             Paragraph::new(controls)
                 .alignment(Alignment::Center)
-                .style(Style::default().bg(t.surface)),
+                .style(style_with_bg(t.surface)),
             area,
         );
         return;
@@ -550,7 +551,7 @@ fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines)
             .alignment(Alignment::Center)
-            .style(Style::default().bg(t.surface)),
+            .style(style_with_bg(t.surface)),
         area,
     );
 }
@@ -677,7 +678,7 @@ fn render_progress_widget(app: &App, frame: &mut Frame, area: Rect) {
 
     if area.height <= 1 {
         frame.render_widget(
-            Paragraph::new(progress).style(Style::default().bg(t.surface)),
+            Paragraph::new(progress).style(style_with_bg(t.surface)),
             area,
         );
         return;
@@ -686,7 +687,7 @@ fn render_progress_widget(app: &App, frame: &mut Frame, area: Rect) {
     let lines = vec![Line::from(""), Line::from(""), progress, Line::from("")];
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(t.surface)),
+        Paragraph::new(lines).style(style_with_bg(t.surface)),
         area,
     );
 }

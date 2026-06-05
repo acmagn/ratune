@@ -11,9 +11,10 @@ use ratatui_image::StatefulImage;
 
 use crate::app::{App, HomeSection, HomeState, RecentAlbum};
 use crate::config::{Config, HomePanel};
-use crate::theme::Theme;
+use crate::theme::{style_with_bg, Theme};
 use crate::ui::kitty_art::{
-    art_strip_layout, art_strip_thumb_hit, KITTY_STRIP_MAX_SLOTS, STRIP_GAP_COLS,
+    art_strip_layout, art_strip_slot_thumb_rect, art_strip_thumb_hit, KITTY_STRIP_MAX_SLOTS,
+    STRIP_GAP_COLS,
 };
 
 // ── Relative time formatting ──────────────────────────────────────────────────
@@ -52,7 +53,7 @@ fn titled_block<'a>(title: &'a str, is_active: bool, accent: Color, theme: &Them
         )
     };
     Block::default()
-        .style(Style::default().bg(theme.surface))
+        .style(style_with_bg(theme.surface))
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(border_style)
@@ -352,10 +353,8 @@ fn render_recent_albums_list(
 }
 
 fn render_art_strip_ratatui(f: &mut Frame, albums_inner: Rect, app: &mut App, _is_active: bool) {
-    // Keep ratatui-image pad color aligned with panel bg (ImageSource copies this at `new_resize_protocol`).
-    // If a rare cover still shows wrong matte vs panel: often PNG alpha / encoder quantization — revisit with a sample file.
     if let Some(p) = app.art_picker.as_mut() {
-        p.set_background_color(crate::theme::color_to_rgba(app.theme.surface));
+        p.set_background_color(crate::theme::surface_pad_rgba(app.theme.surface));
     }
     let Some(picker) = app.art_picker.as_ref() else {
         return;
@@ -364,15 +363,16 @@ fn render_art_strip_ratatui(f: &mut Frame, albums_inner: Rect, app: &mut App, _i
         return;
     }
     let layout = art_strip_layout(albums_inner.width, albums_inner.height);
+    let thumb_cols = layout.thumb_cols;
+    let thumb_rows = layout.thumb_rows;
     let visible_count = layout.total_visible.min(KITTY_STRIP_MAX_SLOTS);
 
     let is_sixel = matches!(picker.protocol_type(), ProtocolType::Sixel);
-    // Sixel: contain + pad to encode size (full cover); halfblocks/Kitty APC strip: crop + super-res.
     let img_resize = app.ratatui_stateful_resize_strip();
-    // Sixel encode runs on the main thread; rebuilding the whole strip in one `draw` stalls the UI.
     const MAX_SIXEL_STRIP_BUILDS_PER_FRAME: usize = 3;
     let mut sixel_builds_this_frame = 0usize;
     let mut keep = HashSet::new();
+    let fs = picker.font_size();
 
     for i in 0..visible_count {
         let album_index = app.home.album_scroll_offset + i;
@@ -382,77 +382,35 @@ fn render_art_strip_ratatui(f: &mut Frame, albums_inner: Rect, app: &mut App, _i
         let album_id = app.home.recent_albums[album_index].album_id.clone();
         keep.insert(album_id.clone());
 
-        let row_in_grid = (i / layout.per_row) as u16;
-        let col_in_grid = (i % layout.per_row) as u16;
-        let thumb_cols = layout.thumb_cols;
-        let thumb_rows = layout.thumb_rows;
-        let col = albums_inner
-            .x
-            .saturating_add(layout.pad_x)
-            .saturating_add(col_in_grid * (thumb_cols + STRIP_GAP_COLS));
-        let row = albums_inner
-            .y
-            .saturating_add(layout.thumb_row_top_dy(row_in_grid));
-        let thumb_rect = Rect {
-            x: col,
-            y: row,
-            width: thumb_cols,
-            height: thumb_rows,
-        };
+        let thumb_rect = art_strip_slot_thumb_rect(&layout, albums_inner, i);
 
         if let Some(bytes) = app.home_art_cache.get(&album_id) {
-            let cells = (thumb_cols, thumb_rows);
-            if app.home_strip_last_cells.get(&album_id).copied() != Some(cells) {
+            let slot = (thumb_cols, thumb_rows);
+            if app.home_strip_last_cells.get(&album_id).copied() != Some(slot) {
                 app.home_strip_art.remove(&album_id);
             }
+            let Ok(img) = image::load_from_memory(bytes) else {
+                continue;
+            };
+            let art_rect =
+                crate::ui::art_prepare::contain_fit_rect_in_cells(&img, thumb_rect, fs);
             if !app.home_strip_art.contains_key(&album_id) {
                 if is_sixel && sixel_builds_this_frame >= MAX_SIXEL_STRIP_BUILDS_PER_FRAME {
                     continue;
                 }
-                // Must match `Picker`'s font size: `new_resize_protocol` builds `ImageSource` with
-                // `picker.font_size()`. Using `cell_px` here skews bitmap aspect vs. ratatui's cell
-                // math so `render_area` can under-fill the thumb (black band / stale matte size).
-                let fs = picker.font_size();
-                if let Ok(img) = image::load_from_memory(bytes) {
-                    let img = if is_sixel {
-                        let pad = crate::theme::color_to_rgba(app.theme.surface);
-                        let fw = fs.0 as u32;
-                        let fh = fs.1 as u32;
-                        let need_w = thumb_rect.width as u32 * fw;
-                        let need_h = thumb_rect.height as u32 * fh;
-                        if (need_w as u128).saturating_mul(need_h as u128)
-                            <= crate::ui::art_prepare::MAX_SIXEL_PREP_PIXELS
-                        {
-                            crate::ui::art_prepare::prepare_art_image_for_exact_pixels_contain_centered(
-                                img, need_w, need_h, pad,
-                            )
-                        } else {
-                            crate::ui::art_prepare::prepare_art_image_for_rect_contain_centered(
-                                img, thumb_rect, fs, pad,
-                            )
-                        }
-                    } else {
-                        crate::ui::art_prepare::prepare_art_image_for_strip(img, thumb_rect, fs)
-                    };
-                    let proto = picker.new_resize_protocol(img);
-                    app.home_strip_art.insert(album_id.clone(), proto);
-                    app.home_strip_last_cells.insert(album_id.clone(), cells);
-                    if is_sixel {
-                        sixel_builds_this_frame += 1;
-                    }
+                let prepared = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
+                    img, art_rect, fs,
+                );
+                let proto = picker.new_resize_protocol(prepared);
+                app.home_strip_art.insert(album_id.clone(), proto);
+                app.home_strip_last_cells.insert(album_id.clone(), slot);
+                if is_sixel {
+                    sixel_builds_this_frame += 1;
                 }
             }
             if let Some(state) = app.home_strip_art.get_mut(&album_id) {
-                if is_sixel {
-                    // Fill thumb cells with panel surface before sixel; avoids default (black) showing
-                    // beside letterboxed square art when the bitmap matte differs from terminal cells.
-                    f.render_widget(
-                        Block::default().style(Style::default().bg(app.theme.surface)),
-                        thumb_rect,
-                    );
-                }
                 let w = StatefulImage::default().resize(img_resize.clone());
-                f.render_stateful_widget(w, thumb_rect, state);
+                f.render_stateful_widget(w, art_rect, state);
             }
         }
     }
