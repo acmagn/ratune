@@ -467,8 +467,8 @@ max_size_gb = 2.0
 # cause the service to ignore scrobbles.
 #
 # Examples:
-#   api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
-#   session_key_command = "secret-tool lookup service ratune user lastfm|session"
+#   api_secret_command = "secret-tool lookup service ratune username 'lastfm|api_secret'"
+#   session_key_command = "secret-tool lookup service ratune username 'lastfm|session'"
 #
 # Environment overrides (applied after the file):
 #   LASTFM_API_KEY / LIBREFM_API_KEY
