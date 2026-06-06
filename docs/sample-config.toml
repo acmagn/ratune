@@ -51,9 +51,11 @@
 # username  — Subsonic username.
 #
 # Secret (pick one):
-#   password = "" (default) — OS keyring via keyring-core (Linux: kernel keyutils; macOS:
-#             Keychain; Windows: Credential Manager). First run prompts once; stored as service
+#   password = "" (default) — OS keyring via keyring-core. First run prompts once; stored as service
 #             "ratune", user "{url}|{username}". Needs url + username set.
+#             On Linux, choose the backend with password_keyring:
+#               "keyutils" (default) — kernel keyutils; lightweight, may not survive reboot
+#               "secret-service"     — gnome-keyring / KWallet (same as secret-tool)
 #   password_command — Shell command; stdout (trimmed) is the secret. Good for secret-tool,
 #             pass, KeePassXC CLI, etc. Example:
 #             password_command = "secret-tool lookup --label=ratune service subsonic user you"
@@ -66,6 +68,7 @@
 url = ""
 username = ""
 password = ""
+# password_keyring = "keyutils"       # Linux only: "keyutils" (default) or "secret-service"
 # password_command = "secret-tool lookup service subsonic user you"
 
 # -----------------------------------------------------------------------------
@@ -436,7 +439,8 @@ max_size_gb = 2.0
 # Resolution order (first match wins):
 #   api_secret  — api_secret → api_secret_command → OS keyring (lastfm|api_secret)
 #   session_key — session_key → session_key_command → OS keyring (lastfm|session)
-# Keyring service name is always "ratune".
+# Keyring service name is always "ratune". On Linux, scrobble keyring uses Secret Service
+# (gnome-keyring / KWallet), not kernel keyutils.
 #
 # Quick start (all in config):
 #   api_key = "…"

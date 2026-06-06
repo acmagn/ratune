@@ -44,6 +44,7 @@ keyring-core = "1"
 
 # Platform credential stores for keyring-core — see https://crates.io/crates/keyring-core
 [target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 linux-keyutils-keyring-store = "1"
 mpris-server = "0.9"
 

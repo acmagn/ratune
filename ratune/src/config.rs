@@ -825,6 +825,10 @@ struct ServerSection {
     /// Example: `secret-tool lookup --label=ratune service subsonic`.
     #[serde(default)]
     password_command: String,
+    /// Linux only: keyring backend when `password` and `password_command` are empty.
+    /// `keyutils` (default) or `secret-service` (gnome-keyring / KWallet). Ignored on macOS/Windows.
+    #[serde(default = "default_password_keyring")]
+    password_keyring: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -854,6 +858,10 @@ fn default_volume() -> u8 {
 
 fn default_mpris() -> bool {
     true
+}
+
+fn default_password_keyring() -> String {
+    "keyutils".into()
 }
 
 // ── Runtime config ────────────────────────────────────────────────────────────
@@ -1640,36 +1648,40 @@ fn resolve_subsonic_secret_from_keyring(server: &ServerSection) -> Result<String
     }
 
     let label = subsonic_keyring_user(url, user);
-    let entry = match keyring_core::Entry::new("ratune", &label) {
+    let backend = crate::keyring_init::parse_password_keyring(&server.password_keyring)
+        .with_context(|| format!("invalid [server].password_keyring {:?}", server.password_keyring))?;
+    let entry = match crate::keyring_init::keyring_entry("ratune", &label, backend) {
         Ok(e) => e,
         Err(KeyringError::NoDefaultStore) => {
             eprintln!(
-                "warning: keyring default store is not configured on this platform or startup failed."
+                "warning: {} keyring is not available on this platform or startup failed.",
+                backend.label()
             );
             return inquire_subsonic_password_session();
         }
-        Err(e) => return Err(e).context("keyring entry (service ratune)"),
+        Err(e) => return Err(e).context(format!("keyring entry (service ratune, {})", backend.label())),
     };
 
     match entry.get_password() {
         Ok(s) => {
             let t = s.trim();
             if t.is_empty() {
-                prompt_and_store_subsonic_secret(&entry)
+                prompt_and_store_subsonic_secret(&entry, backend)
             } else {
                 Ok(t.to_string())
             }
         }
-        Err(KeyringError::NoEntry) => prompt_and_store_subsonic_secret(&entry),
+        Err(KeyringError::NoEntry) => prompt_and_store_subsonic_secret(&entry, backend),
         Err(e) if keyring_storage_unavailable(&e) => {
             eprintln!(
-                "warning: keyring store is not available ({e}).\n\
+                "warning: {} keyring is not available ({e}).\n\
                  Using a one-time password prompt; the secret is not saved and applies only to this run.\n\
-                 To persist without typing each time: set [server].password_command, [server].password, or SUBSONIC_PASS."
+                 To persist without typing each time: set [server].password_command, [server].password, or SUBSONIC_PASS.",
+                backend.label()
             );
             inquire_subsonic_password_session()
         }
-        Err(e) => Err(e).context("reading Subsonic secret from keyring"),
+        Err(e) => Err(e).context(format!("reading Subsonic secret from {} keyring", backend.label())),
     }
 }
 
@@ -1703,13 +1715,17 @@ fn inquire_plain_secret(prefix: Option<&str>) -> Result<String> {
     Ok(pw.to_string())
 }
 
-fn prompt_and_store_subsonic_secret(entry: &keyring_core::Entry) -> Result<String> {
-    let pw = inquire_plain_secret(Some(
+fn prompt_and_store_subsonic_secret(
+    entry: &keyring_core::Entry,
+    backend: crate::keyring_init::KeyringBackend,
+) -> Result<String> {
+    let pw = inquire_plain_secret(Some(&format!(
         "No plaintext password in config — storing your Subsonic secret in the platform keyring \
-         (service \"ratune\", user \"url|username\").\n\
-         On Linux this uses kernel keyutils; on macOS/Windows use the system credential UI to remove the entry if needed.\n\
+         (service \"ratune\", user \"url|username\", backend: {}).\n\
+         On macOS/Windows use the system credential UI to remove the entry if needed.\n\
          API overview: https://www.navidrome.org/docs/developers/subsonic-api/",
-    ))?;
+        backend.label()
+    )))?;
 
     match entry.set_password(&pw) {
         Ok(()) => Ok(pw),
@@ -1822,12 +1838,18 @@ fn read_scrobble_keyring(sec: &ScrobbleSection, kind: &str, hint: &str) -> Resul
 
     let service = resolve_scrobble_service(sec);
     let label = scrobble_keyring_label(service, kind);
-    let entry = match keyring_core::Entry::new("ratune", &label) {
+    let backend = crate::keyring_init::KeyringBackend::scrobble();
+    let entry = match crate::keyring_init::keyring_entry("ratune", &label, backend) {
         Ok(e) => e,
         Err(KeyringError::NoDefaultStore) => {
             bail!("no {kind} configured — {hint}");
         }
-        Err(e) => return Err(e).context(format!("keyring entry for scrobble {kind}")),
+        Err(e) => {
+            return Err(e).context(format!(
+                "keyring entry for scrobble {kind} ({})",
+                backend.label()
+            ));
+        }
     };
 
     match entry.get_password() {
@@ -1853,8 +1875,9 @@ pub fn store_scrobble_api_secret(
         bail!("refusing to store empty API secret");
     }
     let label = scrobble_keyring_label(service, "api_secret");
-    let entry = keyring_core::Entry::new("ratune", &label)
-        .context("keyring entry for scrobble api_secret")?;
+    let backend = crate::keyring_init::KeyringBackend::scrobble();
+    let entry = crate::keyring_init::keyring_entry("ratune", &label, backend)
+        .context(format!("keyring entry for scrobble api_secret ({})", backend.label()))?;
     entry
         .set_password(secret)
         .context("storing scrobble api_secret in keyring")?;
@@ -1871,8 +1894,9 @@ pub fn store_scrobble_session_key(
         bail!("refusing to store empty session key");
     }
     let label = scrobble_keyring_label(service, "session");
-    let entry =
-        keyring_core::Entry::new("ratune", &label).context("keyring entry for scrobble session")?;
+    let backend = crate::keyring_init::KeyringBackend::scrobble();
+    let entry = crate::keyring_init::keyring_entry("ratune", &label, backend)
+        .context(format!("keyring entry for scrobble session ({})", backend.label()))?;
     entry
         .set_password(key)
         .context("storing scrobble session key in keyring")?;
@@ -1980,6 +2004,26 @@ password_command = "secret-tool lookup service ratune"
     }
 
     #[test]
+    fn parses_password_keyring() {
+        let text = r#"
+[server]
+password_keyring = "secret-service"
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        assert_eq!(fc.server.password_keyring, "secret-service");
+        assert_eq!(
+            crate::keyring_init::parse_password_keyring(&fc.server.password_keyring).expect("parse"),
+            crate::keyring_init::KeyringBackend::SecretService
+        );
+    }
+
+    #[test]
+    fn password_keyring_defaults_to_keyutils() {
+        let fc: FileConfig = toml::from_str("[server]\nurl = \"x\"\n").expect("toml");
+        assert_eq!(fc.server.password_keyring, "keyutils");
+    }
+
+    #[test]
     #[cfg(unix)]
     fn password_command_shell_output() {
         let server = ServerSection {
@@ -1987,6 +2031,7 @@ password_command = "secret-tool lookup service ratune"
             username: String::new(),
             password: String::new(),
             password_command: "printf '%s' 'from-cmd'".into(),
+            password_keyring: default_password_keyring(),
         };
         assert_eq!(
             resolve_subsonic_secret(&server).expect("command"),

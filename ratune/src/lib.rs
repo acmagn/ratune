@@ -955,8 +955,9 @@ pub async fn scrobble_auth(save_keyring: bool) -> Result<()> {
         match config::store_scrobble_session_key(client.service(), &session.key) {
             Ok(()) => {
                 eprintln!(
-                    "Session key saved to the OS keyring (service \"ratune\", user \"{}\").",
-                    scrobble_keyring_user_label(client.service(), "session")
+                    "Session key saved to the OS keyring (service \"ratune\", user \"{}\", {}).",
+                    scrobble_keyring_user_label(client.service(), "session"),
+                    keyring_init::KeyringBackend::scrobble().label()
                 );
                 eprintln!("You can leave session_key empty in config and set enabled = true.");
             }
@@ -1023,8 +1024,9 @@ pub fn scrobble_api_secret(save_keyring: bool) -> Result<()> {
         match config::store_scrobble_api_secret(service, secret) {
             Ok(()) => {
                 eprintln!(
-                    "API secret saved to the OS keyring (service \"ratune\", user \"{}\").",
-                    scrobble_keyring_user_label(service, "api_secret")
+                    "API secret saved to the OS keyring (service \"ratune\", user \"{}\", {}).",
+                    scrobble_keyring_user_label(service, "api_secret"),
+                    keyring_init::KeyringBackend::scrobble().label()
                 );
                 eprintln!("You can leave api_secret empty in config and unset LASTFM_API_SECRET.");
             }
