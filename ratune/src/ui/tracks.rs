@@ -4,8 +4,8 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::app::{App, BrowserColumn};
-use crate::theme::style_with_bg;
 use crate::state::{LibraryState, LoadingState};
+use crate::theme::style_with_bg;
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
     let t = &app.theme;

@@ -134,9 +134,8 @@ fn sync_np_ratatui_protocol(app: &mut App, art_rect: Rect) {
             img
         }
     };
-    let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
-        base_img, art_rect, fs,
-    );
+    let img =
+        crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(base_img, art_rect, fs);
     let proto = picker.new_resize_protocol(img);
     app.np_art_state = Some(ThreadProtocol::new(tx, Some(proto)));
     app.np_art_prep_key = Some(key);

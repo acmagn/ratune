@@ -11,10 +11,10 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListSt
 use ratatui::Frame;
 
 use crate::app::PlaylistPicker;
-use crate::theme::style_with_bg;
 use crate::state::{
     ConfirmAction, LoadingState, PlaylistFocus, PlaylistInputMode, PlaylistOverlay,
 };
+use crate::theme::style_with_bg;
 use crate::theme::Theme;
 
 // ── Duration helpers ──────────────────────────────────────────────────────────

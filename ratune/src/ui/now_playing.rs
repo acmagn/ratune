@@ -686,10 +686,7 @@ fn render_progress_widget(app: &App, frame: &mut Frame, area: Rect) {
 
     let lines = vec![Line::from(""), Line::from(""), progress, Line::from("")];
 
-    frame.render_widget(
-        Paragraph::new(lines).style(style_with_bg(t.surface)),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines).style(style_with_bg(t.surface)), area);
 }
 
 #[cfg(test)]

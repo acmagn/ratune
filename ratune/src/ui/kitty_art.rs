@@ -493,9 +493,7 @@ pub fn render_image(
         fw.min(u16::MAX as u32) as u16,
         fh.min(u16::MAX as u32) as u16,
     );
-    let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
-        img, placement, font,
-    );
+    let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(img, placement, font);
     let img_rgba = img.to_rgba8();
     let (w, h) = img_rgba.dimensions();
     let raw = img_rgba.into_raw();
@@ -971,12 +969,7 @@ pub struct StripThumbPrepared {
 }
 
 impl StripThumbPrepared {
-    pub fn matches_geometry(
-        &self,
-        thumb_cols: u16,
-        thumb_rows: u16,
-        art_rect: Rect,
-    ) -> bool {
+    pub fn matches_geometry(&self, thumb_cols: u16, thumb_rows: u16, art_rect: Rect) -> bool {
         self.thumb_cols == thumb_cols
             && self.thumb_rows == thumb_rows
             && self.art_cols == art_rect.width
@@ -997,9 +990,8 @@ impl StripThumbPrepared {
         use std::io::Write;
 
         let img = image::load_from_memory(cover_bytes).ok()?;
-        let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
-            img, art_rect, font,
-        );
+        let img =
+            crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(img, art_rect, font);
         let img_rgba = img.to_rgba8();
         let (w, h) = img_rgba.dimensions();
         let raw = img_rgba.into_raw();
@@ -1060,7 +1052,10 @@ pub fn render_art_strip(
         .map(|(_, h)| h as u32)
         .filter(|&h| h > 0)
         .unwrap_or(20);
-    let font = (fw.min(u16::MAX as u32) as u16, fh.min(u16::MAX as u32) as u16);
+    let font = (
+        fw.min(u16::MAX as u32) as u16,
+        fh.min(u16::MAX as u32) as u16,
+    );
 
     for i in 0..visible_count {
         let album_index = scroll_offset + i;

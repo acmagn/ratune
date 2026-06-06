@@ -392,8 +392,7 @@ fn render_art_strip_ratatui(f: &mut Frame, albums_inner: Rect, app: &mut App, _i
             let Ok(img) = image::load_from_memory(bytes) else {
                 continue;
             };
-            let art_rect =
-                crate::ui::art_prepare::contain_fit_rect_in_cells(&img, thumb_rect, fs);
+            let art_rect = crate::ui::art_prepare::contain_fit_rect_in_cells(&img, thumb_rect, fs);
             if !app.home_strip_art.contains_key(&album_id) {
                 if is_sixel && sixel_builds_this_frame >= MAX_SIXEL_STRIP_BUILDS_PER_FRAME {
                     continue;

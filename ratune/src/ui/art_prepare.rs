@@ -58,14 +58,8 @@ pub fn contain_fit_rect_in_cells(img: &DynamicImage, inner: Rect, font: FontSize
     let max_h_px = inner.height as u32 * fh;
     let (fit_w_px, fit_h_px) = fit_inside(iw, ih, max_w_px, max_h_px);
 
-    let w = fit_w_px
-        .div_ceil(fw)
-        .max(1)
-        .min(inner.width as u32) as u16;
-    let h = fit_h_px
-        .div_ceil(fh)
-        .max(1)
-        .min(inner.height as u32) as u16;
+    let w = fit_w_px.div_ceil(fw).max(1).min(inner.width as u32) as u16;
+    let h = fit_h_px.div_ceil(fh).max(1).min(inner.height as u32) as u16;
 
     let x = inner.x + (inner.width.saturating_sub(w)) / 2;
     let y = inner.y + (inner.height.saturating_sub(h)) / 2;
