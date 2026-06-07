@@ -50,6 +50,7 @@ These apply whenever you run Ratune, including [GitHub Releases](https://github.
 
 - **Server**: A Subsonic-compatible music server (Navidrome is a good default).
 - **Linux audio**: ALSA userspace library at runtime — e.g. Debian/Ubuntu `libasound2`, Fedora `alsa-lib`, Arch `alsa-lib`. (You do **not** need `-dev` / `*-devel` packages just to run a prebuilt binary.)
+- **Linux D-Bus**: `libdbus-1` at runtime — e.g. Debian/Ubuntu `libdbus-1-3`, Fedora `dbus-libs`, Arch `dbus`. Required by the Linux binary (scrobble keyring, etc.); usually already installed on desktop Linux.
 - **macOS audio**: Uses Core Audio via the system toolchain; no separate audio library install for typical use.
 - **Optional**: `fzf` or `sk` on `PATH` if you use the library fuzzy picker (see `[library]` in the sample config).
 
@@ -60,7 +61,7 @@ Prebuilt archives on [Releases](https://github.com/acmagn/ratune/releases): **Li
 Everything under **Runtime**, plus:
 
 - **Rust**: Stable toolchain (`rustup` default stable is fine).
-- **Linux build deps**: ALSA headers and `pkg-config` — e.g. Debian/Ubuntu `libasound2-dev` + `pkg-config`, Fedora `alsa-lib-devel`, Arch `alsa-lib` (provides what `alsa-sys` needs via pkg-config).
+- **Linux build deps**: ALSA and D-Bus headers plus `pkg-config` — e.g. Debian/Ubuntu `libasound2-dev` + `libdbus-1-dev` + `pkg-config`, Fedora `alsa-lib-devel` + `dbus-devel`, Arch `alsa-lib` + `dbus`.
 
 ---
 
@@ -97,7 +98,7 @@ yay -S ratune-bin
 cargo install ratune
 ```
 
-This **builds** from the published crate. You need a **Rust toolchain**; on **Linux**, install ALSA **development** packages first (same as [Build from source](#build-from-source)).
+This **builds** from the published crate. You need a **Rust toolchain**; on **Linux**, install ALSA and D-Bus **development** packages first (same as [Build from source](#build-from-source)).
 
 ### macOS (Homebrew)
 
@@ -110,17 +111,17 @@ brew install ratune
 
 Use this when you want the latest git checkout, you’re on an OS/arch without a prebuilt, or you’re developing Ratune.
 
-**Linux:** install ALSA headers and `pkg-config` *before* the first build:
+**Linux:** install ALSA and D-Bus headers and `pkg-config` *before* the first build:
 
 ```bash
 # Debian / Ubuntu
-sudo apt install libasound2-dev pkg-config
+sudo apt install libasound2-dev libdbus-1-dev pkg-config
 
 # Fedora / RHEL
-sudo dnf install alsa-lib-devel pkg-config
+sudo dnf install alsa-lib-devel dbus-devel pkg-config
 
 # Arch
-sudo pacman -S alsa-lib
+sudo pacman -S alsa-lib dbus
 ```
 
 **Clone and build:**
@@ -161,7 +162,7 @@ Set Subsonic **url** and **username**, then choose how to supply the secret (mos
 
 #### Keyring
 
-Leave `password` empty. Ratune uses [`keyring-core`](https://crates.io/crates/keyring-core) with a platform store: on Linux you pick `keyutils` (kernel keyring, default) or `secret-service` (gnome-keyring / KWallet); Keychain*on macOS; Credential Manager on Windows. On first run you are prompted once ([inquire](https://crates.io/crates/inquire)); the secret is stored under service `ratune` and user `{url}|{username}` — not in `config.toml`.
+Leave `password` empty. Ratune uses [`keyring-core`](https://crates.io/crates/keyring-core) with a platform store: on Linux you pick **`keyutils`** (kernel keyring, default) or **`secret-service`** (gnome-keyring / KWallet); **Keychain** on macOS; **Credential Manager** on Windows. On first run you are prompted once ([inquire](https://crates.io/crates/inquire)); the secret is stored under service **`ratune`** and user **`{url}|{username}`** — not in `config.toml`.
 
 - **`password_keyring = "keyutils"`** (default) — [kernel keyutils](https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/). Lightweight and fine for a server password you can re-enter after reboot; keys may not survive reboot ([persistence](https://docs.rs/linux-keyutils-keyring-store/latest/linux_keyutils_keyring_store/#persistence)).
 - **`password_keyring = "secret-service"`** — [Secret Service](https://specifications.freedesktop.org/secret-service/) via libsecret (same wallet as `secret-tool`, browser password managers, etc.). Better when you want the password to persist across reboots like other desktop secrets.
