@@ -1649,7 +1649,12 @@ fn resolve_subsonic_secret_from_keyring(server: &ServerSection) -> Result<String
 
     let label = subsonic_keyring_user(url, user);
     let backend = crate::keyring_init::parse_password_keyring(&server.password_keyring)
-        .with_context(|| format!("invalid [server].password_keyring {:?}", server.password_keyring))?;
+        .with_context(|| {
+            format!(
+                "invalid [server].password_keyring {:?}",
+                server.password_keyring
+            )
+        })?;
     let entry = match crate::keyring_init::keyring_entry("ratune", &label, backend) {
         Ok(e) => e,
         Err(KeyringError::NoDefaultStore) => {
@@ -1659,7 +1664,12 @@ fn resolve_subsonic_secret_from_keyring(server: &ServerSection) -> Result<String
             );
             return inquire_subsonic_password_session();
         }
-        Err(e) => return Err(e).context(format!("keyring entry (service ratune, {})", backend.label())),
+        Err(e) => {
+            return Err(e).context(format!(
+                "keyring entry (service ratune, {})",
+                backend.label()
+            ))
+        }
     };
 
     match entry.get_password() {
@@ -1681,7 +1691,10 @@ fn resolve_subsonic_secret_from_keyring(server: &ServerSection) -> Result<String
             );
             inquire_subsonic_password_session()
         }
-        Err(e) => Err(e).context(format!("reading Subsonic secret from {} keyring", backend.label())),
+        Err(e) => Err(e).context(format!(
+            "reading Subsonic secret from {} keyring",
+            backend.label()
+        )),
     }
 }
 
@@ -1876,8 +1889,10 @@ pub fn store_scrobble_api_secret(
     }
     let label = scrobble_keyring_label(service, "api_secret");
     let backend = crate::keyring_init::KeyringBackend::scrobble();
-    let entry = crate::keyring_init::keyring_entry("ratune", &label, backend)
-        .context(format!("keyring entry for scrobble api_secret ({})", backend.label()))?;
+    let entry = crate::keyring_init::keyring_entry("ratune", &label, backend).context(format!(
+        "keyring entry for scrobble api_secret ({})",
+        backend.label()
+    ))?;
     entry
         .set_password(secret)
         .context("storing scrobble api_secret in keyring")?;
@@ -1895,8 +1910,10 @@ pub fn store_scrobble_session_key(
     }
     let label = scrobble_keyring_label(service, "session");
     let backend = crate::keyring_init::KeyringBackend::scrobble();
-    let entry = crate::keyring_init::keyring_entry("ratune", &label, backend)
-        .context(format!("keyring entry for scrobble session ({})", backend.label()))?;
+    let entry = crate::keyring_init::keyring_entry("ratune", &label, backend).context(format!(
+        "keyring entry for scrobble session ({})",
+        backend.label()
+    ))?;
     entry
         .set_password(key)
         .context("storing scrobble session key in keyring")?;
@@ -2012,7 +2029,8 @@ password_keyring = "secret-service"
         let fc: FileConfig = toml::from_str(text).expect("toml");
         assert_eq!(fc.server.password_keyring, "secret-service");
         assert_eq!(
-            crate::keyring_init::parse_password_keyring(&fc.server.password_keyring).expect("parse"),
+            crate::keyring_init::parse_password_keyring(&fc.server.password_keyring)
+                .expect("parse"),
             crate::keyring_init::KeyringBackend::SecretService
         );
     }

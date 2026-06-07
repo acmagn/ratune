@@ -72,7 +72,11 @@ fn linux_secret_service_store() -> Option<Arc<dbus_secret_service_keyring_store:
 }
 
 /// Create a keyring entry using the given backend.
-pub fn keyring_entry(service: &str, user: &str, backend: KeyringBackend) -> Result<Entry, KeyringError> {
+pub fn keyring_entry(
+    service: &str,
+    user: &str,
+    backend: KeyringBackend,
+) -> Result<Entry, KeyringError> {
     #[cfg(target_os = "linux")]
     {
         let store: Arc<dyn CredentialStoreApi> = match backend {
