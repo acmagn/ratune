@@ -38,7 +38,7 @@ Ratune was built to bring together a combination of features often missing from 
 - **Folder navigation**: Optional Browse layout that follows server music folders for servers that provide it.
 - **Customization**: Keybinds, theme, layout, now-playing lines, queue row template inspired by ncmpcpp.
 - **Integration**: Linux MPRIS (media keys, `playerctl`).
-- **Scrobbling**: Last.fm and Libre.fm (Audioscrobbler), plus optional Subsonic `/scrobble` for Navidrome play counts — no MPRIS guessing; Ratune owns playback.
+- **Scrobbling**: Last.fm and Libre.fm (Audioscrobbler), plus optional Subsonic `/scrobble` for Navidrome play counts.
 
 ---
 
@@ -251,7 +251,7 @@ folder_navigation = true
 
 ### Scrobbling
 
-Ratune can scrobble listens to Last.fm or Libre.fm and optionally notify your Subsonic server so Navidrome records play counts. Because Ratune controls playback directly, scrobbles are based on actual listen progress — not MPRIS metadata.
+Ratune can scrobble listens to Last.fm or Libre.fm and optionally notify your Subsonic server so Navidrome records play counts. 
 
 Full reference: [`[scrobble]`](docs/sample-config.toml) in the sample config.
 
@@ -385,6 +385,12 @@ Theme, layout, now-playing lines, queue row template, tab bar, and more are conf
 
 <p align="center">
   <img src="docs/screenshots/customization.png" alt="UI customization" width="90%" />
+</p>
+
+Colors can be based on terminal/os, dynamic based on the album art, or override to whatever you prefer. Transparency for background is also supported.
+
+<p align="center">
+  <img src="docs/screenshots/transparency.png"
 </p>
 
 Album art, fzf, and visualizer features can be disabled for those desiring a minimalist experience:
