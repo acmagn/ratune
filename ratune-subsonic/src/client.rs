@@ -26,11 +26,11 @@ use tokio::task::JoinSet;
 use crate::error::check_status;
 use crate::models::{
     parse_music_library_root_folder_id, structured_lyrics_to_lines, Album, AlbumEnvelope, Artist,
-    ArtistEnvelope, Artists, ArtistsEnvelope, DirectoryChild, IndexesEnvelope, LegacyLyricsEnvelope,
-    LyricLine, MusicDirectory, MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope,
-    LyricsBySongIdEnvelope, PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope,
-    PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope, SearchEnvelope, SearchResult3, Song,
-    SongEnvelope, SubsonicLibrary,
+    ArtistEnvelope, Artists, ArtistsEnvelope, DirectoryChild, IndexesEnvelope,
+    LegacyLyricsEnvelope, LyricLine, LyricsBySongIdEnvelope, MusicDirectory,
+    MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope, PingEnvelope, Playlist,
+    PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
+    SearchEnvelope, SearchResult3, Song, SongEnvelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────

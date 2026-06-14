@@ -793,4 +793,24 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "Hello");
     }
+
+    #[test]
+    fn deserialize_legacy_get_lyrics_envelope() {
+        let j = r#"{"subsonic-response":{"status":"ok","lyrics":{
+            "artist":"Muse","title":"Hysteria","value":"Line one\nLine two"
+        }}}"#
+            .replace('\n', "");
+        let env: LegacyLyricsEnvelope = serde_json::from_str(&j).unwrap();
+        let value = env.response.lyrics.expect("lyrics").value.expect("value");
+        assert!(value.contains("Line one"));
+    }
+
+    #[test]
+    fn structured_lyrics_unsynced_lines_have_no_timestamps() {
+        let j = r#"[{"synced":false,"line":[{"value":"A"},{"value":"B"}]}]"#;
+        let entries: Vec<StructuredLyricsRaw> = serde_json::from_str(j).unwrap();
+        let lines = structured_lyrics_to_lines(&entries);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.time.is_none()));
+    }
 }

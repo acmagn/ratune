@@ -1799,13 +1799,7 @@ impl App {
     /// No network request is made when lyrics are disabled or the pane is hidden.
     /// Checks the on-disk cache first. Soft-fails silently — on any error an
     /// empty `lines` vec is delivered so the UI shows "No lyrics available".
-    pub fn fetch_lyrics(
-        &mut self,
-        song_id: String,
-        artist: String,
-        title: String,
-        album: String,
-    ) {
+    pub fn fetch_lyrics(&mut self, song_id: String, artist: String, title: String, album: String) {
         if !self.config.lyrics_enabled || !self.lyrics_visible {
             return;
         }

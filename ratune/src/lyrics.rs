@@ -36,14 +36,29 @@ pub async fn fetch_lyrics(
     }
 }
 
+/// Build the LRCLib `get` endpoint from a configured base URL.
+fn lrclib_api_url(base_url: &str) -> String {
+    format!("{}/api/get", base_url.trim_end_matches('/'))
+}
+
+/// Convert an LRCLib API JSON body into display lines.
+fn lines_from_lrclib_body(body: &LrcLibResponse) -> Vec<LyricLine> {
+    if let Some(lrc) = body.synced_lyrics.as_deref().filter(|s| !s.is_empty()) {
+        return parse_lrc(lrc);
+    }
+    if let Some(plain) = body.plain_lyrics.as_deref().filter(|s| !s.is_empty()) {
+        return parse_lyrics_text(plain);
+    }
+    vec![]
+}
+
 async fn fetch_lrclib(
     base_url: &str,
     artist: &str,
     title: &str,
     album: &str,
 ) -> Result<Vec<LyricLine>, Box<dyn std::error::Error + Send + Sync>> {
-    let base = base_url.trim_end_matches('/');
-    let endpoint = format!("{base}/api/get");
+    let endpoint = lrclib_api_url(base_url);
 
     let resp = reqwest::Client::new()
         .get(&endpoint)
@@ -60,16 +75,7 @@ async fn fetch_lrclib(
     }
 
     let body: LrcLibResponse = resp.json().await?;
-
-    if let Some(lrc) = body.synced_lyrics.filter(|s| !s.is_empty()) {
-        return Ok(parse_lrc(&lrc));
-    }
-
-    if let Some(plain) = body.plain_lyrics.filter(|s| !s.is_empty()) {
-        return Ok(parse_lyrics_text(&plain));
-    }
-
-    Ok(vec![])
+    Ok(lines_from_lrclib_body(&body))
 }
 
 async fn fetch_subsonic(
@@ -93,7 +99,10 @@ async fn fetch_subsonic(
 
 /// Parse plain or LRC-formatted lyrics text into display lines.
 fn parse_lyrics_text(text: &str) -> Vec<LyricLine> {
-    if text.lines().any(|l| l.trim_start().starts_with('[') && l.contains(']')) {
+    if text
+        .lines()
+        .any(|l| l.trim_start().starts_with('[') && l.contains(']'))
+    {
         let synced = parse_lrc(text);
         if !synced.is_empty() {
             return synced;
@@ -143,6 +152,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lrclib_api_url_trims_trailing_slash() {
+        assert_eq!(
+            lrclib_api_url("https://lrclib.net/"),
+            "https://lrclib.net/api/get"
+        );
+        assert_eq!(
+            lrclib_api_url("https://example.com"),
+            "https://example.com/api/get"
+        );
+    }
+
+    #[test]
+    fn lines_from_lrclib_body_prefers_synced_over_plain() {
+        let body = LrcLibResponse {
+            synced_lyrics: Some("[00:01.00] Synced line".into()),
+            plain_lyrics: Some("Plain only\nSecond line".into()),
+        };
+        let lines = lines_from_lrclib_body(&body);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Synced line");
+        assert_eq!(lines[0].time, Some(Duration::from_millis(1000)));
+    }
+
+    #[test]
+    fn lines_from_lrclib_body_falls_back_to_plain() {
+        let body = LrcLibResponse {
+            synced_lyrics: None,
+            plain_lyrics: Some("Line one\nLine two".into()),
+        };
+        let lines = lines_from_lrclib_body(&body);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.time.is_none()));
+    }
+
+    #[test]
+    fn lines_from_lrclib_body_empty_when_missing() {
+        let body = LrcLibResponse {
+            synced_lyrics: None,
+            plain_lyrics: None,
+        };
+        assert!(lines_from_lrclib_body(&body).is_empty());
+    }
+
+    #[test]
     fn parse_lrc_timestamps() {
         let lrc = "[00:01.50] Hello\n[00:03.00] World";
         let lines = parse_lrc(lrc);
@@ -157,5 +210,13 @@ mod tests {
         let lines = parse_lyrics_text(text);
         assert_eq!(lines.len(), 2);
         assert!(lines.iter().all(|l| l.time.is_none()));
+    }
+
+    #[test]
+    fn parse_lyrics_text_detects_lrc_in_plain_field() {
+        let text = "[00:02.00] First\n[00:04.00] Second";
+        let lines = parse_lyrics_text(text);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].time, Some(Duration::from_millis(2000)));
     }
 }

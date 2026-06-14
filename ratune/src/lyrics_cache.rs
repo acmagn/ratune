@@ -98,10 +98,7 @@ mod tests {
                 text: "World".into(),
             },
         ];
-        let dir = std::env::temp_dir().join(format!(
-            "ratune-lyrics-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ratune-lyrics-test-{}", std::process::id()));
         let source_dir = dir.join("lrclib");
         let _ = std::fs::create_dir_all(&source_dir);
         LyricsDiskCache::put_at(&source_dir, "song-1", &lines);
@@ -109,5 +106,52 @@ mod tests {
         let loaded = cache.get("lrclib", "song-1").expect("cached lyrics");
         assert_eq!(loaded, lines);
         let _ = std::fs::remove_dir_all(cache.dir);
+    }
+
+    #[test]
+    fn cache_isolated_by_source() {
+        let dir =
+            std::env::temp_dir().join(format!("ratune-lyrics-sources-{}", std::process::id()));
+        let lrclib_dir = dir.join("lrclib");
+        let subsonic_dir = dir.join("subsonic");
+        let lrclib_lines = vec![LyricLine {
+            time: None,
+            text: "from lrclib".into(),
+        }];
+        let subsonic_lines = vec![LyricLine {
+            time: None,
+            text: "from subsonic".into(),
+        }];
+        LyricsDiskCache::put_at(&lrclib_dir, "song-1", &lrclib_lines);
+        LyricsDiskCache::put_at(&subsonic_dir, "song-1", &subsonic_lines);
+        let cache = LyricsDiskCache { dir };
+        assert_eq!(
+            cache.get("lrclib", "song-1").expect("lrclib")[0].text,
+            "from lrclib"
+        );
+        assert_eq!(
+            cache.get("subsonic", "song-1").expect("subsonic")[0].text,
+            "from subsonic"
+        );
+        let _ = std::fs::remove_dir_all(cache.dir);
+    }
+
+    #[test]
+    fn empty_lines_are_cached() {
+        let dir = std::env::temp_dir().join(format!("ratune-lyrics-empty-{}", std::process::id()));
+        let source_dir = dir.join("subsonic");
+        LyricsDiskCache::put_at(&source_dir, "no-lyrics", &[]);
+        let cache = LyricsDiskCache { dir };
+        let loaded = cache.get("subsonic", "no-lyrics").expect("cached empty");
+        assert!(loaded.is_empty());
+        let _ = std::fs::remove_dir_all(cache.dir);
+    }
+
+    #[test]
+    fn missing_cache_entry_returns_none() {
+        let cache = LyricsDiskCache {
+            dir: std::env::temp_dir().join(format!("ratune-lyrics-missing-{}", std::process::id())),
+        };
+        assert!(cache.get("lrclib", "does-not-exist").is_none());
     }
 }

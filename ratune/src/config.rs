@@ -2224,8 +2224,17 @@ api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
     #[test]
     fn lyrics_source_parses_lrclib_and_subsonic() {
         assert_eq!(LyricsSource::parse("lrclib"), Some(LyricsSource::LrcLib));
-        assert_eq!(LyricsSource::parse("subsonic"), Some(LyricsSource::Subsonic));
+        assert_eq!(
+            LyricsSource::parse("subsonic"),
+            Some(LyricsSource::Subsonic)
+        );
         assert_eq!(LyricsSource::parse("unknown"), None);
+    }
+
+    #[test]
+    fn lyrics_source_cache_dir_names() {
+        assert_eq!(LyricsSource::LrcLib.cache_dir_name(), "lrclib");
+        assert_eq!(LyricsSource::Subsonic.cache_dir_name(), "subsonic");
     }
 
     #[test]
