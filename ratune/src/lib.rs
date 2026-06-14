@@ -10,6 +10,7 @@ mod keybinds;
 mod keyring_init;
 mod library_index;
 mod lyrics;
+mod lyrics_cache;
 mod mpris;
 mod persist;
 mod scrobble;

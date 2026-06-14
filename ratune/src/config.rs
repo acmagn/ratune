@@ -33,6 +33,8 @@ struct FileConfig {
     #[serde(default)]
     pub cache: CacheSection,
     #[serde(default)]
+    pub lyrics: LyricsSection,
+    #[serde(default)]
     pub library: LibrarySection,
     #[serde(default)]
     pub scrobble: ScrobbleSection,
@@ -138,6 +140,72 @@ impl Default for CacheSection {
         Self {
             enabled: default_cache_enabled(),
             max_size_gb: default_cache_max_size_gb(),
+        }
+    }
+}
+
+// ── [lyrics] ──────────────────────────────────────────────────────────────────
+
+/// Lyrics fetch settings from config.toml.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LyricsSection {
+    /// Where to fetch lyrics: `lrclib` (default) or `subsonic`.
+    #[serde(default = "default_lyrics_source")]
+    pub source: String,
+    /// LRCLib server base URL (used when `source = "lrclib"`). Default: https://lrclib.net
+    #[serde(default = "default_lrclib_url")]
+    pub lrclib_url: String,
+    /// Cache fetched lyrics on disk for offline use. Default: true.
+    #[serde(default = "default_lyrics_cache_enabled")]
+    pub cache_enabled: bool,
+}
+
+fn default_lyrics_source() -> String {
+    "lrclib".into()
+}
+
+fn default_lrclib_url() -> String {
+    "https://lrclib.net".into()
+}
+
+fn default_lyrics_cache_enabled() -> bool {
+    true
+}
+
+impl Default for LyricsSection {
+    fn default() -> Self {
+        Self {
+            source: default_lyrics_source(),
+            lrclib_url: default_lrclib_url(),
+            cache_enabled: default_lyrics_cache_enabled(),
+        }
+    }
+}
+
+/// Lyrics provider configured in `[lyrics].source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LyricsSource {
+    /// Public LRCLib API (default).
+    #[default]
+    LrcLib,
+    /// Subsonic server (`getLyricsBySongId` / `getLyrics`).
+    Subsonic,
+}
+
+impl LyricsSource {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "lrclib" | "lrc-lib" | "lrc" => Some(Self::LrcLib),
+            "subsonic" | "server" => Some(Self::Subsonic),
+            _ => None,
+        }
+    }
+
+    /// Subdirectory name under `~/.cache/ratune/lyrics/`.
+    pub fn cache_dir_name(self) -> &'static str {
+        match self {
+            Self::LrcLib => "lrclib",
+            Self::Subsonic => "subsonic",
         }
     }
 }
@@ -944,6 +1012,12 @@ pub struct Config {
     pub cache_enabled: bool,
     /// Maximum total cache size in gigabytes.
     pub cache_max_size_gb: f64,
+    /// Where to fetch lyrics (`lrclib` or `subsonic`).
+    pub lyrics_source: LyricsSource,
+    /// LRCLib base URL when `lyrics_source` is `LrcLib`.
+    pub lyrics_lrclib_url: String,
+    /// Whether to cache lyrics on disk under `~/.cache/ratune/lyrics/`.
+    pub lyrics_cache_enabled: bool,
     /// Local metadata index for fzf (see `[library]`).
     pub library_index_enabled: bool,
     pub library_index_path: String,
@@ -1315,6 +1389,10 @@ impl Config {
             now_playing_lines_boxed,
             cache_enabled: file_cfg.cache.enabled,
             cache_max_size_gb: file_cfg.cache.max_size_gb,
+            lyrics_source: LyricsSource::parse(&file_cfg.lyrics.source)
+                .unwrap_or(LyricsSource::LrcLib),
+            lyrics_lrclib_url: file_cfg.lyrics.lrclib_url,
+            lyrics_cache_enabled: file_cfg.lyrics.cache_enabled,
             library_index_enabled: file_cfg.library.enabled,
             library_index_path: file_cfg.library.index_path,
             library_index_max_age_secs: file_cfg.library.max_age_secs,
@@ -1542,6 +1620,14 @@ location = "right"
 [cache]
 enabled     = true
 max_size_gb = 2   # maximum total cache size in gigabytes
+
+[lyrics]
+# source — "lrclib" (default) | "subsonic"
+source = "lrclib"
+# lrclib_url — LRCLib base URL when source = "lrclib". Default: https://lrclib.net
+# lrclib_url = "https://lrclib.net"
+# cache_enabled — store lyrics under ~/.cache/ratune/lyrics/ for offline use. Default: true
+# cache_enabled = true
 
 # [scrobble]
 # enabled = false
@@ -2133,5 +2219,41 @@ api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
     fn browse_mode_parses_artists() {
         assert_eq!(BrowseMode::parse("artists"), Some(BrowseMode::Artists));
         assert_eq!(BrowseMode::parse("bogus"), None);
+    }
+
+    #[test]
+    fn lyrics_source_parses_lrclib_and_subsonic() {
+        assert_eq!(LyricsSource::parse("lrclib"), Some(LyricsSource::LrcLib));
+        assert_eq!(
+            LyricsSource::parse("subsonic"),
+            Some(LyricsSource::Subsonic)
+        );
+        assert_eq!(LyricsSource::parse("unknown"), None);
+    }
+
+    #[test]
+    fn lyrics_source_cache_dir_names() {
+        assert_eq!(LyricsSource::LrcLib.cache_dir_name(), "lrclib");
+        assert_eq!(LyricsSource::Subsonic.cache_dir_name(), "subsonic");
+    }
+
+    #[test]
+    fn parses_lyrics_section() {
+        let text = r#"
+[lyrics]
+source = "subsonic"
+lrclib_url = "https://example.com"
+cache_enabled = false
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        assert_eq!(fc.lyrics.source, "subsonic");
+        assert_eq!(fc.lyrics.lrclib_url, "https://example.com");
+        assert!(!fc.lyrics.cache_enabled);
+    }
+
+    #[test]
+    fn lyrics_cache_enabled_defaults_true() {
+        let fc: FileConfig = toml::from_str("[lyrics]\nsource = \"lrclib\"\n").expect("toml");
+        assert!(fc.lyrics.cache_enabled);
     }
 }

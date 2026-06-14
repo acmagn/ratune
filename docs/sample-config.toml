@@ -2,8 +2,6 @@
 # ratune — sample config (every recognized key + comments)
 # =============================================================================
 #
-# This file is documentation only. The app does NOT read it from the repo.
-#
 # Installed config path (first match):
 #   $XDG_CONFIG_HOME/ratune/config.toml
 #   ~/.config/ratune/config.toml
@@ -327,6 +325,22 @@ position = "right"
 enabled = true
 visible = false
 location = "right"
+
+# -----------------------------------------------------------------------------
+# [lyrics] — lyrics fetch source
+# -----------------------------------------------------------------------------
+#
+# source — "lrclib" (default) | "subsonic"
+#   lrclib   — query LRCLib (public API; requests only when the lyrics pane is open)
+#   subsonic — query your Subsonic server (getLyricsBySongId / getLyrics; no third party)
+# lrclib_url — LRCLib base URL when source = "lrclib". Default: https://lrclib.net
+# cache_enabled — store lyrics under ~/.cache/ratune/lyrics/ for offline use. Default: true
+
+[lyrics]
+source = "lrclib"
+# lrclib_url = "https://lrclib.net"
+# cache_enabled = false
+# source = "subsonic"
 
 # [ui.nptab.visualizer_pane]
 # enabled — If false, visualizer cannot be opened. Default: true.

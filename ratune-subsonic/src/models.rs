@@ -282,12 +282,128 @@ pub struct ScanStatus {
 /// `time` is `Some(offset)` for synced (LRC-style) lyrics where the line
 /// should be highlighted at the given playback position, or `None` for plain
 /// unsynced text.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LyricLine {
     /// Playback offset at which to highlight this line; `None` = unsynced.
     pub time: Option<Duration>,
     /// The lyric text.
     pub text: String,
+}
+
+/// Convert OpenSubsonic [`StructuredLyricsRaw`] entries into display lines.
+///
+/// Prefers synced `main` lyrics, then any synced track, then the first entry.
+pub(crate) fn structured_lyrics_to_lines(entries: &[StructuredLyricsRaw]) -> Vec<LyricLine> {
+    pick_best_structured_lyrics(entries)
+        .map(structured_lyrics_entry_to_lines)
+        .unwrap_or_default()
+}
+
+fn pick_best_structured_lyrics(entries: &[StructuredLyricsRaw]) -> Option<&StructuredLyricsRaw> {
+    entries
+        .iter()
+        .find(|e| e.synced && e.kind.as_deref().unwrap_or("main") == "main")
+        .or_else(|| entries.iter().find(|e| e.synced))
+        .or_else(|| entries.first())
+}
+
+fn structured_lyrics_entry_to_lines(entry: &StructuredLyricsRaw) -> Vec<LyricLine> {
+    let offset_ms = entry.offset.unwrap_or(0);
+    entry
+        .line
+        .iter()
+        .map(|l| {
+            let time = l.start.map(|start| {
+                let adjusted = (i64::from(start) + offset_ms).max(0) as u64;
+                Duration::from_millis(adjusted)
+            });
+            LyricLine {
+                time,
+                text: l.value.clone(),
+            }
+        })
+        .collect()
+}
+
+fn deserialize_structured_lyrics_list<'de, D>(
+    deserializer: D,
+) -> Result<Vec<StructuredLyricsRaw>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        Single(StructuredLyricsRaw),
+        List(Vec<StructuredLyricsRaw>),
+    }
+    match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::Single(o) => Ok(vec![o]),
+        OneOrMany::List(v) => Ok(v),
+    }
+}
+
+/// One structured lyrics block from `getLyricsBySongId`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StructuredLyricsRaw {
+    #[serde(default)]
+    pub(crate) kind: Option<String>,
+    #[serde(default)]
+    pub(crate) synced: bool,
+    #[serde(default)]
+    pub(crate) offset: Option<i64>,
+    #[serde(default)]
+    pub(crate) line: Vec<StructuredLyricLineRaw>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct StructuredLyricLineRaw {
+    #[serde(default)]
+    pub(crate) start: Option<u32>,
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LyricsListRaw {
+    #[serde(
+        default,
+        rename = "structuredLyrics",
+        deserialize_with = "deserialize_structured_lyrics_list"
+    )]
+    pub(crate) structured_lyrics: Vec<StructuredLyricsRaw>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct LyricsBySongIdEnvelope {
+    #[serde(rename = "subsonic-response")]
+    pub response: LyricsBySongIdBody,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct LyricsBySongIdBody {
+    pub status: String,
+    pub error: Option<SubsonicError>,
+    #[serde(rename = "lyricsList")]
+    pub lyrics_list: Option<LyricsListRaw>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct LegacyLyricsEnvelope {
+    #[serde(rename = "subsonic-response")]
+    pub response: LegacyLyricsBody,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct LegacyLyricsBody {
+    pub status: String,
+    pub error: Option<SubsonicError>,
+    pub lyrics: Option<LegacyLyricsRaw>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct LegacyLyricsRaw {
+    pub value: Option<String>,
 }
 
 // ── Private serde envelope types ──────────────────────────────────────────────
@@ -647,5 +763,54 @@ mod tests {
             }],
         };
         let _ = format!("{lib:?}");
+    }
+
+    #[test]
+    fn structured_lyrics_to_lines_prefers_synced_main() {
+        let j = r#"[
+            {"lang":"eng","synced":false,"line":[{"value":"plain"}]},
+            {"kind":"main","lang":"eng","synced":true,"offset":-100,"line":[
+                {"start":0,"value":"It's bugging me"},
+                {"start":2000,"value":"Grating me"}
+            ]}
+        ]"#;
+        let entries: Vec<StructuredLyricsRaw> = serde_json::from_str(j).unwrap();
+        let lines = structured_lyrics_to_lines(&entries);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "It's bugging me");
+        assert_eq!(lines[0].time, Some(Duration::from_millis(0)));
+        assert_eq!(lines[1].time, Some(Duration::from_millis(1900)));
+    }
+
+    #[test]
+    fn deserialize_lyrics_by_song_id_envelope() {
+        let j = r#"{"subsonic-response":{"status":"ok","lyricsList":{"structuredLyrics":{
+            "kind":"main","synced":true,"line":[{"start":0,"value":"Hello"}]
+        }}}}"#;
+        let env: LyricsBySongIdEnvelope = serde_json::from_str(j).unwrap();
+        let list = env.response.lyrics_list.expect("lyricsList");
+        let lines = structured_lyrics_to_lines(&list.structured_lyrics);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Hello");
+    }
+
+    #[test]
+    fn deserialize_legacy_get_lyrics_envelope() {
+        let j = r#"{"subsonic-response":{"status":"ok","lyrics":{
+            "artist":"Muse","title":"Hysteria","value":"Line one\nLine two"
+        }}}"#
+            .replace('\n', "");
+        let env: LegacyLyricsEnvelope = serde_json::from_str(&j).unwrap();
+        let value = env.response.lyrics.expect("lyrics").value.expect("value");
+        assert!(value.contains("Line one"));
+    }
+
+    #[test]
+    fn structured_lyrics_unsynced_lines_have_no_timestamps() {
+        let j = r#"[{"synced":false,"line":[{"value":"A"},{"value":"B"}]}]"#;
+        let entries: Vec<StructuredLyricsRaw> = serde_json::from_str(j).unwrap();
+        let lines = structured_lyrics_to_lines(&entries);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.time.is_none()));
     }
 }
