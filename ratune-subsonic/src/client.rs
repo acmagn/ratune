@@ -25,9 +25,10 @@ use tokio::task::JoinSet;
 
 use crate::error::check_status;
 use crate::models::{
-    parse_music_library_root_folder_id, Album, AlbumEnvelope, Artist, ArtistEnvelope, Artists,
-    ArtistsEnvelope, DirectoryChild, IndexesEnvelope, MusicDirectory, MusicDirectoryEnvelope,
-    MusicFolder, MusicFoldersEnvelope, PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope,
+    parse_music_library_root_folder_id, structured_lyrics_to_lines, Album, AlbumEnvelope, Artist,
+    ArtistEnvelope, Artists, ArtistsEnvelope, DirectoryChild, IndexesEnvelope, LegacyLyricsEnvelope,
+    LyricLine, MusicDirectory, MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope,
+    LyricsBySongIdEnvelope, PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope,
     PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope, SearchEnvelope, SearchResult3, Song,
     SongEnvelope, SubsonicLibrary,
 };
@@ -609,6 +610,54 @@ impl SubsonicClient {
             .json()
             .await?;
         check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// Fetch structured lyrics for a song (`getLyricsBySongId`, OpenSubsonic).
+    ///
+    /// Returns an empty vec when the server has no lyrics for this track.
+    pub async fn get_lyrics_by_song_id(&self, id: &str) -> Result<Vec<LyricLine>> {
+        let mut params = self.auth_params();
+        params.push(("id", id.to_string()));
+        let env: LyricsBySongIdEnvelope = self
+            .http
+            .get(self.endpoint_url("getLyricsBySongId"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        let entries = r
+            .lyrics_list
+            .as_ref()
+            .map(|l| l.structured_lyrics.as_slice())
+            .unwrap_or_default();
+        Ok(structured_lyrics_to_lines(entries))
+    }
+
+    /// Fetch plain lyrics by artist/title (`getLyrics`, classic Subsonic).
+    ///
+    /// Returns the raw `value` string split into lines when present.
+    pub async fn get_lyrics(&self, artist: &str, title: &str) -> Result<Option<String>> {
+        let mut params = self.auth_params();
+        params.push(("artist", artist.to_string()));
+        params.push(("title", title.to_string()));
+        let env: LegacyLyricsEnvelope = self
+            .http
+            .get(self.endpoint_url("getLyrics"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        Ok(r.lyrics
+            .as_ref()
+            .and_then(|l| l.value.as_deref())
+            .filter(|v| !v.trim().is_empty())
+            .map(str::to_string))
     }
 }
 

@@ -32,7 +32,7 @@ Ratune was built to bring together a combination of features often missing from 
 
 - **Playback**: Gapless queue, seek, shuffle/unshuffle, and playlist management.
 - **Album Art**: Display using Kitty graphics and [ratatui-image](https://github.com/ratatui/ratatui-image) (see link for compatible terminals)
-- **Lyrics**: Synced lyrics via LRCLib when available.
+- **Lyrics**: Synced lyrics via LRCLib (default) or your Subsonic server. Optional on-disk cache for offline use (`[lyrics].cache_enabled`, default on).
 - **Visualizer**: FFT spectrum analyzer.
 - **Fuzzy finder**: Optional library index + external picker (fzf/skim) for fast track selection.
 - **Folder navigation**: Optional Browse layout that follows server music folders for servers that provide it.
@@ -451,7 +451,7 @@ Ratune is based on [playterm](https://github.com/awriterandtheword-rgb/playterm-
 - [ratatui](https://github.com/ratatui/ratatui) — TUI
 - [rodio](https://github.com/RustAudio/rodio) — playback
 - [Navidrome](https://www.navidrome.org/) — test target server
-- [LRCLib](https://lrclib.net) — lyrics
+- [LRCLib](https://lrclib.net) — default lyrics source
 - [rmpc](https://github.com/mierak/rmpc) — ideas for navigation and art
 
 ## License

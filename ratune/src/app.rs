@@ -447,6 +447,8 @@ pub struct App {
     // ── Offline cache (Feature 5.3) ───────────────────────────────────────────
     /// Track file cache (LRU, persisted to `~/.cache/ratune/`).
     pub cache: crate::cache::TrackCache,
+    /// On-disk lyrics cache (`~/.cache/ratune/lyrics/`).
+    lyrics_disk_cache: crate::lyrics_cache::LyricsDiskCache,
     /// Monotonically increasing counter for background download tasks.
     /// Incremented on every `play_current()` call. Background tasks discard
     /// their result if the gen has advanced since they were spawned.
@@ -592,6 +594,7 @@ impl App {
         let visualizer_visible = config.visualizer_visible;
         let track_cache =
             crate::cache::TrackCache::load(config.cache_enabled, config.cache_max_size_gb);
+        let lyrics_disk_cache = crate::lyrics_cache::LyricsDiskCache::load();
         let index_path = config.resolved_library_index_path();
         let (library_index_tracks, library_index_refreshed_at) =
             match crate::library_index::load(&index_path) {
@@ -654,6 +657,7 @@ impl App {
             library_server_append_fetching: false,
             library_server_append_started: None,
             cache: track_cache,
+            lyrics_disk_cache,
             prefetch_gen: Arc::new(AtomicU64::new(0)),
             help_visible: false,
             home_art_needs_redraw: false,
@@ -1790,18 +1794,69 @@ impl App {
         });
     }
 
-    /// Spawn a task to fetch lyrics for a song from LRCLib.
+    /// Spawn a task to fetch lyrics from the configured source.
     ///
-    /// Soft-fails silently — on any error an empty `lines` vec is delivered so
-    /// the UI shows "No lyrics available" rather than a loading spinner forever.
-    pub fn fetch_lyrics(&mut self, song_id: String, artist: String, title: String, album: String) {
+    /// No network request is made when lyrics are disabled or the pane is hidden.
+    /// Checks the on-disk cache first. Soft-fails silently — on any error an
+    /// empty `lines` vec is delivered so the UI shows "No lyrics available".
+    pub fn fetch_lyrics(
+        &mut self,
+        song_id: String,
+        artist: String,
+        title: String,
+        album: String,
+    ) {
+        if !self.config.lyrics_enabled || !self.lyrics_visible {
+            return;
+        }
+
+        if self
+            .lyrics_cache
+            .as_ref()
+            .map(|(id, _)| id == &song_id)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let source_key = self.config.lyrics_source.cache_dir_name();
+        if self.config.lyrics_cache_enabled {
+            if let Some(lines) = self.lyrics_disk_cache.get(source_key, &song_id) {
+                self.lyrics_loading = false;
+                self.lyrics_scroll = 0;
+                self.lyrics_cache = Some((song_id, lines));
+                return;
+            }
+        }
+
         self.lyrics_loading = true;
         self.lyrics_scroll = 0;
+        let source = self.config.lyrics_source;
+        let lrclib_url = self.config.lyrics_lrclib_url.clone();
+        let cache_enabled = self.config.lyrics_cache_enabled;
+        let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
+        let lyrics_dir = self.lyrics_disk_cache.cache_dir_for(source_key);
         tokio::spawn(async move {
-            let lines = crate::lyrics::fetch_lyrics(&artist, &title, &album).await;
+            let lines = crate::lyrics::fetch_lyrics(
+                source,
+                &lrclib_url,
+                &client,
+                &song_id,
+                &artist,
+                &title,
+                &album,
+            )
+            .await;
+            if cache_enabled {
+                crate::lyrics_cache::LyricsDiskCache::put_at(&lyrics_dir, &song_id, &lines);
+            }
             let _ = tx.send(LibraryUpdate::Lyrics { song_id, lines }).await;
         });
+    }
+
+    fn should_fetch_lyrics(&self) -> bool {
+        self.config.lyrics_enabled && self.lyrics_visible
     }
 
     /// Return `true` when lyrics are plain-text (no timestamps) and should scroll
@@ -2462,19 +2517,21 @@ impl App {
                         // Track has no cover art.
                         self.apply_dynamic_accent(None);
                     }
-                    // Fetch lyrics if not already cached for this song.
-                    let cached_for_song = self
-                        .lyrics_cache
-                        .as_ref()
-                        .map(|(id, _)| id == &song.id)
-                        .unwrap_or(false);
-                    if !cached_for_song {
-                        self.fetch_lyrics(
-                            song.id.clone(),
-                            song.artist.clone().unwrap_or_default(),
-                            song.title.clone(),
-                            song.album.clone().unwrap_or_default(),
-                        );
+                    // Fetch lyrics only when the lyrics pane is visible.
+                    if self.should_fetch_lyrics() {
+                        let cached_for_song = self
+                            .lyrics_cache
+                            .as_ref()
+                            .map(|(id, _)| id == &song.id)
+                            .unwrap_or(false);
+                        if !cached_for_song {
+                            self.fetch_lyrics(
+                                song.id.clone(),
+                                song.artist.clone().unwrap_or_default(),
+                                song.title.clone(),
+                                song.album.clone().unwrap_or_default(),
+                            );
+                        }
                     }
                     // Background-cache current track + prefetch next 2.
                     if self.config.cache_enabled {
@@ -2555,19 +2612,21 @@ impl App {
                     } else {
                         self.apply_dynamic_accent(None);
                     }
-                    // Fetch lyrics if not already cached for this song.
-                    let cached_for_song = self
-                        .lyrics_cache
-                        .as_ref()
-                        .map(|(id, _)| id == &song.id)
-                        .unwrap_or(false);
-                    if !cached_for_song {
-                        self.fetch_lyrics(
-                            song.id.clone(),
-                            song.artist.clone().unwrap_or_default(),
-                            song.title.clone(),
-                            song.album.clone().unwrap_or_default(),
-                        );
+                    // Fetch lyrics only when the lyrics pane is visible.
+                    if self.should_fetch_lyrics() {
+                        let cached_for_song = self
+                            .lyrics_cache
+                            .as_ref()
+                            .map(|(id, _)| id == &song.id)
+                            .unwrap_or(false);
+                        if !cached_for_song {
+                            self.fetch_lyrics(
+                                song.id.clone(),
+                                song.artist.clone().unwrap_or_default(),
+                                song.title.clone(),
+                                song.album.clone().unwrap_or_default(),
+                            );
+                        }
                     }
                     self.scrobble_track_started(&song);
                     self.playback.current_song = Some(song);
