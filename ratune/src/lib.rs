@@ -1490,6 +1490,9 @@ fn map_key(
     if kb.unshuffle.matches(code, modifiers) {
         return Action::Unshuffle;
     }
+    if kb.toggle_queue_loop.matches(code, modifiers) {
+        return Action::ToggleQueueLoop;
+    }
     if kb.clear_queue.matches(code, modifiers) {
         return Action::ClearQueue;
     }
@@ -1719,21 +1722,12 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
     let chrome = ui::now_playing::interaction_rects(app, now_playing);
 
     if let Some(controls_area) = chrome.controls {
-        if y >= controls_area.y
-            && y < controls_area.y + controls_area.height
-            && x >= controls_area.x
-            && x < controls_area.x + controls_area.width
-        {
-            let rel_x = x - controls_area.x;
-            let third = controls_area.width / 3;
-            if rel_x < third {
-                app.dispatch(Action::PrevTrack);
-            } else if rel_x < 2 * third {
-                app.dispatch(Action::PlayPause);
-            } else {
-                app.dispatch(Action::NextTrack);
+        if let Some(action) = ui::now_playing::controls_click_action(app, controls_area, x) {
+            let row = ui::now_playing::controls_row_rect(controls_area);
+            if y >= row.y && y < row.y + row.height {
+                app.dispatch(action);
+                return;
             }
-            return;
         }
     }
 
@@ -1928,21 +1922,14 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                 if let Some(pane) = rects.now_playing {
                     let chrome = ui::now_playing::interaction_rects_pane(app, pane);
                     if let Some(controls_area) = chrome.controls {
-                        if y >= controls_area.y
-                            && y < controls_area.y + controls_area.height
-                            && x >= controls_area.x
-                            && x < controls_area.x + controls_area.width
+                        if let Some(action) =
+                            ui::now_playing::controls_click_action(app, controls_area, x)
                         {
-                            let rel_x = x - controls_area.x;
-                            let third = controls_area.width / 3;
-                            if rel_x < third {
-                                app.dispatch(Action::PrevTrack);
-                            } else if rel_x < 2 * third {
-                                app.dispatch(Action::PlayPause);
-                            } else {
-                                app.dispatch(Action::NextTrack);
+                            let row = ui::now_playing::controls_row_rect(controls_area);
+                            if y >= row.y && y < row.y + row.height {
+                                app.dispatch(action);
+                                return;
                             }
-                            return;
                         }
                     }
                     if let Some(progress_area) = chrome.progress {

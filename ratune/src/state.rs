@@ -206,7 +206,7 @@ impl FolderBrowseState {
 
 // ── QueueState ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct QueueState {
     pub songs: Vec<Song>,
     /// Index of the currently playing (or next-to-play) song.
@@ -216,6 +216,23 @@ pub struct QueueState {
     /// Snapshot of the queue order taken just before the last shuffle.
     /// `None` means no unshuffle is available.
     pub pre_shuffle_order: Option<Vec<Song>>,
+    /// Whether the queue is currently in shuffled order (vs `pre_shuffle_order`).
+    pub shuffle_active: bool,
+    /// When true, playback wraps to the first queue track after the last one ends.
+    pub loop_enabled: bool,
+}
+
+impl Default for QueueState {
+    fn default() -> Self {
+        Self {
+            songs: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+            pre_shuffle_order: None,
+            shuffle_active: false,
+            loop_enabled: true,
+        }
+    }
 }
 
 impl QueueState {
@@ -233,6 +250,27 @@ impl QueueState {
 
     pub fn current(&self) -> Option<&Song> {
         self.songs.get(self.cursor)
+    }
+
+    /// True when shuffle is active and unshuffle can restore `pre_shuffle_order`.
+    pub fn is_shuffled(&self) -> bool {
+        self.shuffle_active
+    }
+
+    /// Drop shuffle snapshot/active flag (queue cleared or replaced).
+    pub fn clear_shuffle_state(&mut self) {
+        self.pre_shuffle_order = None;
+        self.shuffle_active = false;
+    }
+
+    /// After restoring or bulk-assigning `songs`, treat the current order as canonical.
+    pub fn adopt_current_order_as_shuffle_baseline(&mut self) {
+        if self.songs.is_empty() {
+            self.clear_shuffle_state();
+        } else {
+            self.pre_shuffle_order = Some(self.songs.clone());
+            self.shuffle_active = false;
+        }
     }
 
     /// Advance to the next song. Returns true if there is a next song.
@@ -485,5 +523,51 @@ mod queue_tests {
         assert_eq!(orig.len(), 2);
         assert_eq!(orig[0].id, "a");
         assert_eq!(orig[1].id, "c");
+    }
+
+    #[test]
+    fn loop_enabled_defaults_true() {
+        let q = QueueState::default();
+        assert!(q.loop_enabled);
+    }
+
+    #[test]
+    fn is_shuffled_false_when_order_matches() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        assert!(!q.is_shuffled());
+    }
+
+    #[test]
+    fn is_shuffled_true_when_shuffle_active() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.pre_shuffle_order = Some(q.songs.clone());
+        q.songs.swap(0, 1);
+        q.shuffle_active = true;
+        assert!(q.is_shuffled());
+    }
+
+    #[test]
+    fn clear_shuffle_state_resets_flag_and_snapshot() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.shuffle_active = true;
+        q.clear_shuffle_state();
+        assert!(!q.is_shuffled());
+        assert!(q.pre_shuffle_order.is_none());
+    }
+
+    #[test]
+    fn adopt_current_order_sets_unshuffle_baseline() {
+        let mut q = QueueState::default();
+        q.songs = vec![song("b"), song("a")];
+        q.adopt_current_order_as_shuffle_baseline();
+        assert!(!q.is_shuffled());
+        let baseline = q.pre_shuffle_order.as_ref().unwrap();
+        assert_eq!(baseline[0].id, "b");
+        assert_eq!(baseline[1].id, "a");
     }
 }
