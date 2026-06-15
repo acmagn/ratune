@@ -210,3 +210,53 @@ pub fn stdin_has_input() -> bool {
         event::poll(Duration::ZERO).unwrap_or(false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    fn err(kind: io::ErrorKind) -> io::Error {
+        io::Error::new(kind, "test")
+    }
+
+    #[cfg(unix)]
+    fn err_raw(raw: i32) -> io::Error {
+        io::Error::from_raw_os_error(raw)
+    }
+
+    #[test]
+    fn io_disconnect_pipe_and_eof() {
+        assert!(io_disconnect(&err(io::ErrorKind::BrokenPipe)));
+        assert!(io_disconnect(&err(io::ErrorKind::UnexpectedEof)));
+        assert!(io_disconnect(&err(io::ErrorKind::NotConnected)));
+        assert!(io_disconnect(&err(io::ErrorKind::WriteZero)));
+    }
+
+    #[test]
+    fn io_disconnect_not_interrupted() {
+        assert!(!io_disconnect(&err(io::ErrorKind::Interrupted)));
+        #[cfg(unix)]
+        assert!(!io_disconnect(&err_raw(libc::EINTR)));
+    }
+
+    #[test]
+    fn io_interrupted_eintr() {
+        assert!(io_interrupted(&err(io::ErrorKind::Interrupted)));
+        #[cfg(unix)]
+        assert!(io_interrupted(&err_raw(libc::EINTR)));
+    }
+
+    #[test]
+    fn io_interrupted_not_disconnect() {
+        assert!(!io_interrupted(&err(io::ErrorKind::BrokenPipe)));
+        #[cfg(unix)]
+        assert!(!io_interrupted(&err_raw(libc::EIO)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn io_disconnect_eio() {
+        assert!(io_disconnect(&err_raw(libc::EIO)));
+    }
+}
