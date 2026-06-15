@@ -17,6 +17,7 @@ mod scrobble;
 mod scrobble_queue;
 mod state;
 mod theme;
+mod tty;
 mod ui;
 mod visualizer;
 
@@ -35,7 +36,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::ExecutableCommand;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
@@ -139,7 +140,7 @@ pub async fn run() -> Result<()> {
     // Background metadata index refresh when missing or stale (Milestone 2).
     app.spawn_library_index_refresh(false);
 
-    // Spawn a task that sets a flag on SIGTERM or SIGHUP so the main loop
+    // Spawn a task that sets a flag on SIGTERM, SIGHUP, SIGPIPE, or SIGINT so the main loop
     // can shut down cleanly (same path as pressing `q`).
     let signal_quit = Arc::new(AtomicBool::new(false));
     {
@@ -153,10 +154,13 @@ pub async fn run() -> Result<()> {
             // SIGPIPE: stdout/stdin fd closed (e.g. tmux pane killed while piped).
             let mut sigpipe =
                 signal(SignalKind::pipe()).expect("failed to install SIGPIPE handler");
+            let mut sigint =
+                signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
             tokio::select! {
                 _ = sigterm.recv() => {}
                 _ = sighup.recv()  => {}
                 _ = sigpipe.recv() => {}
+                _ = sigint.recv() => {}
             }
             flag.store(true, Ordering::Relaxed);
         });
@@ -237,7 +241,7 @@ pub async fn run() -> Result<()> {
         terminal
             .backend_mut()
             .write_all(b"\x1bPtmux;\x1b\x1b[?1004l\x1b\\")?;
-        terminal.backend_mut().flush()?;
+        std::io::Write::flush(terminal.backend_mut())?;
     } else {
         terminal.backend_mut().execute(DisableFocusChange)?;
     }
@@ -347,6 +351,27 @@ fn drain_ratatui_np_resize_completions(app: &mut App) {
     }
 }
 
+fn terminal_size_or_quit(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<Option<ratatui::layout::Rect>> {
+    loop {
+        match terminal.size() {
+            Ok(sz) if sz.width == 0 || sz.height == 0 => {
+                app.should_quit = true;
+                return Ok(None);
+            }
+            Ok(sz) => return Ok(Some(Rect::new(0, 0, sz.width, sz.height))),
+            Err(e) if tty::io_disconnect(&e) => {
+                app.should_quit = true;
+                return Ok(None);
+            }
+            Err(e) if tty::io_interrupted(&e) => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -374,8 +399,18 @@ async fn run_loop(
     let mut last_art_recovery_fire = Instant::now();
 
     loop {
-        // Check for SIGTERM / SIGHUP from the signal handler task.
+        let frame_t0 = Instant::now();
+        let poll_ms = if app.visualizer_visible || app.accent_transition_active() {
+            33
+        } else {
+            50
+        };
+
+        // Check for SIGTERM / SIGHUP / SIGPIPE / SIGINT from the signal handler task.
         if signal_quit.load(Ordering::Relaxed) {
+            app.should_quit = true;
+        }
+        if tty::terminal_disconnected() {
             app.should_quit = true;
         }
 
@@ -406,7 +441,19 @@ async fn run_loop(
         // Apply completed NP encodes before draw (previous frame) and after draw (same-frame worker).
         drain_ratatui_np_resize_completions(app);
 
-        terminal.draw(|f| ui::render(app, f))?;
+        match terminal.draw(|f| ui::render(app, f)) {
+            Ok(_) => {}
+            Err(e) if tty::io_disconnect(&e) => app.should_quit = true,
+            // EINTR during SIGWINCH: skip this present; next frame redraws cleanly.
+            Err(e) if tty::io_interrupted(&e) => {}
+            Err(e) => return Err(e.into()),
+        }
+        match Backend::flush(terminal.backend_mut()) {
+            Ok(()) => {}
+            Err(e) if tty::io_disconnect(&e) => app.should_quit = true,
+            Err(e) if tty::io_interrupted(&e) => {}
+            Err(e) => return Err(e.into()),
+        }
 
         app.apply_home_strip_resize_settle();
 
@@ -447,12 +494,18 @@ async fn run_loop(
                         let _ = ui::kitty_art::clear_image(app.in_tmux);
                         art_displayed = false;
                     }
-                } else if let (Some((cover_id, bytes)), Some(fp)) =
-                    (app.art_cache.as_ref(), app.art_cache_fingerprint)
-                {
-                    let sz = terminal.size()?;
+                } else {
+                    let Some(terminal_rect) = terminal_size_or_quit(terminal, app)? else {
+                        last_tab = app.active_tab;
+                        if app.should_quit {
+                            break;
+                        }
+                        continue;
+                    };
+                    if let (Some((cover_id, bytes)), Some(fp)) =
+                        (app.art_cache.as_ref(), app.art_cache_fingerprint)
+                    {
                     let show_art = app.config.nowplaying_show_art;
-                    let terminal_rect = Rect::new(0, 0, sz.width, sz.height);
                     let layout_opts = ui::layout::layout_options_for_app(app);
                     let center = ui::layout::build_layout(terminal_rect, &layout_opts).center;
 
@@ -574,6 +627,7 @@ async fn run_loop(
                     last_rendered_art = None;
                     art_displayed = false;
                 }
+                }
             } else if last_tab != app.active_tab {
                 // Switched away from any tab — clear any visible Kitty
                 // placement so it doesn't float above the new tab's content.
@@ -619,29 +673,16 @@ async fn run_loop(
         // Block until the frame interval elapses *or* input is ready.  Previously we
         // slept first and only then polled stdin, which added a full period (50 ms)
         // of latency to every keypress.
-        let poll_ms = if app.visualizer_visible || app.accent_transition_active() {
-            33
-        } else {
-            50
-        };
-        match event::poll(Duration::from_millis(poll_ms)) {
-            Err(e)
-                if e.kind() == std::io::ErrorKind::BrokenPipe
-                    || e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                app.should_quit = true;
-            }
-            Err(e) => return Err(e.into()),
+        match tty::wait_for_input(poll_ms, &mut app.should_quit) {
+            Err(e) => return Err(e),
             Ok(false) => {}
             Ok(true) => loop {
                 let read_result = event::read();
                 match read_result {
-                    Err(e)
-                        if e.kind() == std::io::ErrorKind::BrokenPipe
-                            || e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                    {
+                    Err(e) if tty::io_disconnect(&e) => {
                         app.should_quit = true;
                     }
+                    Err(e) if tty::io_interrupted(&e) => {}
                     Err(e) => return Err(e.into()),
                     Ok(ev) => match ev {
                         Event::Key(key)
@@ -767,8 +808,10 @@ async fn run_loop(
                                 }
                             }
                         Event::Mouse(mouse) => {
-                            let sz = terminal.size()?;
-                            let area = Rect::new(0, 0, sz.width, sz.height);
+                            let Some(area) = terminal_size_or_quit(terminal, app)? else {
+                                app.should_quit = true;
+                                break;
+                            };
                             match mouse.kind {
                                 MouseEventKind::Down(MouseButton::Left) => {
                                     handle_mouse_click(mouse.column, mouse.row, app, area);
@@ -795,12 +838,10 @@ async fn run_loop(
                             }
                         }
                         Event::Resize(_, _) => {
-                            // Terminal resized — clear any displayed image and reset
-                            // stored state so the art is re-encoded at the new size.
-                            // last_rendered_art rect will no longer match the new
-                            // art_rect, so the full render path is taken on next frame.
+                            // Invalidate cached art geometry; re-encode on the next draw.
+                            // Avoid clear_image here — clearing on every resize tick while
+                            // dragging a window causes visible flicker (especially Kitty APC).
                             if app.kitty_apc_overlay_active() && art_displayed {
-                                let _ = ui::kitty_art::clear_image(app.in_tmux);
                                 art_displayed = false;
                                 last_rendered_art = None;
                             }
@@ -859,17 +900,8 @@ async fn run_loop(
                     break;
                 }
 
-                match event::poll(Duration::ZERO) {
-                    Err(e)
-                        if e.kind() == std::io::ErrorKind::BrokenPipe
-                            || e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                    {
-                        app.should_quit = true;
-                        break;
-                    }
-                    Err(e) => return Err(e.into()),
-                    Ok(false) => break,
-                    Ok(true) => {}
+                if !tty::stdin_has_input() {
+                    break;
                 }
             },
         }
@@ -903,6 +935,14 @@ async fn run_loop(
 
         if app.should_quit {
             break;
+        }
+
+        // When stdin had a burst (resize drag, key repeat), `wait_for_input` may return
+        // immediately; cap the loop at ~20–30 FPS so we don't full-redraw as fast as possible.
+        let frame_budget = Duration::from_millis(poll_ms);
+        let spent = frame_t0.elapsed();
+        if spent < frame_budget {
+            std::thread::sleep(frame_budget - spent);
         }
     }
     // Persist UI state on clean quit.

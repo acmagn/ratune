@@ -572,6 +572,8 @@ pub struct App {
     pub home_strip_art: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
     /// Last thumbnail cell size per album — rebuild strip slot when layout resizes.
     pub home_strip_last_cells: HashMap<String, (u16, u16)>,
+    /// Decoded home strip covers — avoids JPEG decode on every ratatui frame (Sixel path).
+    pub home_strip_decoded: HashMap<String, DynamicImage>,
 }
 
 impl App {
@@ -705,6 +707,7 @@ impl App {
             np_art_prep_key: None,
             home_strip_art: HashMap::new(),
             home_strip_last_cells: HashMap::new(),
+            home_strip_decoded: HashMap::new(),
             #[cfg(target_os = "linux")]
             mpris: None,
         })
@@ -779,6 +782,7 @@ impl App {
         self.np_art_prep_key = None;
         self.home_strip_art.clear();
         self.home_strip_last_cells.clear();
+        self.home_strip_decoded.clear();
         self.home_strip_layout_key = None;
         self.home_strip_resize_settle = None;
     }
@@ -827,6 +831,7 @@ impl App {
         }
         self.home_strip_art.clear();
         self.home_strip_last_cells.clear();
+        self.home_strip_decoded.clear();
         self.home_strip_thumb_prepared.clear();
         if self.kitty_apc_overlay_active() {
             let _ = crate::ui::kitty_art::clear_art_strip(self.in_tmux);
@@ -2115,6 +2120,7 @@ impl App {
                 self.home_strip_thumb_prepared.remove(&album_id);
                 self.home_strip_art.remove(&album_id);
                 self.home_strip_last_cells.remove(&album_id);
+                self.home_strip_decoded.remove(&album_id);
                 self.home_art_cache.insert(album_id, bytes);
                 // A fetch slot opened up — check if more albums need fetching.
                 self.spawn_pending_home_art_fetches();

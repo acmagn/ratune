@@ -2656,6 +2656,7 @@ dependencies = [
  "image",
  "inquire",
  "keyring-core",
+ "libc",
  "linux-keyutils-keyring-store",
  "mpris-server",
  "notify-rust",
