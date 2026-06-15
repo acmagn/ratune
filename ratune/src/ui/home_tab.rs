@@ -384,21 +384,34 @@ fn render_art_strip_ratatui(f: &mut Frame, albums_inner: Rect, app: &mut App, _i
 
         let thumb_rect = art_strip_slot_thumb_rect(&layout, albums_inner, i);
 
-        if let Some(bytes) = app.home_art_cache.get(&album_id) {
+        if app.home_art_cache.contains_key(&album_id) {
             let slot = (thumb_cols, thumb_rows);
             if app.home_strip_last_cells.get(&album_id).copied() != Some(slot) {
                 app.home_strip_art.remove(&album_id);
             }
-            let Ok(img) = image::load_from_memory(bytes) else {
+
+            if !app.home_strip_decoded.contains_key(&album_id) {
+                let Some(bytes) = app.home_art_cache.get(&album_id) else {
+                    continue;
+                };
+                let Ok(img) = image::load_from_memory(bytes) else {
+                    continue;
+                };
+                app.home_strip_decoded.insert(album_id.clone(), img);
+            }
+            let Some(img) = app.home_strip_decoded.get(&album_id) else {
                 continue;
             };
-            let art_rect = crate::ui::art_prepare::contain_fit_rect_in_cells(&img, thumb_rect, fs);
+            let art_rect = crate::ui::art_prepare::contain_fit_rect_in_cells(img, thumb_rect, fs);
+
             if !app.home_strip_art.contains_key(&album_id) {
                 if is_sixel && sixel_builds_this_frame >= MAX_SIXEL_STRIP_BUILDS_PER_FRAME {
                     continue;
                 }
                 let prepared = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
-                    img, art_rect, fs,
+                    img.clone(),
+                    art_rect,
+                    fs,
                 );
                 let proto = picker.new_resize_protocol(prepared);
                 app.home_strip_art.insert(album_id.clone(), proto);
@@ -416,6 +429,7 @@ fn render_art_strip_ratatui(f: &mut Frame, albums_inner: Rect, app: &mut App, _i
 
     app.home_strip_art.retain(|k, _| keep.contains(k));
     app.home_strip_last_cells.retain(|k, _| keep.contains(k));
+    app.home_strip_decoded.retain(|k, _| keep.contains(k));
 }
 
 // ── Art strip label rows (Kitty path) ─────────────────────────────────────────
