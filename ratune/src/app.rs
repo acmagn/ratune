@@ -1714,7 +1714,7 @@ impl App {
             self.queue.songs.clear();
             self.queue.cursor = 0;
             self.queue.scroll = 0;
-            self.queue.pre_shuffle_order = None;
+            self.queue.clear_shuffle_state();
             let _ = self.player_tx.send(PlayerCommand::Stop);
             self.playback.current_song = None;
             self.playback.elapsed = std::time::Duration::ZERO;
@@ -2635,7 +2635,7 @@ impl App {
             PlayerEvent::TrackEnded => {
                 if self.queue.next() {
                     self.play_current();
-                } else if !self.queue.songs.is_empty() {
+                } else if !self.queue.songs.is_empty() && self.queue.loop_enabled {
                     // End of queue — loop back to the first track.
                     self.queue.cursor = 0;
                     self.queue.scroll = 0;
@@ -3157,6 +3157,7 @@ impl App {
             Action::RemoveFromQueue => self.handle_remove_from_queue(),
             Action::Shuffle => self.handle_shuffle(),
             Action::Unshuffle => self.handle_unshuffle(),
+            Action::ToggleQueueLoop => self.handle_toggle_queue_loop(),
             Action::SeekForward => {
                 let new_pos = if let Some(total) = self.playback.total {
                     (self.playback.elapsed + std::time::Duration::from_secs(10)).min(total)
@@ -3435,7 +3436,7 @@ impl App {
                         self.queue.songs.clear();
                         self.queue.cursor = 0;
                         self.queue.scroll = 0;
-                        self.queue.pre_shuffle_order = None;
+                        self.queue.clear_shuffle_state();
                         let _ = self.player_tx.send(PlayerCommand::Stop);
                         self.playback.current_song = None;
                         self.playback.elapsed = std::time::Duration::ZERO;
@@ -4198,7 +4199,7 @@ impl App {
                     self.queue.songs = songs;
                     self.queue.cursor = 0;
                     self.queue.scroll = 0;
-                    self.queue.pre_shuffle_order = None;
+                    self.queue.adopt_current_order_as_shuffle_baseline();
                     let _ = self.player_tx.send(PlayerCommand::Stop);
                     self.playback.current_song = None;
                     self.playback.elapsed = std::time::Duration::ZERO;
@@ -4323,11 +4324,14 @@ impl App {
         if len < 2 {
             return;
         }
-        // pre_shuffle_order is maintained by QueueState::push and must NOT be
-        // overwritten here — it always holds the original add-order so Z can
-        // revert regardless of how many times x is pressed.
+        if !self.queue.shuffle_active {
+            self.queue.pre_shuffle_order = Some(self.queue.songs.clone());
+        } else if self.queue.pre_shuffle_order.is_none() {
+            self.queue.pre_shuffle_order = Some(self.queue.songs.clone());
+            self.queue.shuffle_active = false;
+            return;
+        }
 
-        // LCG seeded from system time — no external crate needed.
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
@@ -4344,15 +4348,14 @@ impl App {
         };
 
         // If something is playing, pull the current track to index 0 first,
-        // then Fisher-Yates shuffle indices 1..len.
+        // then Fisher-Yates shuffle indices 1..len (index 0 stays the now-playing track).
         if self.playback.current_song.is_some() && self.queue.cursor < len {
             self.queue.songs.swap(0, self.queue.cursor);
-            for i in (2..len).rev() {
-                let j = next_lcg(&mut rng) % i + 1; // range [1, i]
+            for i in (1..len).rev() {
+                let j = 1 + next_lcg(&mut rng) % i;
                 self.queue.songs.swap(i, j);
             }
         } else {
-            // Nothing playing — shuffle the whole vec.
             for i in (1..len).rev() {
                 let j = next_lcg(&mut rng) % (i + 1);
                 self.queue.songs.swap(i, j);
@@ -4360,6 +4363,7 @@ impl App {
         }
         self.queue.cursor = 0;
         self.queue.scroll = 0;
+        self.queue.shuffle_active = true;
     }
 
     /// Apply the current search: move selection to the first filtered result.
@@ -4511,7 +4515,7 @@ impl App {
         self.queue.songs.clear();
         self.queue.cursor = 0;
         self.queue.scroll = 0;
-        self.queue.pre_shuffle_order = None;
+        self.queue.clear_shuffle_state();
         let _ = self.player_tx.send(PlayerCommand::Stop);
         self.playback.current_song = None;
         self.playback.elapsed = std::time::Duration::ZERO;
@@ -4573,14 +4577,16 @@ impl App {
     }
 
     fn handle_unshuffle(&mut self) {
+        if !self.queue.shuffle_active {
+            return;
+        }
         let original = match &self.queue.pre_shuffle_order {
             Some(o) => o.clone(),
             None => return,
         };
-        // Do NOT clear pre_shuffle_order — Z should always work, even after
-        // reshuffling multiple times.
         let current_id = self.queue.current().map(|s| s.id.clone());
         self.queue.songs = original;
+        self.queue.shuffle_active = false;
         if let Some(id) = current_id {
             if let Some(idx) = self.queue.songs.iter().position(|s| s.id == id) {
                 self.queue.cursor = idx;
@@ -4588,6 +4594,12 @@ impl App {
                     .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
             }
         }
+    }
+
+    fn handle_toggle_queue_loop(&mut self) {
+        self.queue.loop_enabled = !self.queue.loop_enabled;
+        let state = if self.queue.loop_enabled { "on" } else { "off" };
+        self.flash_status_secs(format!("Queue loop {state}"), 2);
     }
 
     // ── Mouse-click helpers (called from main.rs event handler) ──────────────
@@ -4825,7 +4837,7 @@ impl App {
                     self.queue.songs.clear();
                     self.queue.cursor = 0;
                     self.queue.scroll = 0;
-                    self.queue.pre_shuffle_order = None;
+                    self.queue.clear_shuffle_state();
                     for song in songs {
                         self.queue.push(song);
                     }
@@ -4860,7 +4872,7 @@ impl App {
                         self.queue.songs.clear();
                         self.queue.cursor = 0;
                         self.queue.scroll = 0;
-                        self.queue.pre_shuffle_order = None;
+                        self.queue.clear_shuffle_state();
                         self.queue.push(song);
                         self.queue.cursor = 0;
                         self.queue.scroll = 0;

@@ -47,6 +47,8 @@ pub enum Action {
     RemoveFromQueue,
     Shuffle,
     Unshuffle,
+    /// Toggle whether the queue loops after the last track (↻ control).
+    ToggleQueueLoop,
     SeekForward,
     SeekBackward,
     /// Seek to an exact position (used by progress-bar clicks).

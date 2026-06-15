@@ -46,6 +46,7 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("p / Space", "Play / pause"),
                 ("n / N", "Next / previous track"),
                 ("x / Z", "Shuffle / unshuffle"),
+                ("R", "Toggle queue loop"),
                 ("\u{2190} / \u{2192}", "Seek \u{b1}10s"),
             ],
         ),

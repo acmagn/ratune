@@ -146,6 +146,7 @@ pub struct Keybinds {
     pub add_all_prepend: Option<KeySpec>,
     pub shuffle: KeySpec,
     pub unshuffle: KeySpec,
+    pub toggle_queue_loop: KeySpec,
     pub clear_queue: KeySpec,
     pub remove_from_queue: KeySpec,
     pub search: KeySpec,
@@ -306,6 +307,13 @@ impl Keybinds {
             add_all_prepend,
             shuffle: resolve(sec.shuffle.as_deref(), KeySpec::new(KeyCode::Char('x'))),
             unshuffle: resolve(sec.unshuffle.as_deref(), KeySpec::new(KeyCode::Char('z'))),
+            toggle_queue_loop: resolve(
+                sec.toggle_queue_loop.as_deref(),
+                KeySpec {
+                    code: KeyCode::Char('r'),
+                    modifiers: KeyModifiers::SHIFT,
+                },
+            ),
             clear_queue: resolve(
                 sec.clear_queue.as_deref(),
                 KeySpec {

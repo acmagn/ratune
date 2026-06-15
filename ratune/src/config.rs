@@ -65,6 +65,8 @@ pub struct KeybindsSection {
     pub add_all_prepend: Option<String>,
     pub shuffle: Option<String>,
     pub unshuffle: Option<String>,
+    /// Toggle queue loop after the last track. Default: Shift+r
+    pub toggle_queue_loop: Option<String>,
     pub clear_queue: Option<String>,
     /// Remove highlighted track from queue (Now Playing tab). Default: d
     pub remove_from_queue: Option<String>,
@@ -1506,6 +1508,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # add_all_prepend  = "Ctrl+Shift+p"
 # shuffle       = "x"
 # unshuffle     = "z"
+# toggle_queue_loop = "R"
 # clear_queue   = "Shift+d"
 # remove_from_queue = "d"
 # search        = "/"

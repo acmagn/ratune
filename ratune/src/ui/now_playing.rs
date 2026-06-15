@@ -6,8 +6,117 @@ use ratatui::Frame;
 
 use super::now_playing_format::{format_now_playing_line, NowPlayingContext};
 
+use crate::action::Action;
 use crate::app::{App, Tab};
 use crate::theme::style_with_bg;
+
+/// Spacing between transport glyphs in the controls row (must match `render_controls_widget`).
+const CONTROLS_GAP: u16 = 6;
+
+/// Context for control-line layout / hit-testing without a full `App`.
+#[derive(Debug, Clone, Copy)]
+pub struct ControlsClickCtx {
+    pub has_current_song: bool,
+    pub paused: bool,
+    pub shuffled: bool,
+}
+
+impl ControlsClickCtx {
+    pub fn from_app(app: &App) -> Self {
+        Self {
+            has_current_song: app.playback.current_song.is_some(),
+            paused: app.playback.paused,
+            shuffled: app.queue.is_shuffled(),
+        }
+    }
+}
+
+fn play_label_for(ctx: ControlsClickCtx) -> &'static str {
+    if !ctx.has_current_song {
+        "▶"
+    } else if ctx.paused {
+        "( ▶ )"
+    } else {
+        "( ⏸ )"
+    }
+}
+
+fn play_label_width_for(ctx: ControlsClickCtx) -> u16 {
+    play_label_for(ctx).chars().count() as u16
+}
+
+/// Total display width of the centered controls line.
+pub fn controls_line_width(ctx: ControlsClickCtx) -> u16 {
+    let play_w = play_label_width_for(ctx);
+    1 + CONTROLS_GAP + 1 + CONTROLS_GAP + play_w + CONTROLS_GAP + 1 + CONTROLS_GAP + 1
+}
+
+/// The single terminal row that contains the interactive transport glyphs.
+pub fn controls_row_rect(area: Rect) -> Rect {
+    let y = if area.height <= 1 { area.y } else { area.y + 1 };
+    Rect::new(area.x, y, area.width, 1)
+}
+
+/// Map a terminal column inside `controls_area` to a transport action, if any.
+pub fn controls_click_action(app: &App, controls_area: Rect, x: u16) -> Option<Action> {
+    controls_click_action_for(ControlsClickCtx::from_app(app), controls_area, x)
+}
+
+pub fn controls_click_action_for(
+    ctx: ControlsClickCtx,
+    controls_area: Rect,
+    x: u16,
+) -> Option<Action> {
+    let row = controls_row_rect(controls_area);
+    if x < row.x || x >= row.x + row.width {
+        return None;
+    }
+
+    let total = controls_line_width(ctx);
+    if total == 0 || row.width == 0 {
+        return None;
+    }
+    let start = row.x + (row.width.saturating_sub(total)) / 2;
+    if x < start || x >= start + total {
+        return None;
+    }
+    let cx = x - start;
+
+    let play_w = play_label_width_for(ctx);
+    let s_shuffle = 0;
+    let s_prev = 1 + CONTROLS_GAP;
+    let s_play = s_prev + 1 + CONTROLS_GAP;
+    let s_next = s_play + play_w + CONTROLS_GAP;
+    let s_loop = s_next + 1 + CONTROLS_GAP;
+
+    if button_hit(cx, s_shuffle, 1) {
+        return Some(if ctx.shuffled {
+            Action::Unshuffle
+        } else {
+            Action::Shuffle
+        });
+    }
+    if button_hit(cx, s_prev, 1) {
+        return Some(Action::PrevTrack);
+    }
+    if button_hit(cx, s_play, play_w) {
+        return Some(Action::PlayPause);
+    }
+    if button_hit(cx, s_next, 1) {
+        return Some(Action::NextTrack);
+    }
+    if button_hit(cx, s_loop, 1) {
+        return Some(Action::ToggleQueueLoop);
+    }
+    None
+}
+
+fn button_hit(cx: u16, start: u16, width: u16) -> bool {
+    let half_gap = CONTROLS_GAP / 2;
+    let hit_start = start.saturating_sub(half_gap);
+    let hit_end = start + width + half_gap;
+    cx >= hit_start && cx < hit_end
+}
 
 /// Blank rows between the block title bar and the first metadata line (boxed pane only).
 const BOXED_TITLE_GAP_ROWS: u16 = 1;
@@ -87,15 +196,13 @@ fn chrome_rects_row(app: &App, area: Rect) -> NowPlayingChromeRects {
     let cols = split_row_columns(area, show_c, show_p);
 
     let controls = if show_c {
-        cols.controls
-            .map(|r| Rect::new(r.x, area.y + 1, r.width, 1))
+        cols.controls.map(controls_row_rect)
     } else {
         None
     };
 
     let progress = if show_p {
-        cols.progress
-            .map(|r| Rect::new(r.x, area.y + 2, r.width, 1))
+        cols.progress.map(progress_row_rect)
     } else {
         None
     };
@@ -503,11 +610,17 @@ fn render_row(app: &App, frame: &mut Frame, area: Rect) {
 
 // ── Controls & progress (shared row + boxed) ─────────────────────────────────
 
+fn progress_row_rect(area: Rect) -> Rect {
+    let y = if area.height <= 1 { area.y } else { area.y + 2 };
+    Rect::new(area.x, y, area.width, 1)
+}
+
 fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
     let t = &app.theme;
-    let (play_label, play_style) = if app.playback.current_song.is_none() {
+    let ctx = ControlsClickCtx::from_app(app);
+    let (play_label, play_style) = if !ctx.has_current_song {
         ("▶", Style::default().fg(t.dimmed))
-    } else if app.playback.paused {
+    } else if ctx.paused {
         (
             "( ▶ )",
             Style::default()
@@ -523,17 +636,27 @@ fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
         )
     };
 
-    let sep = Style::default().fg(t.dimmed);
+    let inactive = Style::default().fg(t.dimmed);
+    let active = Style::default()
+        .fg(app.accent())
+        .add_modifier(Modifier::BOLD);
+    let shuffle_style = if ctx.shuffled { active } else { inactive };
+    let loop_style = if app.queue.loop_enabled {
+        active
+    } else {
+        inactive
+    };
+
     let controls = Line::from(vec![
-        Span::styled("⇄", sep),
+        Span::styled("⇄", shuffle_style),
         Span::raw("      "),
-        Span::styled("⏮", sep),
+        Span::styled("⏮", inactive),
         Span::raw("      "),
         Span::styled(play_label, play_style),
         Span::raw("      "),
-        Span::styled("⏭", sep),
+        Span::styled("⏭", inactive),
         Span::raw("      "),
-        Span::styled("↻", sep),
+        Span::styled("↻", loop_style),
     ]);
 
     if area.height <= 1 {
@@ -750,5 +873,115 @@ mod progress_style_tests {
         assert_eq!(a, "");
         assert_eq!(b, "▏");
         assert_eq!(c.chars().count(), 7);
+    }
+}
+
+#[cfg(test)]
+mod controls_click_tests {
+    use super::{
+        controls_click_action_for, controls_line_width, controls_row_rect, ControlsClickCtx,
+    };
+    use crate::action::Action;
+    use ratatui::layout::Rect;
+
+    fn playing() -> ControlsClickCtx {
+        ControlsClickCtx {
+            has_current_song: true,
+            paused: false,
+            shuffled: false,
+        }
+    }
+
+    fn shuffled() -> ControlsClickCtx {
+        ControlsClickCtx {
+            has_current_song: true,
+            paused: false,
+            shuffled: true,
+        }
+    }
+
+    fn line_start(area_width: u16, ctx: ControlsClickCtx) -> u16 {
+        let total = controls_line_width(ctx);
+        (area_width.saturating_sub(total)) / 2
+    }
+
+    #[test]
+    fn line_width_idle_vs_playing() {
+        let idle = ControlsClickCtx {
+            has_current_song: false,
+            paused: false,
+            shuffled: false,
+        };
+        assert_eq!(controls_line_width(idle), 29);
+        assert_eq!(controls_line_width(playing()), 33);
+    }
+
+    #[test]
+    fn row_rect_single_line_footer() {
+        let area = Rect::new(10, 20, 40, 1);
+        let row = controls_row_rect(area);
+        assert_eq!(row, Rect::new(10, 20, 40, 1));
+    }
+
+    #[test]
+    fn row_rect_multi_line_column() {
+        let area = Rect::new(10, 20, 40, 4);
+        let row = controls_row_rect(area);
+        assert_eq!(row, Rect::new(10, 21, 40, 1));
+    }
+
+    #[test]
+    fn centered_clicks_map_to_all_five_buttons() {
+        let area = Rect::new(0, 0, 80, 3);
+        let start = line_start(area.width, playing());
+
+        assert!(matches!(
+            controls_click_action_for(playing(), area, start),
+            Some(Action::Shuffle)
+        ));
+        assert!(matches!(
+            controls_click_action_for(playing(), area, start + 7),
+            Some(Action::PrevTrack)
+        ));
+        assert!(matches!(
+            controls_click_action_for(playing(), area, start + 16),
+            Some(Action::PlayPause)
+        ));
+        assert!(matches!(
+            controls_click_action_for(playing(), area, start + 27),
+            Some(Action::NextTrack)
+        ));
+        assert!(matches!(
+            controls_click_action_for(playing(), area, start + 32),
+            Some(Action::ToggleQueueLoop)
+        ));
+    }
+
+    #[test]
+    fn shuffle_button_toggles_unshuffle_when_shuffled() {
+        let area = Rect::new(0, 0, 80, 1);
+        let start = line_start(area.width, shuffled());
+        assert!(matches!(
+            controls_click_action_for(shuffled(), area, start),
+            Some(Action::Unshuffle)
+        ));
+    }
+
+    #[test]
+    fn clicks_outside_centered_strip_are_ignored() {
+        let area = Rect::new(0, 0, 80, 1);
+        assert!(controls_click_action_for(playing(), area, 0).is_none());
+        assert!(controls_click_action_for(playing(), area, 79).is_none());
+    }
+
+    #[test]
+    fn gap_clicks_still_hit_neighboring_buttons() {
+        let area = Rect::new(0, 0, 80, 1);
+        let start = line_start(area.width, playing());
+        // Gap between shuffle and prev — should still hit prev (half-gap tolerance).
+        assert!(matches!(
+            controls_click_action_for(playing(), area, start + 4),
+            Some(Action::PrevTrack)
+        ));
     }
 }

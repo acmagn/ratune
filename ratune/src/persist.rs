@@ -91,6 +91,7 @@ pub fn restore_state(app: &mut App) -> Result<()> {
         .queue_cursor
         .min(app.queue.songs.len().saturating_sub(1));
     app.queue.scroll = app.queue.cursor;
+    app.queue.adopt_current_order_as_shuffle_baseline();
 
     if let Some(vol) = state.player_volume {
         let v = vol.min(100);
