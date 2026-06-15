@@ -19,6 +19,7 @@ Ratune was built to bring together a combination of features often missing from 
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Default keybinds](#default-keybinds)
+- [Mouse support](#mouse-support)
 - [tmux](#tmux)
 - [Project layout](#project-layout)
 - [Data on disk](#data-on-disk)
@@ -32,11 +33,12 @@ Ratune was built to bring together a combination of features often missing from 
 
 - **Playback**: Gapless queue, seek, shuffle/unshuffle, and playlist management.
 - **Album Art**: Display using Kitty graphics and [ratatui-image](https://github.com/ratatui/ratatui-image) (see link for compatible terminals)
-- **Lyrics**: Synced lyrics via LRCLib (default) or your Subsonic server. Optional on-disk cache for offline use (`[lyrics].cache_enabled`, default on).
+- **Lyrics**: Synced lyrics via LRCLib (default) or your Subsonic server. Optional on-disk cache for offline use
 - **Visualizer**: FFT spectrum analyzer.
 - **Fuzzy finder**: Optional library index + external picker (fzf/skim) for fast track selection.
 - **Folder navigation**: Optional Browse layout that follows server music folders for servers that provide it.
 - **Customization**: Keybinds, theme, layout, now-playing lines, queue row template inspired by ncmpcpp.
+- **Mouse support**: Click tabs, transport controls, the seek bar, queue rows, and browse/home lists (when your terminal reports mouse events).
 - **Integration**: Linux MPRIS (media keys, `playerctl`).
 - **Scrobbling**: Last.fm and Libre.fm (Audioscrobbler), plus optional Subsonic `/scrobble` for Navidrome play counts.
 
@@ -332,6 +334,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `p` / `Space` | Play / pause |
 | `n` / `N` | Next / previous |
 | `x` / `z` | Shuffle / unshuffle |
+| `R` | Toggle queue loop |
 | `+` / `-` | Volume |
 | `←` / `→` | Seek (Now playing) |
 | `/` | Search |
@@ -344,6 +347,23 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `t` | Toggle dynamic theme |
 | `i` | Help |
 | `q` | Quit |
+
+---
+
+## Mouse support
+
+Ratune captures pointer input when your terminal supports it (most desktop emulators do). Keyboard navigation remains fully available; mouse clicks dispatch the same actions as the equivalent keys where that makes sense.
+
+| Area | Click |
+| --- | --- |
+| Tab bar | Switch Home / Browse / Now playing |
+| Transport row | Shuffle (`⇄`), previous, play/pause, next, queue loop (`↻`) |
+| Progress bar | Seek to position |
+| Browse | Select artist, album, or track; folder mode: directory or preview row |
+| Home | Recent albums (including art strip), recent tracks, rediscover rows |
+| Now playing | Queue row to select; double-click same row to play |
+
+Scroll the mouse wheel over Browse lists to move the selection (`[ui.browsetab] mouse_wheel_scroll_lines` in the sample config).
 
 ---
 

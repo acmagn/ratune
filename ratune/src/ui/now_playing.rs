@@ -53,11 +53,7 @@ pub fn controls_line_width(ctx: ControlsClickCtx) -> u16 {
 
 /// The single terminal row that contains the interactive transport glyphs.
 pub fn controls_row_rect(area: Rect) -> Rect {
-    let y = if area.height <= 1 {
-        area.y
-    } else {
-        area.y + 1
-    };
+    let y = if area.height <= 1 { area.y } else { area.y + 1 };
     Rect::new(area.x, y, area.width, 1)
 }
 
@@ -615,11 +611,7 @@ fn render_row(app: &App, frame: &mut Frame, area: Rect) {
 // ── Controls & progress (shared row + boxed) ─────────────────────────────────
 
 fn progress_row_rect(area: Rect) -> Rect {
-    let y = if area.height <= 1 {
-        area.y
-    } else {
-        area.y + 2
-    };
+    let y = if area.height <= 1 { area.y } else { area.y + 2 };
     Rect::new(area.x, y, area.width, 1)
 }
 
@@ -649,7 +641,11 @@ fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
         .fg(app.accent())
         .add_modifier(Modifier::BOLD);
     let shuffle_style = if ctx.shuffled { active } else { inactive };
-    let loop_style = if app.queue.loop_enabled { active } else { inactive };
+    let loop_style = if app.queue.loop_enabled {
+        active
+    } else {
+        inactive
+    };
 
     let controls = Line::from(vec![
         Span::styled("⇄", shuffle_style),
