@@ -375,6 +375,8 @@ pub struct App {
     /// Effective Browse tab layout: toggled at runtime when folder navigation is enabled.
     pub browser_browse_mode: BrowseMode,
     pub subsonic: Arc<SubsonicClient>,
+    /// Set at startup when the Subsonic `ping` fails for a non-auth reason (e.g. no network).
+    pub server_reachable: bool,
     /// Receives library data from background tokio tasks.
     pub library_rx: mpsc::Receiver<LibraryUpdate>,
     library_tx: mpsc::Sender<LibraryUpdate>,
@@ -577,6 +579,12 @@ pub struct App {
 }
 
 impl App {
+    /// Startup Subsonic `ping` succeeded. When false, skip remote work so failures are
+    /// not logged to stderr and corrupt the alternate-screen TUI.
+    fn remote_available(&self) -> bool {
+        self.server_reachable
+    }
+
     pub fn new(config: Config) -> Result<Self> {
         let subsonic = SubsonicClient::new(
             &config.subsonic_url,
@@ -625,6 +633,7 @@ impl App {
             queue: QueueState::default(),
             playback: PlaybackState::default(),
             subsonic: Arc::new(subsonic),
+            server_reachable: true,
             library_rx,
             library_tx,
             player_tx,
@@ -1068,6 +1077,9 @@ impl App {
     /// Spawn home art fetch tasks for albums not yet cached or loading,
     /// up to a maximum of concurrent in-flight fetches (see `MAX_CONCURRENT` below).
     fn spawn_pending_home_art_fetches(&mut self) {
+        if !self.remote_available() {
+            return;
+        }
         const MAX_CONCURRENT: usize = 8;
         let album_ids: Vec<String> = self
             .home
@@ -1118,6 +1130,9 @@ impl App {
 
     /// Spawn a task to fetch top-level music folders (file browse mode).
     pub fn fetch_music_folders(&self) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1128,6 +1143,9 @@ impl App {
 
     /// Spawn [`SubsonicClient::browse_folder_listing`] (indexes for library roots, directory API below).
     pub fn fetch_music_directory(&self, id: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1581,6 +1599,9 @@ impl App {
 
     /// Spawn a task to fetch the artist list.
     pub fn fetch_artists(&self) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1595,6 +1616,12 @@ impl App {
     /// Walk the full library (`getArtists` + `getAlbum` per album) and refresh the
     /// on-disk metadata index used by the fzf picker.
     pub fn spawn_library_index_refresh(&mut self, force: bool) {
+        if !self.remote_available() {
+            if force {
+                self.flash_status_secs("Server unreachable — offline mode", 5);
+            }
+            return;
+        }
         if !self.config.library_index_enabled {
             if force {
                 self.flash_status("Library index is disabled in config");
@@ -1671,6 +1698,10 @@ impl App {
     /// Fetch the full library from the server (without requiring the on-disk index)
     /// and append it to the queue.
     pub fn spawn_library_server_append_queue(&mut self) {
+        if !self.remote_available() {
+            self.flash_status_secs("Server unreachable — offline mode", 5);
+            return;
+        }
         if self.library_server_append_fetching {
             self.flash_status_secs("Library fetch already in progress", 8);
             return;
@@ -1759,6 +1790,9 @@ impl App {
 
     /// Spawn a task to fetch albums for the given artist.
     pub fn fetch_albums(&self, artist_id: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1773,6 +1807,9 @@ impl App {
 
     /// Spawn a task to fetch the track list for the given album.
     pub fn fetch_tracks(&self, album_id: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1787,6 +1824,9 @@ impl App {
 
     /// Spawn a task to fetch raw cover art bytes for the given cover art ID.
     pub fn fetch_cover_art(&self, cover_id: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1826,6 +1866,13 @@ impl App {
                 self.lyrics_cache = Some((song_id, lines));
                 return;
             }
+        }
+
+        if !self.remote_available() {
+            self.lyrics_loading = false;
+            self.lyrics_scroll = 0;
+            self.lyrics_cache = Some((song_id, Vec::new()));
+            return;
         }
 
         self.lyrics_loading = true;
@@ -1871,6 +1918,9 @@ impl App {
     /// Spawn a task to fetch all tracks for an album, then replace the queue
     /// and start playing (or just append, depending on `replace`).
     pub fn fetch_and_replace_queue_with_album(&self, album_id: String, start_playing: bool) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1893,6 +1943,9 @@ impl App {
 
     /// Spawn a task to fetch all tracks for an album and append them to the queue.
     pub fn fetch_and_append_album_to_queue(&self, album_id: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -1921,6 +1974,9 @@ impl App {
         start_playing: bool,
         prepend: bool,
     ) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -2318,7 +2374,6 @@ impl App {
                         }
                     }
                     Err(e) => {
-                        eprintln!("library index refresh: {e}");
                         self.status_flash = Some((
                             format!("Library index refresh failed: {e}"),
                             Instant::now() + Duration::from_secs(5),
@@ -2348,7 +2403,6 @@ impl App {
                         self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
                     }
                     Err(e) => {
-                        eprintln!("library fetch for append queue: {e}");
                         self.flash_status_secs(format!("Library fetch failed: {e}"), 6);
                     }
                 }
@@ -2369,8 +2423,10 @@ impl App {
         self.play_recorded = false;
         self.audioscrobbler_scrobbled = false;
         self.track_started_at = Some(ratune_scrobble::TrackInfo::now_secs());
-        if let Some(client) = self.scrobble_client.clone() {
-            crate::scrobble::spawn_now_playing(client, crate::scrobble::track_from_song(song));
+        if self.remote_available() {
+            if let Some(client) = self.scrobble_client.clone() {
+                crate::scrobble::spawn_now_playing(client, crate::scrobble::track_from_song(song));
+            }
         }
     }
 
@@ -2394,7 +2450,7 @@ impl App {
                     duration_secs: song.duration.map(|d| d as u64).unwrap_or(0),
                 };
                 self.history.record_play(record);
-                if self.config.scrobble_to_server {
+                if self.remote_available() && self.config.scrobble_to_server {
                     crate::scrobble::spawn_subsonic_scrobble(
                         self.subsonic.clone(),
                         song.id.clone(),
@@ -2405,6 +2461,7 @@ impl App {
         }
 
         if !self.audioscrobbler_scrobbled
+            && self.remote_available()
             && self.scrobble_client.is_some()
             && ratune_scrobble::audioscrobbler_eligible(
                 total,
@@ -2435,6 +2492,9 @@ impl App {
     }
 
     pub fn spawn_scrobble_queue_flush(&mut self) {
+        if !self.remote_available() {
+            return;
+        }
         if self.scrobble_client.is_none() || self.scrobble_queue.is_empty() {
             return;
         }
@@ -2483,7 +2543,6 @@ impl App {
                 } else {
                     self.scrobble_queue.push(entry);
                     self.persist_scrobble_queue();
-                    eprintln!("scrobble: queue retry failed: {e}");
                 }
             }
         }
@@ -2872,6 +2931,9 @@ impl App {
     /// The task checks `prefetch_gen` after download and discards stale bytes
     /// (from rapid skips or queue changes since spawn time).
     fn spawn_cache_download(&self, song_id: &str, album_id: &str) {
+        if !self.remote_available() {
+            return;
+        }
         let url = self.subsonic.stream_url(song_id, self.config.max_bit_rate);
         let song_id = song_id.to_string();
         let album_id = album_id.to_string();
@@ -4736,6 +4798,9 @@ impl App {
 
     /// Spawn a background task to fetch all playlists from the server.
     pub fn fetch_playlists(&self) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -4750,6 +4815,9 @@ impl App {
 
     /// Spawn a background task to fetch the track list for `playlist_id`.
     pub fn fetch_playlist_tracks(&self, playlist_id: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -4779,8 +4847,13 @@ impl App {
                 } else {
                     self.playlist_overlay.visible = true;
                     if matches!(self.playlist_overlay.playlists, LoadingState::NotLoaded) {
-                        self.playlist_overlay.playlists = LoadingState::Loading;
-                        self.fetch_playlists();
+                        if self.remote_available() {
+                            self.playlist_overlay.playlists = LoadingState::Loading;
+                            self.fetch_playlists();
+                        } else {
+                            self.playlist_overlay.playlists =
+                                LoadingState::Error("Server unreachable".into());
+                        }
                     }
                 }
             }
@@ -5045,6 +5118,9 @@ impl App {
     }
 
     fn spawn_create_playlist(&self, name: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -5058,6 +5134,9 @@ impl App {
     }
 
     fn spawn_rename_playlist(&self, playlist_id: String, new_name: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -5076,6 +5155,9 @@ impl App {
     }
 
     fn spawn_delete_playlist(&self, id: String) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -5089,6 +5171,9 @@ impl App {
     }
 
     fn spawn_remove_track(&self, playlist_id: String, index: usize) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -5107,6 +5192,9 @@ impl App {
     }
 
     fn spawn_fetch_playlists_for_picker(&self) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
@@ -5125,6 +5213,9 @@ impl App {
         playlist_name: String,
         song_id: String,
     ) {
+        if !self.remote_available() {
+            return;
+        }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {

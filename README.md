@@ -38,7 +38,7 @@ Ratune was built to bring together a combination of features often missing from 
 - **Fuzzy finder**: Optional library index + external picker (fzf/skim) for fast track selection.
 - **Folder navigation**: Optional Browse layout that follows server music folders for servers that provide it.
 - **Customization**: Keybinds, theme, layout, now-playing lines, queue row template inspired by ncmpcpp.
-- **Mouse support**: Click tabs, transport controls, the seek bar, queue rows, and browse/home lists (when your terminal reports mouse events).
+- **Mouse support**: Click tabs, transport controls, the seek bar, queue rows, and browse/home lists.
 - **Integration**: Linux MPRIS (media keys, `playerctl`).
 - **Scrobbling**: Last.fm and Libre.fm (Audioscrobbler), plus optional Subsonic `/scrobble` for Navidrome play counts.
 
@@ -352,7 +352,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 
 ## Mouse support
 
-Ratune captures pointer input when your terminal supports it (most desktop emulators do). Keyboard navigation remains fully available; mouse clicks dispatch the same actions as the equivalent keys where that makes sense.
+Ratune captures pointer input when your terminal supports it. Keyboard navigation remains fully available; mouse clicks dispatch the same actions as the equivalent keys where that makes sense.
 
 | Area | Click |
 | --- | --- |
