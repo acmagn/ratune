@@ -139,6 +139,11 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             .subsonic_url
             .trim_start_matches("http://")
             .trim_start_matches("https://");
+        let host_label = if app.server_reachable {
+            host.to_string()
+        } else {
+            format!("{host} (offline)")
+        };
         let vol_label = format!("{}%", app.config.default_volume);
 
         let mut right_w = hint.len();
@@ -150,12 +155,17 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             right_w += sep.len() + scrobble_w;
         }
 
-        let host_w = 2 + host.len();
+        let host_w = 2 + host_label.len();
         let gap = (area.width as usize).saturating_sub(host_w + right_w);
 
+        let conn_style = if app.server_reachable {
+            Style::default().fg(app.accent())
+        } else {
+            Style::default().fg(t.dimmed)
+        };
         let mut spans = vec![
-            Span::styled("● ", Style::default().fg(app.accent())),
-            Span::styled(host.to_string(), Style::default().fg(t.dimmed)),
+            Span::styled(if app.server_reachable { "● " } else { "○ " }, conn_style),
+            Span::styled(host_label, Style::default().fg(t.dimmed)),
             Span::raw(" ".repeat(gap)),
         ];
         if app.config.scrobble_enabled {

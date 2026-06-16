@@ -58,18 +58,24 @@ pub async fn run() -> Result<()> {
     let mut app = App::new(config)?;
 
     if let Err(e) = app.subsonic.ping().await {
-        eprintln!(
-            "error: could not connect to Subsonic server at {}",
-            app.config.subsonic_url
-        );
         if ratune_subsonic::is_auth_failure(e.as_ref()) {
+            eprintln!(
+                "error: authentication failed for Subsonic server at {}",
+                app.config.subsonic_url
+            );
             eprintln!(
                 "Authentication failed (wrong username or password).\n\
                  Check [server] url, username, password, password_command, OS keyring, or SUBSONIC_PASS."
             );
+            eprintln!("{e:#}");
+            process::exit(1);
         }
-        eprintln!("{e:#}");
-        process::exit(1);
+        eprintln!(
+            "warn: could not reach Subsonic server at {} — starting offline (cache and saved state)",
+            app.config.subsonic_url
+        );
+        app.server_reachable = false;
+        app.flash_status_secs("Server unreachable — offline (cached content only)", 8);
     }
 
     // Detect tmux first: $TMUX is set when running inside a tmux session.
@@ -114,7 +120,7 @@ pub async fn run() -> Result<()> {
         Err(e) => eprintln!("warn: could not load history: {e}"),
     }
 
-    if app.config.scrobble_enabled {
+    if app.config.scrobble_enabled && app.server_reachable {
         if !app.scrobble_queue.is_empty() {
             eprintln!(
                 "scrobble: retrying {} queued scrobble(s)…",
@@ -131,14 +137,16 @@ pub async fn run() -> Result<()> {
         app.home_art_needs_redraw = true;
     }
 
-    // Begin fetching library metadata for the browse tab.
-    if app.browser_browse_mode == crate::config::BrowseMode::Files {
-        app.fetch_music_folders();
-    } else {
-        app.fetch_artists();
+    if app.server_reachable {
+        // Begin fetching library metadata for the browse tab.
+        if app.browser_browse_mode == crate::config::BrowseMode::Files {
+            app.fetch_music_folders();
+        } else {
+            app.fetch_artists();
+        }
+        // Background metadata index refresh when missing or stale (Milestone 2).
+        app.spawn_library_index_refresh(false);
     }
-    // Background metadata index refresh when missing or stale (Milestone 2).
-    app.spawn_library_index_refresh(false);
 
     // Spawn a task that sets a flag on SIGTERM, SIGHUP, SIGPIPE, or SIGINT so the main loop
     // can shut down cleanly (same path as pressing `q`).
