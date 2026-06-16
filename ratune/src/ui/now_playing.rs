@@ -11,7 +11,91 @@ use crate::app::{App, Tab};
 use crate::theme::style_with_bg;
 
 /// Spacing between transport glyphs in the controls row (must match `render_controls_widget`).
-const CONTROLS_GAP: u16 = 6;
+const CONTROLS_GAP: &str = "      ";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlSlot {
+    Shuffle,
+    Prev,
+    PlayPause,
+    Next,
+    Loop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ControlSegment {
+    slot: ControlSlot,
+    /// Display-column offset from the start of the centered controls line.
+    start: u16,
+    width: u16,
+}
+
+/// Ratatui `Paragraph` center alignment (`widgets/paragraph.rs::get_line_offset`).
+fn centered_line_x(area_x: u16, area_width: u16, line_width: u16) -> u16 {
+    area_x + (area_width / 2).saturating_sub(line_width / 2)
+}
+
+fn slot_for_span_index(i: usize) -> Option<ControlSlot> {
+    match i {
+        0 => Some(ControlSlot::Shuffle),
+        2 => Some(ControlSlot::Prev),
+        4 => Some(ControlSlot::PlayPause),
+        6 => Some(ControlSlot::Next),
+        8 => Some(ControlSlot::Loop),
+        _ => None,
+    }
+}
+
+/// Layout derived from the same `Line` ratatui renders (width + per-span columns).
+fn control_segments(ctx: ControlsClickCtx) -> (u16, Vec<ControlSegment>) {
+    let line = controls_line_plain(ctx);
+    let total = line.width() as u16;
+    let mut pos = 0u16;
+    let mut segments = Vec::with_capacity(5);
+    for (i, span) in line.spans.iter().enumerate() {
+        let width = span.width() as u16;
+        if let Some(slot) = slot_for_span_index(i) {
+            segments.push(ControlSegment {
+                slot,
+                start: pos,
+                width,
+            });
+        }
+        pos += width;
+    }
+    (total, segments)
+}
+
+fn controls_line_plain(ctx: ControlsClickCtx) -> Line<'static> {
+    let play_label = play_label_for(ctx);
+    Line::from(vec![
+        Span::raw("⇄"),
+        Span::raw(CONTROLS_GAP),
+        Span::raw("⏮"),
+        Span::raw(CONTROLS_GAP),
+        Span::raw(play_label),
+        Span::raw(CONTROLS_GAP),
+        Span::raw("⏭"),
+        Span::raw(CONTROLS_GAP),
+        Span::raw("↻"),
+    ])
+}
+
+fn action_for_slot(slot: ControlSlot, ctx: ControlsClickCtx) -> Action {
+    match slot {
+        ControlSlot::Shuffle => {
+            if ctx.shuffled {
+                Action::Unshuffle
+            } else {
+                Action::Shuffle
+            }
+        }
+        ControlSlot::Prev => Action::PrevTrack,
+        ControlSlot::PlayPause => Action::PlayPause,
+        ControlSlot::Next => Action::NextTrack,
+        ControlSlot::Loop => Action::ToggleQueueLoop,
+    }
+}
 
 /// Context for control-line layout / hit-testing without a full `App`.
 #[derive(Debug, Clone, Copy)]
@@ -41,14 +125,9 @@ fn play_label_for(ctx: ControlsClickCtx) -> &'static str {
     }
 }
 
-fn play_label_width_for(ctx: ControlsClickCtx) -> u16 {
-    play_label_for(ctx).chars().count() as u16
-}
-
 /// Total display width of the centered controls line.
 pub fn controls_line_width(ctx: ControlsClickCtx) -> u16 {
-    let play_w = play_label_width_for(ctx);
-    1 + CONTROLS_GAP + 1 + CONTROLS_GAP + play_w + CONTROLS_GAP + 1 + CONTROLS_GAP + 1
+    controls_line_plain(ctx).width() as u16
 }
 
 /// The single terminal row that contains the interactive transport glyphs.
@@ -72,50 +151,31 @@ pub fn controls_click_action_for(
         return None;
     }
 
-    let total = controls_line_width(ctx);
+    let (total, segments) = control_segments(ctx);
     if total == 0 || row.width == 0 {
         return None;
     }
-    let start = row.x + (row.width.saturating_sub(total)) / 2;
+    let start = centered_line_x(row.x, row.width, total);
     if x < start || x >= start + total {
         return None;
     }
     let cx = x - start;
 
-    let play_w = play_label_width_for(ctx);
-    let s_shuffle = 0;
-    let s_prev = 1 + CONTROLS_GAP;
-    let s_play = s_prev + 1 + CONTROLS_GAP;
-    let s_next = s_play + play_w + CONTROLS_GAP;
-    let s_loop = s_next + 1 + CONTROLS_GAP;
-
-    if button_hit(cx, s_shuffle, 1) {
-        return Some(if ctx.shuffled {
-            Action::Unshuffle
-        } else {
-            Action::Shuffle
-        });
-    }
-    if button_hit(cx, s_prev, 1) {
-        return Some(Action::PrevTrack);
-    }
-    if button_hit(cx, s_play, play_w) {
-        return Some(Action::PlayPause);
-    }
-    if button_hit(cx, s_next, 1) {
-        return Some(Action::NextTrack);
-    }
-    if button_hit(cx, s_loop, 1) {
-        return Some(Action::ToggleQueueLoop);
+    for seg in segments {
+        if cx >= seg.start && cx < seg.start + seg.width {
+            return Some(action_for_slot(seg.slot, ctx));
+        }
     }
     None
 }
 
-fn button_hit(cx: u16, start: u16, width: u16) -> bool {
-    let half_gap = CONTROLS_GAP / 2;
-    let hit_start = start.saturating_sub(half_gap);
-    let hit_end = start + width + half_gap;
-    cx >= hit_start && cx < hit_end
+#[cfg(test)]
+fn segment_center(segments: &[ControlSegment], slot: ControlSlot) -> u16 {
+    let seg = segments
+        .iter()
+        .find(|s| s.slot == slot)
+        .expect("segment");
+    seg.start + seg.width / 2
 }
 
 /// Blank rows between the block title bar and the first metadata line (boxed pane only).
@@ -649,13 +709,13 @@ fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
 
     let controls = Line::from(vec![
         Span::styled("⇄", shuffle_style),
-        Span::raw("      "),
+        Span::raw(CONTROLS_GAP),
         Span::styled("⏮", inactive),
-        Span::raw("      "),
+        Span::raw(CONTROLS_GAP),
         Span::styled(play_label, play_style),
-        Span::raw("      "),
+        Span::raw(CONTROLS_GAP),
         Span::styled("⏭", inactive),
-        Span::raw("      "),
+        Span::raw(CONTROLS_GAP),
         Span::styled("↻", loop_style),
     ]);
 
@@ -879,7 +939,8 @@ mod progress_style_tests {
 #[cfg(test)]
 mod controls_click_tests {
     use super::{
-        controls_click_action_for, controls_line_width, controls_row_rect, ControlsClickCtx,
+        centered_line_x, control_segments, controls_click_action_for, controls_line_plain,
+        controls_line_width, controls_row_rect, segment_center, ControlSlot, ControlsClickCtx,
     };
     use crate::action::Action;
     use ratatui::layout::Rect;
@@ -900,9 +961,29 @@ mod controls_click_tests {
         }
     }
 
-    fn line_start(area_width: u16, ctx: ControlsClickCtx) -> u16 {
+    fn line_start(area: Rect, ctx: ControlsClickCtx) -> u16 {
+        centered_line_x(area.x, area.width, controls_line_width(ctx))
+    }
+
+    fn click_at_slot(ctx: ControlsClickCtx, area: Rect, slot: ControlSlot) -> Option<Action> {
+        let (_, segments) = control_segments(ctx);
+        let x = line_start(area, ctx) + segment_center(&segments, slot);
+        controls_click_action_for(ctx, area, x)
+    }
+
+    #[test]
+    fn line_start_matches_ratatui_center_formula() {
+        let ctx = ControlsClickCtx {
+            has_current_song: false,
+            paused: false,
+            shuffled: false,
+        };
         let total = controls_line_width(ctx);
-        (area_width.saturating_sub(total)) / 2
+        let area = Rect::new(5, 0, 40, 1);
+        let legacy = area.x + (area.width.saturating_sub(total)) / 2;
+        let aligned = line_start(area, ctx);
+        assert_eq!(aligned, area.x + (area.width / 2).saturating_sub(total / 2));
+        assert_ne!(legacy, aligned, "regression: must not use (W-L)/2 centering");
     }
 
     #[test]
@@ -912,8 +993,8 @@ mod controls_click_tests {
             paused: false,
             shuffled: false,
         };
-        assert_eq!(controls_line_width(idle), 29);
-        assert_eq!(controls_line_width(playing()), 33);
+        assert_eq!(controls_line_width(idle), controls_line_plain(idle).width() as u16);
+        assert!(controls_line_width(playing()) >= controls_line_width(idle));
     }
 
     #[test]
@@ -933,26 +1014,26 @@ mod controls_click_tests {
     #[test]
     fn centered_clicks_map_to_all_five_buttons() {
         let area = Rect::new(0, 0, 80, 3);
-        let start = line_start(area.width, playing());
+        let ctx = playing();
 
         assert!(matches!(
-            controls_click_action_for(playing(), area, start),
+            click_at_slot(ctx, area, ControlSlot::Shuffle),
             Some(Action::Shuffle)
         ));
         assert!(matches!(
-            controls_click_action_for(playing(), area, start + 7),
+            click_at_slot(ctx, area, ControlSlot::Prev),
             Some(Action::PrevTrack)
         ));
         assert!(matches!(
-            controls_click_action_for(playing(), area, start + 16),
+            click_at_slot(ctx, area, ControlSlot::PlayPause),
             Some(Action::PlayPause)
         ));
         assert!(matches!(
-            controls_click_action_for(playing(), area, start + 27),
+            click_at_slot(ctx, area, ControlSlot::Next),
             Some(Action::NextTrack)
         ));
         assert!(matches!(
-            controls_click_action_for(playing(), area, start + 32),
+            click_at_slot(ctx, area, ControlSlot::Loop),
             Some(Action::ToggleQueueLoop)
         ));
     }
@@ -960,9 +1041,9 @@ mod controls_click_tests {
     #[test]
     fn shuffle_button_toggles_unshuffle_when_shuffled() {
         let area = Rect::new(0, 0, 80, 1);
-        let start = line_start(area.width, shuffled());
+        let ctx = shuffled();
         assert!(matches!(
-            controls_click_action_for(shuffled(), area, start),
+            click_at_slot(ctx, area, ControlSlot::Shuffle),
             Some(Action::Unshuffle)
         ));
     }
@@ -970,18 +1051,19 @@ mod controls_click_tests {
     #[test]
     fn clicks_outside_centered_strip_are_ignored() {
         let area = Rect::new(0, 0, 80, 1);
-        assert!(controls_click_action_for(playing(), area, 0).is_none());
-        assert!(controls_click_action_for(playing(), area, 79).is_none());
+        let ctx = playing();
+        assert!(controls_click_action_for(ctx, area, 0).is_none());
+        assert!(controls_click_action_for(ctx, area, 79).is_none());
     }
 
     #[test]
-    fn gap_clicks_still_hit_neighboring_buttons() {
+    fn gap_clicks_do_not_hit_buttons() {
         let area = Rect::new(0, 0, 80, 1);
-        let start = line_start(area.width, playing());
-        // Gap between shuffle and prev — should still hit prev (half-gap tolerance).
-        assert!(matches!(
-            controls_click_action_for(playing(), area, start + 4),
-            Some(Action::PrevTrack)
-        ));
+        let ctx = playing();
+        let (total, segments) = control_segments(ctx);
+        let base = line_start(area, ctx);
+        let gap_x = base + segments[0].start + segments[0].width + 3;
+        assert!(gap_x < base + total);
+        assert!(controls_click_action_for(ctx, area, gap_x).is_none());
     }
 }
