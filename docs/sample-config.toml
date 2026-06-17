@@ -77,11 +77,14 @@ password = ""
 # max_bit_rate   — Cap streaming bitrate in kbps. 0 = unlimited (server decides).
 # mpris          — Linux only: register an MPRIS player on the session bus so
 #                  media keys / playerctl work. Default: true.
+# queue_loop     — When true, playback wraps to the first queue track after the
+#                  last one ends. Default: true. Toggle at runtime with R / ↻.
 
 [player]
 default_volume = 70
 max_bit_rate = 0
 mpris = true
+queue_loop = true
 
 # -----------------------------------------------------------------------------
 # [keybinds] — optional overrides

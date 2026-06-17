@@ -910,6 +910,9 @@ struct PlayerSection {
     /// Register on the session D-Bus as an MPRIS player (Linux media keys, etc.).
     #[serde(default = "default_mpris")]
     mpris: bool,
+    /// When true, playback wraps to the first queue track after the last one ends.
+    #[serde(default = "default_queue_loop")]
+    queue_loop: bool,
 }
 
 impl Default for PlayerSection {
@@ -918,6 +921,7 @@ impl Default for PlayerSection {
             default_volume: default_volume(),
             max_bit_rate: 0,
             mpris: default_mpris(),
+            queue_loop: default_queue_loop(),
         }
     }
 }
@@ -927,6 +931,10 @@ fn default_volume() -> u8 {
 }
 
 fn default_mpris() -> bool {
+    true
+}
+
+fn default_queue_loop() -> bool {
     true
 }
 
@@ -945,6 +953,8 @@ pub struct Config {
     pub max_bit_rate: u32,
     /// Linux: register MPRIS on the session bus (media keys, `playerctl`).
     pub mpris_enabled: bool,
+    /// When true, playback wraps to the first queue track after the last one ends.
+    pub queue_loop: bool,
     /// Raw keybind strings — parsed into `Keybinds` by `App::new`.
     pub keybinds: KeybindsSection,
     /// Raw theme colour strings — parsed into `Theme` by `App::new`.
@@ -1355,6 +1365,7 @@ impl Config {
             default_volume: file_cfg.player.default_volume,
             max_bit_rate: file_cfg.player.max_bit_rate,
             mpris_enabled: file_cfg.player.mpris,
+            queue_loop: file_cfg.player.queue_loop,
             keybinds: file_cfg.keybinds,
             theme: file_cfg.theme,
             lyrics_visible,
@@ -1489,6 +1500,7 @@ password = ""
 default_volume = 70
 max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # mpris = true     # Linux: register on session D-Bus for media keys / playerctl (default: true)
+# queue_loop = true   # wrap to first track after the last queue item (default: true)
 
 [keybinds]
 # Shift+letter: use "Shift+n" or "N" (same). Helps Ghostty/kitty vs. classic terminals.
@@ -2258,5 +2270,17 @@ cache_enabled = false
     fn lyrics_cache_enabled_defaults_true() {
         let fc: FileConfig = toml::from_str("[lyrics]\nsource = \"lrclib\"\n").expect("toml");
         assert!(fc.lyrics.cache_enabled);
+    }
+
+    #[test]
+    fn queue_loop_defaults_true() {
+        let fc: FileConfig = toml::from_str("").expect("toml");
+        assert!(fc.player.queue_loop);
+    }
+
+    #[test]
+    fn parses_queue_loop() {
+        let fc: FileConfig = toml::from_str("[player]\nqueue_loop = false\n").expect("toml");
+        assert!(!fc.player.queue_loop);
     }
 }
