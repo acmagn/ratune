@@ -632,7 +632,10 @@ impl App {
             browser_focus: BrowserColumn::Artists,
             library: LibraryState::default(),
             folders: FolderBrowseState::default(),
-            queue: QueueState::default(),
+            queue: QueueState {
+                loop_enabled: config.queue_loop,
+                ..QueueState::default()
+            },
             playback: PlaybackState::default(),
             subsonic: Arc::new(subsonic),
             server_reachable: true,

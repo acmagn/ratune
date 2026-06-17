@@ -219,6 +219,7 @@ export SUBSONIC_PASS="your_password"
 [player]
 default_volume = 70
 max_bit_rate = 0
+queue_loop = true   # wrap queue after last track; toggle at runtime with R
 
 [cache]
 enabled = true
