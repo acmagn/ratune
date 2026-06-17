@@ -397,7 +397,7 @@ async fn run_loop(
     // redisplay it instantly with `a=p,i=1` when switching back.
     let mut last_rendered_art: Option<(u64, Rect)> = None;
     let mut art_displayed = false;
-    // Cover id for which `render_image` failed (e.g. undecodable bytes). Without
+    // Cover id for which Kitty transmit failed (e.g. undecodable bytes). Without
     // this latch the loop retries every frame and spams stderr.
     let mut kitty_cover_unrenderable: Option<String> = None;
     let mut last_tab = app.active_tab;
@@ -489,7 +489,7 @@ async fn run_loop(
                 // On every entry to NowPlaying (including initial load) drop any
                 // cached render state so the art is fully re-transmitted this frame.
                 // The fast display_image() path (a=p,i=1) can silently fail if the
-                // terminal evicted the stored image; render_image() is always reliable.
+                // terminal evicted the stored image; full re-transmit is always reliable.
                 if last_tab != app::Tab::NowPlaying {
                     last_rendered_art = None;
                     art_displayed = false;
@@ -510,9 +510,10 @@ async fn run_loop(
                         }
                         continue;
                     };
-                    if let (Some((cover_id, bytes)), Some(fp)) =
-                        (app.art_cache.as_ref(), app.art_cache_fingerprint)
-                    {
+                    if let (Some(fp), Some(cover_id)) = (
+                        app.art_cache_fingerprint,
+                        app.art_cache.as_ref().map(|(id, _)| id.clone()),
+                    ) {
                         let show_art = app.config.nowplaying_show_art;
                         let layout_opts = ui::layout::layout_options_for_app(app);
                         let center = ui::layout::build_layout(terminal_rect, &layout_opts).center;
@@ -568,22 +569,14 @@ async fn run_loop(
                                 .map(|p| p.font_size())
                                 .or(app.cell_px)
                                 .unwrap_or((10, 20));
-                            let placement = app
-                                .art_cache_decoded
-                                .as_ref()
-                                .map(|(_, img)| {
+                            let placement = if app.ensure_art_cache_decoded() {
+                                app.art_cache_decoded.as_ref().map(|(_, img)| {
                                     ui::art_prepare::contain_fit_rect_in_cells(img, inner, font)
                                 })
-                                .unwrap_or_else(|| {
-                                    image::load_from_memory(bytes)
-                                        .ok()
-                                        .map(|img| {
-                                            ui::art_prepare::contain_fit_rect_in_cells(
-                                                &img, inner, font,
-                                            )
-                                        })
-                                        .unwrap_or(inner)
-                                });
+                            } else {
+                                None
+                            }
+                            .unwrap_or(inner);
                             if placement.width == 0 || placement.height == 0 {
                                 if art_displayed {
                                     let _ = ui::kitty_art::clear_image(app.in_tmux);
@@ -599,26 +592,28 @@ async fn run_loop(
                                 if stored_matches && art_displayed {
                                     // Image is already visible — nothing to do.
                                 } else {
-                                    // Album changed, first display, tab return, or terminal
-                                    // was resized — full re-encode and re-transmit.
-                                    match ui::kitty_art::render_image(
-                                        bytes,
-                                        placement,
-                                        app.in_tmux,
-                                        app.tmux_status_offset,
-                                        app.cell_px,
-                                        theme::surface_pad_rgba(app.theme.surface),
-                                    ) {
-                                        Ok(()) => {
-                                            last_rendered_art = Some((fp, placement));
-                                            art_displayed = true;
-                                        }
-                                        Err(e) => {
-                                            eprintln!("kitty render: {e}");
-                                            let _ = ui::kitty_art::clear_image(app.in_tmux);
-                                            kitty_cover_unrenderable = Some(cover_id.clone());
-                                            last_rendered_art = None;
-                                            art_displayed = false;
+                                    let prepared =
+                                        app.ensure_np_kitty_prepared(placement, font).cloned();
+                                    let in_tmux = app.in_tmux;
+                                    let tmux_offset = app.tmux_status_offset;
+                                    if let Some(prepared) = prepared {
+                                        match ui::kitty_art::transmit_np_image(
+                                            &prepared,
+                                            placement,
+                                            in_tmux,
+                                            tmux_offset,
+                                        ) {
+                                            Ok(()) => {
+                                                last_rendered_art = Some((fp, placement));
+                                                art_displayed = true;
+                                            }
+                                            Err(e) => {
+                                                eprintln!("kitty render: {e}");
+                                                let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                                kitty_cover_unrenderable = Some(cover_id.clone());
+                                                last_rendered_art = None;
+                                                art_displayed = false;
+                                            }
                                         }
                                     }
                                 }

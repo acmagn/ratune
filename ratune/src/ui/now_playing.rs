@@ -125,8 +125,9 @@ fn play_label_for(ctx: ControlsClickCtx) -> &'static str {
     }
 }
 
-/// Total display width of the centered controls line.
-pub fn controls_line_width(ctx: ControlsClickCtx) -> u16 {
+/// Total display width of the centered controls line (used by click tests).
+#[cfg(test)]
+fn controls_line_width(ctx: ControlsClickCtx) -> u16 {
     controls_line_plain(ctx).width() as u16
 }
 
@@ -171,10 +172,7 @@ pub fn controls_click_action_for(
 
 #[cfg(test)]
 fn segment_center(segments: &[ControlSegment], slot: ControlSlot) -> u16 {
-    let seg = segments
-        .iter()
-        .find(|s| s.slot == slot)
-        .expect("segment");
+    let seg = segments.iter().find(|s| s.slot == slot).expect("segment");
     seg.start + seg.width / 2
 }
 
@@ -983,7 +981,10 @@ mod controls_click_tests {
         let legacy = area.x + (area.width.saturating_sub(total)) / 2;
         let aligned = line_start(area, ctx);
         assert_eq!(aligned, area.x + (area.width / 2).saturating_sub(total / 2));
-        assert_ne!(legacy, aligned, "regression: must not use (W-L)/2 centering");
+        assert_ne!(
+            legacy, aligned,
+            "regression: must not use (W-L)/2 centering"
+        );
     }
 
     #[test]
@@ -993,7 +994,10 @@ mod controls_click_tests {
             paused: false,
             shuffled: false,
         };
-        assert_eq!(controls_line_width(idle), controls_line_plain(idle).width() as u16);
+        assert_eq!(
+            controls_line_width(idle),
+            controls_line_plain(idle).width() as u16
+        );
         assert!(controls_line_width(playing()) >= controls_line_width(idle));
     }
 

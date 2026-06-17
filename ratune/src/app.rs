@@ -16,7 +16,7 @@ use ratune_subsonic::SubsonicClient;
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, Direction};
-use crate::color::{extract_accent, lerp_color};
+use crate::color::{extract_accent, extract_accent_from_image, lerp_color};
 use crate::config::{AlbumArtBackend, BrowseMode, Config};
 use crate::history::PlayRecord;
 use crate::keybinds::Keybinds;
@@ -576,6 +576,8 @@ pub struct App {
     pub home_strip_last_cells: HashMap<String, (u16, u16)>,
     /// Decoded home strip covers — avoids JPEG decode on every ratatui frame (Sixel path).
     pub home_strip_decoded: HashMap<String, DynamicImage>,
+    /// Cached resize + zlib for Now Playing Kitty APC (built once per cover + placement).
+    pub np_kitty_prepared: Option<crate::ui::kitty_art::NpKittyPrepared>,
 }
 
 impl App {
@@ -717,6 +719,7 @@ impl App {
             home_strip_art: HashMap::new(),
             home_strip_last_cells: HashMap::new(),
             home_strip_decoded: HashMap::new(),
+            np_kitty_prepared: None,
             #[cfg(target_os = "linux")]
             mpris: None,
         })
@@ -785,10 +788,72 @@ impl App {
             && (self.kitty_apc_graphics_ready() || self.ratatui_art_ready())
     }
 
+    /// Decode the current cover once and cache in `art_cache_decoded`.
+    pub fn ensure_art_cache_decoded(&mut self) -> bool {
+        let Some(fp) = self.art_cache_fingerprint else {
+            return false;
+        };
+        if self
+            .art_cache_decoded
+            .as_ref()
+            .is_some_and(|(cached_fp, _)| *cached_fp == fp)
+        {
+            return true;
+        }
+        let Some((_, bytes)) = self.art_cache.as_ref() else {
+            self.art_cache_decoded = None;
+            return false;
+        };
+        match image::load_from_memory(bytes) {
+            Ok(img) => {
+                self.art_cache_decoded = Some((fp, img));
+                true
+            }
+            Err(_) => {
+                self.art_cache_decoded = None;
+                false
+            }
+        }
+    }
+
+    /// Build or reuse Kitty APC zlib/base64 for the current cover at `placement`.
+    pub fn ensure_np_kitty_prepared(
+        &mut self,
+        placement: Rect,
+        font: (u16, u16),
+    ) -> Option<&crate::ui::kitty_art::NpKittyPrepared> {
+        let fp = self.art_cache_fingerprint?;
+        if !self.ensure_art_cache_decoded() {
+            self.np_kitty_prepared = None;
+            return None;
+        }
+        if self
+            .np_kitty_prepared
+            .as_ref()
+            .is_some_and(|p| p.matches(fp, placement))
+        {
+            return self.np_kitty_prepared.as_ref();
+        }
+        let img = &self.art_cache_decoded.as_ref()?.1;
+        let prepared = crate::ui::kitty_art::NpKittyPrepared::build(img, fp, placement, font)?;
+        self.np_kitty_prepared = Some(prepared);
+        self.np_kitty_prepared.as_ref()
+    }
+
+    /// Accent from cached cover pixels when available, else decode from bytes.
+    fn accent_from_art_cache(&self) -> Option<Color> {
+        if let Some((_, img)) = self.art_cache_decoded.as_ref() {
+            return extract_accent_from_image(img);
+        }
+        let (_, bytes) = self.art_cache.as_ref()?;
+        extract_accent(bytes)
+    }
+
     /// Drop all `ratatui-image` protocol state (tab switch, help overlay, fzf suspend, …).
     pub fn clear_ratatui_art_state(&mut self) {
         self.np_art_state = None;
         self.np_art_prep_key = None;
+        self.np_kitty_prepared = None;
         self.home_strip_art.clear();
         self.home_strip_last_cells.clear();
         self.home_strip_decoded.clear();
@@ -800,6 +865,7 @@ impl App {
     pub fn clear_np_ratatui_art_state(&mut self) {
         self.np_art_state = None;
         self.np_art_prep_key = None;
+        self.np_kitty_prepared = None;
     }
 
     pub fn schedule_home_strip_resize_invalidate(&mut self) {
@@ -2149,12 +2215,16 @@ impl App {
                 }
             }
             LibraryUpdate::CoverArt { cover_id, bytes } => {
-                // Extract dynamic accent before storing (bytes are consumed here).
-                let accent = extract_accent(&bytes);
                 let fp = crate::ui::art_prepare::art_bytes_fingerprint(&bytes);
+                let decoded = image::load_from_memory(&bytes).ok();
+                let accent = decoded
+                    .as_ref()
+                    .and_then(extract_accent_from_image)
+                    .or_else(|| extract_accent(&bytes));
                 self.art_cache = Some((cover_id, bytes));
                 self.art_cache_fingerprint = Some(fp);
-                self.art_cache_decoded = None;
+                self.art_cache_decoded = decoded.map(|img| (fp, img));
+                self.np_kitty_prepared = None;
                 self.apply_dynamic_accent(accent);
                 #[cfg(target_os = "linux")]
                 self.mpris_emit_props();
@@ -2567,9 +2637,9 @@ impl App {
                             // is applied there.  Clear stale dynamic accent for now.
                             self.apply_dynamic_accent(None);
                             self.fetch_cover_art(cid.clone());
-                        } else if let Some((_, ref bytes)) = self.art_cache.clone() {
+                        } else if self.art_cache.is_some() {
                             // Art already cached for this cover_id — extract immediately.
-                            let accent = extract_accent(bytes);
+                            let accent = self.accent_from_art_cache();
                             self.apply_dynamic_accent(accent);
                         }
                     } else {
@@ -2664,8 +2734,8 @@ impl App {
                         if needs_fetch {
                             self.apply_dynamic_accent(None);
                             self.fetch_cover_art(cid.clone());
-                        } else if let Some((_, ref bytes)) = self.art_cache.clone() {
-                            let accent = extract_accent(bytes);
+                        } else if self.art_cache.is_some() {
+                            let accent = self.accent_from_art_cache();
                             self.apply_dynamic_accent(accent);
                         }
                     } else {
