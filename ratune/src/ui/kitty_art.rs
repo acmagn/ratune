@@ -444,82 +444,92 @@ pub fn album_art_placeholder_inner(outer: Rect) -> Rect {
     album_art_block().inner(outer)
 }
 
-/// Render image `bytes` (JPEG/PNG/etc.) into `placement` using the Kitty graphics protocol.
-///
-/// `placement` must be the **cell rectangle** where the image should appear — typically
-/// [`album_art_placeholder_inner`] applied to the same outer `Rect` as the ratatui placeholder.
-/// Coordinates are ratatui’s 0-based buffer positions; CSI cursor uses 1-based rows/cols.
-///
-/// `cell_px` — terminal cell size in pixels (`CSI 16 t` or ratatui-image picker). `None` → 10×20.
-///
-/// `pad` is retained for API compatibility; letterboxing uses the caller's contain-fit `placement`.
-pub fn render_image(
-    bytes: &[u8],
+/// Cached resize + zlib for Now Playing Kitty APC (image id 1).
+#[derive(Debug, Clone)]
+pub struct NpKittyPrepared {
+    pub fingerprint: u64,
+    pub art_cols: u16,
+    pub art_rows: u16,
+    pub img_w: u32,
+    pub img_h: u32,
+    /// Base64 of zlib-compressed RGBA — built once per cover + placement geometry.
+    pub b64: String,
+}
+
+impl NpKittyPrepared {
+    pub fn matches(&self, fingerprint: u64, placement: Rect) -> bool {
+        self.fingerprint == fingerprint
+            && self.art_cols == placement.width
+            && self.art_rows == placement.height
+    }
+
+    pub fn build(
+        img: &image::DynamicImage,
+        fingerprint: u64,
+        placement: Rect,
+        font: (u16, u16),
+    ) -> Option<Self> {
+        use base64::Engine;
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        if placement.width == 0 || placement.height == 0 {
+            return None;
+        }
+        let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(
+            img.clone(),
+            placement,
+            font,
+        );
+        let img_rgba = img.to_rgba8();
+        let (w, h) = img_rgba.dimensions();
+        let raw = img_rgba.into_raw();
+        let mut enc = ZlibEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(&raw).ok()?;
+        let zlib_body = enc.finish().ok()?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&zlib_body);
+        Some(Self {
+            fingerprint,
+            art_cols: placement.width,
+            art_rows: placement.height,
+            img_w: w,
+            img_h: h,
+            b64,
+        })
+    }
+}
+
+/// Write a prepared Now Playing image to stdout (no decode/resize/zlib).
+pub fn transmit_np_image(
+    prepared: &NpKittyPrepared,
     placement: Rect,
     in_tmux: bool,
     tmux_status_offset: u16,
-    cell_px: Option<(u16, u16)>,
-    _pad: Rgba<u8>,
 ) -> Result<()> {
-    use base64::Engine;
-    use flate2::write::ZlibEncoder;
-    use flate2::Compression;
-
     let inner_w = placement.width;
     let inner_h = placement.height;
     if inner_w == 0 || inner_h == 0 {
         return Ok(());
     }
 
-    // Cap placeholder rows to ROW_DIACRITICS (tmux Unicode path only).
     let tmux_rows = if in_tmux {
         inner_h.min(ROW_DIACRITICS.len() as u16)
     } else {
         inner_h
     };
-
     let place_rows = if in_tmux { tmux_rows } else { inner_h };
-    let fw = cell_px
-        .map(|(w, _)| w as u32)
-        .filter(|&w| w > 0)
-        .unwrap_or(10);
-    let fh = cell_px
-        .map(|(_, h)| h as u32)
-        .filter(|&h| h > 0)
-        .unwrap_or(20);
+    let w = prepared.img_w;
+    let h = prepared.img_h;
 
-    let img = image::load_from_memory(bytes)?;
-    let font = (
-        fw.min(u16::MAX as u32) as u16,
-        fh.min(u16::MAX as u32) as u16,
-    );
-    let img = crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(img, placement, font);
-    let img_rgba = img.to_rgba8();
-    let (w, h) = img_rgba.dimensions();
-    let raw = img_rgba.into_raw();
-
-    // Zlib-compress the raw RGBA bytes.
-    let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(&raw)?;
-    let compressed = enc.finish()?;
-
-    // Base64-encode.
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
-
-    // Transmit the image in ≤4096-char chunks.
     const CHUNK: usize = 4096;
-    let chunks: Vec<&[u8]> = b64.as_bytes().chunks(CHUNK).collect();
+    let chunks: Vec<&[u8]> = prepared.b64.as_bytes().chunks(CHUNK).collect();
     let n = chunks.len();
 
     let mut out = io::stdout().lock();
 
     if in_tmux {
-        // ── Unicode placeholder path (tmux) ───────────────────────────────────
-        // Delete any existing virtual placement for ID=1 before re-transmitting.
         let _ = write!(out, "{}", apc("a=d,d=i,i=1,q=2", true));
-
-        // Step 1: Transmit image data only (a=t — store, no display).
-        // No placement coordinates here; the virtual placement is explicit below.
         for (i, chunk) in chunks.iter().enumerate() {
             let is_last = i == n - 1;
             let m = if is_last { 0u8 } else { 1u8 };
@@ -537,19 +547,12 @@ pub fn render_image(
                 write!(out, "{}", apc(&format!("m={m};{chunk_str}"), true))?;
             }
         }
-
-        // Step 2: Create virtual placement (U=1 enables Unicode placeholder mode).
         write!(
             out,
             "{}",
             apc(&format!("a=p,U=1,i=1,c={inner_w},r={tmux_rows},q=2"), true)
         )?;
-
-        // Step 3: Write placeholder characters row-by-row at the image position.
-        // These are normal terminal text cells — tmux can overwrite them on window
-        // switch, which is exactly what prevents the bleed.
         for row in 0..tmux_rows {
-            // 1-based CSI; tmux_status_offset maps pane rows when status bar eats row 0.
             write!(
                 out,
                 "\x1b[{};{}H{}",
@@ -559,21 +562,21 @@ pub fn render_image(
             )?;
         }
     } else {
-        // ── Direct placement path (non-tmux) ──────────────────────────────────
         write!(out, "\x1b[{};{}H", placement.y + 1, placement.x + 1)?;
-
         for (i, chunk) in chunks.iter().enumerate() {
             let is_last = i == n - 1;
             let m = if is_last { 0u8 } else { 1u8 };
             let chunk_str = unsafe { std::str::from_utf8_unchecked(chunk) };
             if i == 0 {
-                // First chunk: include all control parameters.
-                // i=1 assigns a persistent image ID so the terminal stores the
-                // image and we can redisplay it with a=p,i=1 without re-transmitting.
                 write!(
                     out,
                     "{}",
-                    apc(&format!("a=T,f=32,i=1,s={w},v={h},c={inner_w},r={place_rows},o=z,m={m},q=2;{chunk_str}"), false)
+                    apc(
+                        &format!(
+                            "a=T,f=32,i=1,s={w},v={h},c={inner_w},r={place_rows},o=z,m={m},q=2;{chunk_str}"
+                        ),
+                        false
+                    )
                 )?;
             } else {
                 write!(out, "{}", apc(&format!("m={m};{chunk_str}"), false))?;
@@ -1016,7 +1019,7 @@ impl StripThumbPrepared {
 /// Render the home tab art strip using Kitty protocol.
 ///
 /// Image IDs [`KITTY_STRIP_ID_BASE`] … + slot (up to [`KITTY_STRIP_MAX_SLOTS`]).
-/// Writes escape sequences directly to stdout (same as `render_image`).
+/// Writes escape sequences directly to stdout (same as [`transmit_np_image`]).
 #[allow(clippy::too_many_arguments)]
 pub fn render_art_strip(
     albums: &[crate::app::RecentAlbum],

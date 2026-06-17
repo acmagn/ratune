@@ -64,18 +64,15 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     }
 }
 
-fn np_art_contain_rect(app: &App, inner: Rect) -> Rect {
+fn np_art_contain_rect(app: &mut App, inner: Rect) -> Rect {
     let font = app
         .art_picker
         .as_ref()
         .map(|p| p.font_size())
         .unwrap_or((10, 20));
-    if let Some((_, img)) = app.art_cache_decoded.as_ref() {
-        return crate::ui::art_prepare::contain_fit_rect_in_cells(img, inner, font);
-    }
-    if let Some((_, bytes)) = app.art_cache.as_ref() {
-        if let Ok(img) = image::load_from_memory(bytes) {
-            return crate::ui::art_prepare::contain_fit_rect_in_cells(&img, inner, font);
+    if app.ensure_art_cache_decoded() {
+        if let Some((_, img)) = app.art_cache_decoded.as_ref() {
+            return crate::ui::art_prepare::contain_fit_rect_in_cells(img, inner, font);
         }
     }
     inner
@@ -103,11 +100,23 @@ fn sync_np_ratatui_protocol(app: &mut App, art_rect: Rect) {
         app.np_art_prep_key = None;
         return;
     };
-    let (_, bytes) = app.art_cache.as_ref().unwrap();
     let key = (fp, art_rect.width, art_rect.height);
     if app.np_art_prep_key.as_ref() == Some(&key) && app.np_art_state.is_some() {
         return;
     }
+    // Must match `Picker` / `ImageSource` font (same as Home strip ratatui prep).
+    let fs = app
+        .art_picker
+        .as_ref()
+        .map(|p| p.font_size())
+        .unwrap_or((10, 20));
+    let base_img = if app.ensure_art_cache_decoded() {
+        app.art_cache_decoded.as_ref().unwrap().1.clone()
+    } else {
+        app.np_art_state = None;
+        app.np_art_prep_key = None;
+        return;
+    };
     let Some(picker) = app.art_picker.as_ref() else {
         return;
     };
@@ -115,24 +124,6 @@ fn sync_np_ratatui_protocol(app: &mut App, art_rect: Rect) {
         app.np_art_state = None;
         app.np_art_prep_key = None;
         return;
-    };
-    // Must match `Picker` / `ImageSource` font (same as Home strip ratatui prep).
-    let fs = picker.font_size();
-    let base_img = match app.art_cache_decoded.as_ref() {
-        Some((cached_fp, img)) if *cached_fp == fp => img.clone(),
-        _ => {
-            let img = match image::load_from_memory(bytes) {
-                Ok(i) => i,
-                Err(_) => {
-                    app.np_art_state = None;
-                    app.np_art_prep_key = None;
-                    app.art_cache_decoded = None;
-                    return;
-                }
-            };
-            app.art_cache_decoded = Some((fp, img.clone()));
-            img
-        }
     };
     let img =
         crate::ui::art_prepare::prepare_art_image_for_rect_contain_fit(base_img, art_rect, fs);

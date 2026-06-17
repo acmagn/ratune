@@ -9,12 +9,16 @@ use ratatui::style::Color;
 /// (V < 0.15) nor near-white (V > 0.85).  Returns `None` when no suitable
 /// colour is found.
 pub fn extract_accent(image_bytes: &[u8]) -> Option<Color> {
+    let img = image::load_from_memory(image_bytes).ok()?;
+    extract_accent_from_image(&img)
+}
+
+/// Like [`extract_accent`] but reuses an already-decoded cover (avoids a second JPEG decode).
+pub fn extract_accent_from_image(img: &image::DynamicImage) -> Option<Color> {
     use palette_extract::{
         get_palette_with_options, MaxColors, PixelEncoding, PixelFilter, Quality,
     };
 
-    // Decode to RGBA8.
-    let img = image::load_from_memory(image_bytes).ok()?;
     let rgba = img.to_rgba8();
     let pixels: &[u8] = rgba.as_raw();
 
