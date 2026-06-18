@@ -111,6 +111,10 @@ pub struct KeybindsSection {
     pub home_refresh: Option<String>,
     /// Browse: toggle folder navigation (requires `[ui.browsetab] folder_navigation`). Default: Ctrl+b
     pub toggle_folder_browse: Option<String>,
+    /// Toggle favorite on the focused song, album, or artist (Subsonic star API). Default: f
+    pub toggle_favorite: Option<String>,
+    /// Browse: open favorites overlay. Default: Shift+f (`F`)
+    pub favorites_overlay: Option<String>,
 }
 
 // ── [theme] ───────────────────────────────────────────────────────────────────
@@ -128,6 +132,12 @@ pub struct CacheSection {
     /// Maximum total cache size in gigabytes. Default: 2.0.
     #[serde(default = "default_cache_max_size_gb")]
     pub max_size_gb: f64,
+    /// Prefetch favorite tracks into the offline cache (Subsonic getStarred2). Default: false.
+    #[serde(default = "default_cache_starred")]
+    pub cache_starred: bool,
+    /// Concurrent downloads when prefetching favorite tracks. Default: 2.
+    #[serde(default = "default_cache_starred_parallelism")]
+    pub cache_starred_parallelism: usize,
 }
 
 fn default_cache_enabled() -> bool {
@@ -136,12 +146,20 @@ fn default_cache_enabled() -> bool {
 fn default_cache_max_size_gb() -> f64 {
     2.0
 }
+fn default_cache_starred() -> bool {
+    false
+}
+fn default_cache_starred_parallelism() -> usize {
+    2
+}
 
 impl Default for CacheSection {
     fn default() -> Self {
         Self {
             enabled: default_cache_enabled(),
             max_size_gb: default_cache_max_size_gb(),
+            cache_starred: default_cache_starred(),
+            cache_starred_parallelism: default_cache_starred_parallelism(),
         }
     }
 }
@@ -1024,6 +1042,10 @@ pub struct Config {
     pub cache_enabled: bool,
     /// Maximum total cache size in gigabytes.
     pub cache_max_size_gb: f64,
+    /// Prefetch favorite tracks into the offline cache.
+    pub cache_starred: bool,
+    /// Concurrent downloads when prefetching favorite tracks.
+    pub cache_starred_parallelism: usize,
     /// Where to fetch lyrics (`lrclib` or `subsonic`).
     pub lyrics_source: LyricsSource,
     /// LRCLib base URL when `lyrics_source` is `LrcLib`.
@@ -1402,6 +1424,8 @@ impl Config {
             now_playing_lines_boxed,
             cache_enabled: file_cfg.cache.enabled,
             cache_max_size_gb: file_cfg.cache.max_size_gb,
+            cache_starred: file_cfg.cache.cache_starred,
+            cache_starred_parallelism: file_cfg.cache.cache_starred_parallelism.max(1),
             lyrics_source: LyricsSource::parse(&file_cfg.lyrics.source)
                 .unwrap_or(LyricsSource::LrcLib),
             lyrics_lrclib_url: file_cfg.lyrics.lrclib_url,
@@ -1603,7 +1627,7 @@ position = "left"
 position = "right"
 # One template per queue ROW — `{title}`, `{n}`, `{artist}`, `{album}`, `{duration}`, `{suffix}`.
 # NOT the same syntax as now-playing `lines` above (those use % / $ tags).
-# queue_template = "{n}  {title:<40}  {artist:<25}  {duration:>5}"
+# queue_template = "{n}{title:<40}  {artist:<25}  {duration:>5}"
 
 [ui.nptab.lyrics_pane]
 enabled = true

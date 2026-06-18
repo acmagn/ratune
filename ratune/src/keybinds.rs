@@ -184,6 +184,10 @@ pub struct Keybinds {
     pub home_refresh: KeySpec,
     /// `None` = disabled — folder toggle from keybinds
     pub toggle_folder_browse: Option<KeySpec>,
+    /// Toggle favorite on focused or playing item (Subsonic star API).
+    pub toggle_favorite: KeySpec,
+    /// Browser: favorites overlay. Default: Shift+f (`F`)
+    pub favorites_overlay: KeySpec,
 }
 
 impl Keybinds {
@@ -399,6 +403,17 @@ impl Keybinds {
                 KeySpec::new(KeyCode::Char('r')),
             ),
             toggle_folder_browse,
+            toggle_favorite: resolve(
+                sec.toggle_favorite.as_deref(),
+                KeySpec::new(KeyCode::Char('f')),
+            ),
+            favorites_overlay: resolve(
+                sec.favorites_overlay.as_deref(),
+                KeySpec {
+                    code: KeyCode::Char('f'),
+                    modifiers: KeyModifiers::SHIFT,
+                },
+            ),
         }
     }
 }

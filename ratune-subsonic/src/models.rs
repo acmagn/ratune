@@ -41,7 +41,7 @@ where
 ///
 /// When returned by `getArtists` the `album` list is empty; when returned by
 /// `getArtist` it is populated with album stubs (no songs).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Artist {
     pub id: String,
@@ -129,7 +129,7 @@ pub struct Song {
 ///
 /// When returned by `getAlbum` the `song` list is populated; in search results
 /// it is empty.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Album {
     pub id: String,
@@ -531,6 +531,52 @@ pub(crate) struct PlaylistBody {
     pub playlist: Option<PlaylistDetail>,
 }
 
+/// Starred library items from `getStarred2`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Starred2 {
+    #[serde(default)]
+    pub artist: Vec<Artist>,
+    #[serde(default)]
+    pub album: Vec<Album>,
+    #[serde(default)]
+    pub song: Vec<Song>,
+    /// Legacy `getStarred` responses use `entry` for songs.
+    #[serde(default, rename = "entry", skip_serializing)]
+    song_entry: Vec<Song>,
+}
+
+impl Starred2 {
+    /// Songs from either `song` or legacy `entry` arrays.
+    pub fn songs(&self) -> &[Song] {
+        if !self.song.is_empty() {
+            &self.song
+        } else {
+            &self.song_entry
+        }
+    }
+
+    pub fn normalize(mut self) -> Self {
+        if self.song.is_empty() && !self.song_entry.is_empty() {
+            self.song = std::mem::take(&mut self.song_entry);
+        }
+        self
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Starred2Envelope {
+    #[serde(rename = "subsonic-response")]
+    pub response: Starred2Body,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Starred2Body {
+    pub status: String,
+    pub error: Option<SubsonicError>,
+    pub starred2: Option<Starred2>,
+}
+
 fn deserialize_music_folder_list<'de, D>(deserializer: D) -> Result<Vec<MusicFolderRaw>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -679,6 +725,33 @@ mod tests {
         let env: PingEnvelope = serde_json::from_str(j).unwrap();
         assert_eq!(env.response.status, "ok");
         assert!(env.response.error.is_none());
+    }
+
+    #[test]
+    fn starred2_songs_from_legacy_entry() {
+        let j = r#"{"artist":[],"album":[],"entry":[{"id":"1","title":"Loved"}]}"#;
+        let starred: Starred2 = serde_json::from_str(j).unwrap();
+        let starred = starred.normalize();
+        assert_eq!(starred.songs().len(), 1);
+        assert_eq!(starred.songs()[0].id, "1");
+    }
+
+    #[test]
+    fn deserialize_starred2_envelope() {
+        let j = r#"{
+            "subsonic-response": {
+                "status": "ok",
+                "starred2": {
+                    "song": [{"id":"1","title":"Loved","albumId":"al1"}]
+                }
+            }
+        }"#;
+        let env: Starred2Envelope = serde_json::from_str(j).unwrap();
+        assert_eq!(env.response.status, "ok");
+        let starred = env.response.starred2.unwrap();
+        assert_eq!(starred.song.len(), 1);
+        assert_eq!(starred.song[0].id, "1");
+        assert_eq!(starred.song[0].album_id.as_deref(), Some("al1"));
     }
 
     #[test]

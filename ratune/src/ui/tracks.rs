@@ -64,6 +64,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         Some(LoadingState::Loaded(songs)) => {
             let make_label = |s: &ratune_subsonic::Song| {
                 let num = s.track.map(|n| format!("{n:>2}. ")).unwrap_or_default();
+                let star = if s.starred.is_some() { "★ " } else { "" };
                 let dur = s
                     .duration
                     .map(|d| {
@@ -72,7 +73,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                         format!("  {m}:{sec:02}")
                     })
                     .unwrap_or_default();
-                format!("{}{}{}", num, s.title, dur)
+                format!("{}{}{}{}", num, star, s.title, dur)
             };
 
             let visible: Vec<(usize, String)> =

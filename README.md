@@ -219,11 +219,13 @@ export SUBSONIC_PASS="your_password"
 [player]
 default_volume = 70
 max_bit_rate = 0
-queue_loop = true   # wrap queue after last track; toggle at runtime with R
+queue_loop = true
 
 [cache]
 enabled = true
 max_size_gb = 2
+# cache_starred = false         # prefetch favorite tracks while online (Subsonic star API); default: false
+# cache_starred_parallelism = 2 # concurrent favorite-track downloads when cache_starred is true
 
 [ui]
 # Only `album_art_backend` lives here; NP strip/queue/toggles → `[ui.nptab]`, `[ui.row_now_playing]`, …
@@ -236,6 +238,17 @@ preset = "dynamic"
 ```
 
 Remapping is done in `[keybinds]`; colors in `[theme]`; now-playing strip vs queue are different keys — see the sample and in-app help (`i`).
+
+### Favorites
+
+Ratune syncs favorites with your server through the Subsonic **star** / **unstar** / **getStarred2** API. Favorited items show a **★** in browse lists and the Now Playing queue.
+
+- **Toggle favorite:** `f` on the focused song, album, artist, or queue row (`toggle_favorite` in `[keybinds]`)
+- **Browse favorites:** `F` on the Browse tab — songs, albums, and artists from `getStarred2`
+- **Queue from favorites:** same keys as Browse (`Enter` to play, `a` / `A` to append, etc.)
+- **Albums and artists** can be favorited too (Navidrome supports all three via the star API)
+- **Offline:** the favorites list is cached at `~/.cache/ratune/favorites.json`; open `F` without a connection to browse the last sync and play tracks already in the audio cache
+- **`[cache].cache_starred = true`:** while online, prefetch favorite **songs** into the offline cache (same `max_size_gb` pool as play-time caching)
 
 ### Folder navigation (Browse)
 
@@ -334,6 +347,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `a` / `A` | Add track / add all |
 | `p` / `Space` | Play / pause |
 | `n` / `N` | Next / previous |
+| `f` / `F` | Toggle favorite / toggle favorites panel (Browse) |
 | `x` / `z` | Shuffle / unshuffle |
 | `R` | Toggle queue loop |
 | `+` / `-` | Volume |

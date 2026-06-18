@@ -138,6 +138,8 @@ queue_loop = true
 # home_section_prev   = "Shift+k"
 # home_refresh        = "r"          # home: refresh / re-roll where applicable
 # toggle_folder_browse = "Ctrl+b"   # browse: toggle folder view (needs [ui.browsetab] folder_navigation); "" disables
+# toggle_favorite     = "f"         # toggle favorite on focused song, album, or artist (Subsonic star)
+# favorites_overlay   = "Shift+f"   # favorites panel on Browse tab (`F`)
 
 # -----------------------------------------------------------------------------
 # [theme]
@@ -288,6 +290,8 @@ mode = "artists"
 # Lyrics — `[ui.nptab.lyrics_pane]` (enabled / visible / location), same idea as visualizer_pane.
 #   Lyrics and visualizer can both be visible; set each pane's `location` to split them (e.g. left/right).
 # queue_template — Per-row queue format; prefer `[ui.nptab.queue].queue_template`.
+#   Placeholders: {n} track # (` 3. `, plus `★ ` when favorited), {title},
+#   {album}, {duration}, {suffix}, {favorite} (legacy prefix; prefer {n}).
 # show_fzf_hint  — Empty-queue hint mentioning library picker when enabled.
 
 [ui.nptab]
@@ -317,7 +321,7 @@ left_width_percent = 50
 
 [ui.nptab.queue]
 position = "right"
-# queue_template = "{n}  {title:<40}  {artist:<25}  {duration:>5}"
+# queue_template = "{n}{title:<40}  {artist:<25}  {duration:>5}"
 
 # [ui.nptab.lyrics_pane]
 # enabled — If false, lyrics cannot be opened. Default: true.
@@ -430,10 +434,15 @@ notify_on_forced_index_refresh = true
 #
 # enabled     — Master switch. Default: true.
 # max_size_gb — Total on-disk budget for cached audio. Default: 2.0.
+# cache_starred — When true, prefetch favorite tracks while online (Subsonic getStarred2 /
+#   star API). Shares the same max_size_gb LRU pool as normal playback caching. Default: false.
+# cache_starred_parallelism — Concurrent favorite-track downloads. Default: 2.
 
 [cache]
 enabled = true
 max_size_gb = 2.0
+cache_starred = false
+cache_starred_parallelism = 2
 
 # -----------------------------------------------------------------------------
 # [scrobble] — Last.fm / Libre.fm + Subsonic play counts

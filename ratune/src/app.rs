@@ -9,9 +9,10 @@ use anyhow::Result;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use tokio::sync::mpsc;
+use tokio::sync::Semaphore;
 
 use ratune_player::{spawn_player, PlayerCommand, PlayerEvent, SampleBuffer};
-use ratune_subsonic::SubsonicClient;
+use ratune_subsonic::{StarItemType, SubsonicClient};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +23,9 @@ use crate::history::PlayRecord;
 use crate::keybinds::Keybinds;
 use crate::state::{
     folder_left_default_row, folder_preview_rows, ConfirmAction, DirectoryListing,
-    FolderBrowseState, FolderPreviewRow, GlobalConfirm, LibraryState, LoadingState, PlaybackState,
-    PlaylistFocus, PlaylistInputMode, PlaylistOverlay, QueueState,
+    FolderBrowseState, FolderPreviewRow, FavoritesCategory, FavoritesFocus, FavoritesOverlay,
+    GlobalConfirm, LibraryState, LoadingState, PlaybackState, PlaylistFocus, PlaylistInputMode,
+    PlaylistOverlay, QueueState,
 };
 use crate::theme::Theme;
 use image::{imageops::FilterType, DynamicImage};
@@ -338,6 +340,38 @@ pub enum LibraryUpdate {
         result: Result<(), String>,
         from_live: bool,
     },
+    /// Favorite (star) toggle completed or failed.
+    StarToggled {
+        id: String,
+        kind: FavoriteKind,
+        was_starred: bool,
+        error: Option<String>,
+    },
+    /// Starred tracks to prefetch into the offline cache (`song_id`, `album_id`).
+    PrefetchStarredCache(Vec<(String, String)>),
+    /// Starred library from `getStarred2` for the favorites overlay.
+    StarredFetched(Result<ratune_subsonic::Starred2, String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FavoriteKind {
+    Song,
+    Album,
+    Artist,
+}
+
+fn favorite_kind_to_star_item_type(kind: FavoriteKind) -> StarItemType {
+    match kind {
+        FavoriteKind::Song => StarItemType::Song,
+        FavoriteKind::Album => StarItemType::Album,
+        FavoriteKind::Artist => StarItemType::Artist,
+    }
+}
+
+struct FavoriteTarget {
+    id: String,
+    kind: FavoriteKind,
+    was_starred: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -508,6 +542,11 @@ pub struct App {
 
     // ── Playlist overlay (Phase 8) ────────────────────────────────────────────
     pub playlist_overlay: PlaylistOverlay,
+    pub favorites_overlay: FavoritesOverlay,
+    /// Last `getStarred2` payload; re-applied when browse caches load after startup.
+    server_starred: Option<ratune_subsonic::Starred2>,
+    /// Unix seconds when the on-disk favorites snapshot was last refreshed.
+    favorites_snapshot_refreshed_at: Option<u64>,
     /// Floating picker for "add track to playlist" (None when not open).
     pub playlist_picker: Option<PlaylistPicker>,
     /// Transient status message shown in the status bar. Second element is when
@@ -627,7 +666,7 @@ impl App {
                 eprintln!("warn: could not load scrobble queue: {e:#}");
                 crate::scrobble_queue::ScrobbleQueue::default()
             });
-        Ok(Self {
+        let mut app = Self {
             active_tab: Tab::Home,
             browser_focus: BrowserColumn::Artists,
             library: LibraryState::default(),
@@ -684,6 +723,9 @@ impl App {
             home: HomeState::default(),
             pending_artist_select: None,
             playlist_overlay: PlaylistOverlay::default(),
+            favorites_overlay: FavoritesOverlay::default(),
+            server_starred: None,
+            favorites_snapshot_refreshed_at: None,
             playlist_picker: None,
             status_flash: None,
             queue_viewport_rows: 12,
@@ -725,7 +767,20 @@ impl App {
             np_kitty_prepared: None,
             #[cfg(target_os = "linux")]
             mpris: None,
-        })
+        };
+        app.load_persisted_favorites();
+        Ok(app)
+    }
+
+    /// Restore the on-disk favorites snapshot into browse caches (offline-capable).
+    fn load_persisted_favorites(&mut self) {
+        let path = crate::favorites_cache::default_path();
+        let Some((starred, refreshed_at)) = crate::favorites_cache::load(&path) else {
+            return;
+        };
+        self.favorites_snapshot_refreshed_at = Some(refreshed_at);
+        self.server_starred = Some(starred.clone());
+        self.sync_from_server_starred(&starred, false);
     }
 
     /// `album_art_backend = "kitty-apc"`: Kitty APC post-draw path is active.
@@ -2111,6 +2166,7 @@ impl App {
                     }
                     Err(e) => LoadingState::Error(e),
                 };
+                self.merge_server_starred();
             }
             LibraryUpdate::Albums { artist_id, result } => {
                 // Is this update for the currently-selected artist?
@@ -2164,6 +2220,7 @@ impl App {
                         Err(e) => LoadingState::Error(e),
                     },
                 );
+                self.merge_server_starred();
             }
             LibraryUpdate::Tracks { album_id, result } => {
                 // Is this update for the currently-selected album?
@@ -2189,6 +2246,7 @@ impl App {
                     Err(e) => LoadingState::Error(e),
                 };
                 self.library.tracks.insert(album_id, loaded);
+                self.merge_server_starred();
             }
             LibraryUpdate::AllTracksForArtist {
                 mut songs,
@@ -2435,6 +2493,7 @@ impl App {
                         self.library_index_tracks = tracks;
                         self.library_index_by_id =
                             crate::library_index::index_by_id(&self.library_index_tracks);
+                        self.merge_server_starred();
                         let msg = if forced {
                             "Library index refresh complete"
                         } else {
@@ -2487,6 +2546,80 @@ impl App {
                 result,
                 from_live,
             } => self.handle_scrobble_result(entry, artist, title, result, from_live),
+            LibraryUpdate::StarToggled {
+                id,
+                kind,
+                was_starred,
+                error,
+            } => {
+                if let Some(e) = error {
+                    self.flash_status_secs(format!("Favorite failed: {e}"), 5);
+                } else {
+                    let new_starred = if was_starred {
+                        None
+                    } else {
+                        Some(String::new())
+                    };
+                    self.set_item_starred(kind, &id, new_starred);
+                    self.flash_status(if was_starred {
+                        "Removed from favorites"
+                    } else {
+                        "Added to favorites"
+                    });
+                    if !was_starred
+                        && kind == FavoriteKind::Song
+                        && self.config.cache_enabled
+                        && self.config.cache_starred
+                    {
+                        let album_id = self
+                            .library_index_by_id
+                            .get(&id)
+                            .and_then(|s| s.album_id.clone())
+                            .or_else(|| {
+                                self.queue
+                                    .songs
+                                    .iter()
+                                    .find(|s| s.id == id)
+                                    .and_then(|s| s.album_id.clone())
+                            });
+                        if let Some(album_id) = album_id.filter(|a| !a.is_empty()) {
+                            if !self.cache.get_const(&id) {
+                                self.spawn_cache_download(&id, &album_id);
+                            }
+                        }
+                    }
+                    self.fetch_starred();
+                }
+            }
+            LibraryUpdate::PrefetchStarredCache(tracks) => {
+                let uncached: Vec<_> = tracks
+                    .into_iter()
+                    .filter(|(sid, _)| !self.cache.get_const(sid))
+                    .collect();
+                if !uncached.is_empty() {
+                    self.spawn_prefetch_starred_downloads(uncached);
+                }
+            }
+            LibraryUpdate::StarredFetched(result) => {
+                self.favorites_overlay.loading = false;
+                match result {
+                    Ok(starred) => {
+                        self.favorites_overlay.error = None;
+                        self.favorites_overlay.offline_snapshot = false;
+                        self.apply_server_starred(starred);
+                        self.maybe_prefetch_starred_cache();
+                    }
+                    Err(e) => {
+                        if self.favorites_overlay.visible {
+                            if self.open_offline_favorites_snapshot() {
+                                self.favorites_overlay.error = None;
+                            } else {
+                                self.favorites_overlay.error = Some(e);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3030,6 +3163,417 @@ impl App {
         });
     }
 
+    /// Item targeted by the favorite toggle key.
+    fn favorite_target(&self) -> Option<FavoriteTarget> {
+        if self.favorites_overlay.visible {
+            let idx = self.favorites_overlay.selected_item_index;
+            return match self.favorites_overlay.category {
+                FavoritesCategory::Songs => self.favorites_overlay.songs.get(idx).map(|s| {
+                    FavoriteTarget {
+                        id: s.id.clone(),
+                        kind: FavoriteKind::Song,
+                        was_starred: s.starred.is_some(),
+                    }
+                }),
+                FavoritesCategory::Albums => self.favorites_overlay.albums.get(idx).map(|a| {
+                    FavoriteTarget {
+                        id: a.id.clone(),
+                        kind: FavoriteKind::Album,
+                        was_starred: a.starred.is_some(),
+                    }
+                }),
+                FavoritesCategory::Artists => self.favorites_overlay.artists.get(idx).map(|a| {
+                    FavoriteTarget {
+                        id: a.id.clone(),
+                        kind: FavoriteKind::Artist,
+                        was_starred: a.starred.is_some(),
+                    }
+                }),
+            };
+        }
+        if self.active_tab == Tab::Browser && !self.browse_files() {
+            match self.browser_focus {
+                BrowserColumn::Artists => {
+                    return self.library.current_artist().map(|a| FavoriteTarget {
+                        id: a.id.clone(),
+                        kind: FavoriteKind::Artist,
+                        was_starred: a.starred.is_some(),
+                    });
+                }
+                BrowserColumn::Albums => {
+                    return self.library.current_album().map(|a| FavoriteTarget {
+                        id: a.id.clone(),
+                        kind: FavoriteKind::Album,
+                        was_starred: a.starred.is_some(),
+                    });
+                }
+                BrowserColumn::Tracks => {}
+            }
+            if let Some(song) = self.library.current_track() {
+                return Some(FavoriteTarget {
+                    id: song.id.clone(),
+                    kind: FavoriteKind::Song,
+                    was_starred: song.starred.is_some(),
+                });
+            }
+            return None;
+        }
+        if self.active_tab == Tab::Browser && self.browse_files() {
+            if let Some(song) = self
+                .folders
+                .current_preview_track(self.browser_column_filter(BrowserColumn::Tracks))
+            {
+                return Some(FavoriteTarget {
+                    id: song.id.clone(),
+                    kind: FavoriteKind::Song,
+                    was_starred: song.starred.is_some(),
+                });
+            }
+            return None;
+        }
+        if self.active_tab == Tab::NowPlaying {
+            if let Some(song) = self.queue.songs.get(self.queue.cursor) {
+                return Some(FavoriteTarget {
+                    id: song.id.clone(),
+                    kind: FavoriteKind::Song,
+                    was_starred: song.starred.is_some(),
+                });
+            }
+            if let Some(song) = self.playback.current_song.as_ref() {
+                return Some(FavoriteTarget {
+                    id: song.id.clone(),
+                    kind: FavoriteKind::Song,
+                    was_starred: song.starred.is_some(),
+                });
+            }
+            return None;
+        }
+        self.playback.current_song.as_ref().map(|song| FavoriteTarget {
+            id: song.id.clone(),
+            kind: FavoriteKind::Song,
+            was_starred: song.starred.is_some(),
+        })
+    }
+
+    fn set_item_starred(&mut self, kind: FavoriteKind, item_id: &str, starred: Option<String>) {
+        match kind {
+            FavoriteKind::Song => self.set_song_starred(item_id, starred),
+            FavoriteKind::Album => {
+                for state in self.library.albums.values_mut() {
+                    if let LoadingState::Loaded(albums) = state {
+                        for a in albums.iter_mut().filter(|a| a.id == item_id) {
+                            a.starred = starred.clone();
+                        }
+                    }
+                }
+                for a in self.favorites_overlay.albums.iter_mut().filter(|a| a.id == item_id) {
+                    a.starred = starred.clone();
+                }
+                if starred.is_none() {
+                    self.favorites_overlay
+                        .albums
+                        .retain(|a| a.id != item_id);
+                    let max = self.favorites_overlay.item_count().saturating_sub(1);
+                    self.favorites_overlay.selected_item_index =
+                        self.favorites_overlay.selected_item_index.min(max);
+                }
+            }
+            FavoriteKind::Artist => {
+                if let LoadingState::Loaded(artists) = &mut self.library.artists {
+                    for a in artists.iter_mut().filter(|a| a.id == item_id) {
+                        a.starred = starred.clone();
+                    }
+                }
+                for a in self
+                    .favorites_overlay
+                    .artists
+                    .iter_mut()
+                    .filter(|a| a.id == item_id)
+                {
+                    a.starred = starred.clone();
+                }
+                if starred.is_none() {
+                    self.favorites_overlay
+                        .artists
+                        .retain(|a| a.id != item_id);
+                    let max = self.favorites_overlay.item_count().saturating_sub(1);
+                    self.favorites_overlay.selected_item_index =
+                        self.favorites_overlay.selected_item_index.min(max);
+                }
+            }
+        }
+    }
+
+    /// Update `starred` everywhere a song appears in local state.
+    fn set_song_starred(&mut self, song_id: &str, starred: Option<String>) {
+        for state in self.library.tracks.values_mut() {
+            if let LoadingState::Loaded(songs) = state {
+                for s in songs.iter_mut().filter(|s| s.id == song_id) {
+                    s.starred = starred.clone();
+                }
+            }
+        }
+        for s in self.queue.songs.iter_mut().filter(|s| s.id == song_id) {
+            s.starred = starred.clone();
+        }
+        if let Some(s) = self.playback.current_song.as_mut() {
+            if s.id == song_id {
+                s.starred = starred.clone();
+            }
+        }
+        for state in self.folders.listings.values_mut() {
+            if let LoadingState::Loaded(li) = state {
+                for s in li.tracks.iter_mut().filter(|s| s.id == song_id) {
+                    s.starred = starred.clone();
+                }
+            }
+        }
+        if let LoadingState::Loaded(tracks) = &mut self.playlist_overlay.tracks {
+            for s in tracks.iter_mut().filter(|s| s.id == song_id) {
+                s.starred = starred.clone();
+            }
+        }
+        if let Some(s) = self.library_index_by_id.get_mut(song_id) {
+            s.starred = starred.clone();
+        }
+        for s in self
+            .library_index_tracks
+            .iter_mut()
+            .filter(|s| s.id == song_id)
+        {
+            s.starred = starred.clone();
+        }
+        if starred.is_none() {
+            self.favorites_overlay
+                .songs
+                .retain(|s| s.id != song_id);
+            let max = self.favorites_overlay.item_count().saturating_sub(1);
+            self.favorites_overlay.selected_item_index =
+                self.favorites_overlay.selected_item_index.min(max);
+        }
+    }
+
+    fn clear_stale_stars(&mut self, kind: FavoriteKind, server_ids: &HashSet<String>) {
+        let stale: Vec<String> = match kind {
+            FavoriteKind::Song => {
+                let mut stale: HashSet<String> = self
+                    .library_index_tracks
+                    .iter()
+                    .filter(|s| s.starred.is_some() && !server_ids.contains(&s.id))
+                    .map(|s| s.id.clone())
+                    .collect();
+                for s in &self.queue.songs {
+                    if s.starred.is_some() && !server_ids.contains(&s.id) {
+                        stale.insert(s.id.clone());
+                    }
+                }
+                for state in self.library.tracks.values() {
+                    if let LoadingState::Loaded(songs) = state {
+                        for s in songs {
+                            if s.starred.is_some() && !server_ids.contains(&s.id) {
+                                stale.insert(s.id.clone());
+                            }
+                        }
+                    }
+                }
+                stale.into_iter().collect()
+            }
+            FavoriteKind::Album => self
+                .library
+                .albums
+                .values()
+                .filter_map(|state| {
+                    if let LoadingState::Loaded(albums) = state {
+                        Some(
+                            albums
+                                .iter()
+                                .filter(|a| a.starred.is_some() && !server_ids.contains(&a.id))
+                                .map(|a| a.id.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
+                .collect(),
+            FavoriteKind::Artist => {
+                if let LoadingState::Loaded(artists) = &self.library.artists {
+                    artists
+                        .iter()
+                        .filter(|a| a.starred.is_some() && !server_ids.contains(&a.id))
+                        .map(|a| a.id.clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            }
+        };
+        for id in stale {
+            self.set_item_starred(kind, &id, None);
+        }
+    }
+
+    /// Merge server starred state into browse caches, queue, and the favorites overlay.
+    fn apply_server_starred(&mut self, starred: ratune_subsonic::Starred2) {
+        let starred = starred.normalize();
+        let path = crate::favorites_cache::default_path();
+        match crate::favorites_cache::save(&path, &starred) {
+            Ok(ts) => self.favorites_snapshot_refreshed_at = Some(ts),
+            Err(e) => eprintln!("favorites cache save: {e}"),
+        }
+        self.server_starred = Some(starred.clone());
+        self.sync_from_server_starred(&starred, true);
+    }
+
+    /// Re-apply cached starred marks after browse/index data loads (no stale clearing).
+    fn merge_server_starred(&mut self) {
+        if let Some(starred) = self.server_starred.clone() {
+            self.sync_from_server_starred(&starred, false);
+        }
+    }
+
+    fn sync_from_server_starred(&mut self, starred: &ratune_subsonic::Starred2, clear_stale: bool) {
+        let songs: Vec<_> = starred.songs().to_vec();
+        let albums = &starred.album;
+        let artists = &starred.artist;
+
+        if clear_stale {
+            let song_ids: HashSet<String> = songs.iter().map(|s| s.id.clone()).collect();
+            let album_ids: HashSet<String> = albums.iter().map(|a| a.id.clone()).collect();
+            let artist_ids: HashSet<String> = artists.iter().map(|a| a.id.clone()).collect();
+            self.clear_stale_stars(FavoriteKind::Song, &song_ids);
+            self.clear_stale_stars(FavoriteKind::Album, &album_ids);
+            self.clear_stale_stars(FavoriteKind::Artist, &artist_ids);
+        }
+
+        for song in &songs {
+            let starred_at = song
+                .starred
+                .clone()
+                .or_else(|| Some(String::new()));
+            self.set_item_starred(FavoriteKind::Song, &song.id, starred_at);
+        }
+        for album in albums {
+            let starred_at = album
+                .starred
+                .clone()
+                .or_else(|| Some(String::new()));
+            self.set_item_starred(FavoriteKind::Album, &album.id, starred_at);
+        }
+        for artist in artists {
+            let starred_at = artist
+                .starred
+                .clone()
+                .or_else(|| Some(String::new()));
+            self.set_item_starred(FavoriteKind::Artist, &artist.id, starred_at);
+        }
+
+        self.favorites_overlay.songs = songs;
+        self.favorites_overlay.albums = albums.clone();
+        self.favorites_overlay.artists = artists.clone();
+        if self.favorites_overlay.visible {
+            self.favorites_overlay.sync_category_from_index();
+        }
+    }
+
+    fn spawn_toggle_star(&self, id: String, kind: FavoriteKind, was_starred: bool) {
+        if !self.remote_available() {
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        let item_type = favorite_kind_to_star_item_type(kind);
+        tokio::spawn(async move {
+            let result = client.set_starred(item_type, &id, !was_starred).await;
+            let error = result.err().map(|e| e.to_string());
+            let _ = tx
+                .send(LibraryUpdate::StarToggled {
+                    id,
+                    kind,
+                    was_starred,
+                    error,
+                })
+                .await;
+        });
+    }
+
+    fn maybe_prefetch_starred_cache(&self) {
+        if !self.config.cache_enabled || !self.config.cache_starred || !self.remote_available() {
+            return;
+        }
+        let Some(ref starred) = self.server_starred else {
+            return;
+        };
+        let pairs: Vec<(String, String)> = starred
+            .songs()
+            .iter()
+            .filter_map(|s| {
+                let album_id = s.album_id.as_deref()?;
+                if album_id.is_empty() {
+                    None
+                } else {
+                    Some((s.id.clone(), album_id.to_string()))
+                }
+            })
+            .collect();
+        if pairs.is_empty() {
+            return;
+        }
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(LibraryUpdate::PrefetchStarredCache(pairs)).await;
+        });
+    }
+
+    /// Show the last on-disk favorites snapshot when the server is unreachable.
+    fn open_offline_favorites_snapshot(&mut self) -> bool {
+        if self.server_starred.is_none() {
+            self.load_persisted_favorites();
+        }
+        let has_items = self
+            .server_starred
+            .as_ref()
+            .is_some_and(|s| !s.songs().is_empty() || !s.album.is_empty() || !s.artist.is_empty());
+        if has_items {
+            self.favorites_overlay.offline_snapshot = true;
+            self.favorites_overlay.snapshot_refreshed_at = self.favorites_snapshot_refreshed_at;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn spawn_prefetch_starred_downloads(&self, tracks: Vec<(String, String)>) {
+        let parallelism = self.config.cache_starred_parallelism.max(1);
+        let max_bit_rate = self.config.max_bit_rate;
+        let subsonic = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let sem = Arc::new(Semaphore::new(parallelism));
+            for (song_id, album_id) in tracks {
+                let sem = sem.clone();
+                let subsonic = subsonic.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let _permit = sem.acquire().await.ok();
+                    let url = subsonic.stream_url(&song_id, max_bit_rate);
+                    if let Ok(resp) = reqwest::Client::new().get(&url).send().await {
+                        if let Ok(bytes) = resp.bytes().await {
+                            let _ = tx
+                                .send(LibraryUpdate::CacheTrack {
+                                    song_id,
+                                    album_id,
+                                    bytes: bytes.to_vec(),
+                                })
+                                .await;
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     // ── Action dispatch ───────────────────────────────────────────────────────
 
     pub fn dispatch(&mut self, action: Action) {
@@ -3066,6 +3610,16 @@ impl App {
             }
             Action::HelpScrollDown => {
                 self.help_scroll = self.help_scroll.saturating_add(1);
+            }
+            Action::ToggleFavorite => {
+                if !self.remote_available() {
+                    self.flash_status_secs("Server offline — cannot change favorites", 4);
+                } else if let Some(target) = self.favorite_target() {
+                    self.spawn_toggle_star(target.id.clone(), target.kind, target.was_starred);
+                    self.flash_status("Updating favorite…");
+                } else {
+                    self.flash_status("No item selected");
+                }
             }
             Action::LibraryIndexRefresh => {
                 if self.pending_global_confirm.is_some() {
@@ -3625,7 +4179,7 @@ impl App {
             | Action::PlaylistDelete
             | Action::PlaylistRename
             | Action::PlaylistRemoveTrack
-            | Action::BrowserAddToPlaylist
+            |             Action::BrowserAddToPlaylist
             | Action::PlaylistPickerSelect
             | Action::PlaylistPickerCancel
             | Action::PlaylistPickerScrollUp
@@ -3636,6 +4190,15 @@ impl App {
             | Action::PlaylistConfirmYes
             | Action::PlaylistConfirmNo => {
                 self.handle_playlist_mutation(action);
+            }
+            Action::ToggleFavoritesOverlay
+            | Action::FavoritesScrollUp
+            | Action::FavoritesScrollDown
+            | Action::FavoritesFocusCategories
+            | Action::FavoritesFocusItems
+            | Action::FavoritesPlay
+            | Action::FavoritesAppend => {
+                self.handle_favorites_action(action);
             }
             Action::None => {}
         }
@@ -4918,6 +5481,7 @@ impl App {
                 if self.playlist_overlay.visible {
                     self.playlist_overlay.visible = false;
                 } else {
+                    self.favorites_overlay.visible = false;
                     self.playlist_overlay.visible = true;
                     if matches!(self.playlist_overlay.playlists, LoadingState::NotLoaded) {
                         if self.remote_available() {
@@ -5045,6 +5609,194 @@ impl App {
                 self.playlist_overlay.visible = false;
             }
             _ => {}
+        }
+    }
+
+    // ── Favorites overlay ─────────────────────────────────────────────────────
+
+    pub fn fetch_starred(&self) {
+        if !self.remote_available() {
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let result = client.get_starred2().await.map_err(|e| e.to_string());
+            let _ = tx.send(LibraryUpdate::StarredFetched(result)).await;
+        });
+    }
+
+    pub fn handle_favorites_action(&mut self, action: Action) {
+        match action {
+            Action::ToggleFavoritesOverlay => {
+                if self.favorites_overlay.visible {
+                    self.favorites_overlay.visible = false;
+                } else {
+                    self.playlist_overlay.visible = false;
+                    self.favorites_overlay.visible = true;
+                    self.favorites_overlay.selected_category_index = 0;
+                    self.favorites_overlay.selected_item_index = 0;
+                    self.favorites_overlay.category = FavoritesCategory::Songs;
+                    self.favorites_overlay.focus = FavoritesFocus::Categories;
+                    self.favorites_overlay.loading = true;
+                    self.favorites_overlay.error = None;
+                    self.favorites_overlay.offline_snapshot = false;
+                    if self.remote_available() {
+                        self.fetch_starred();
+                    } else if self.open_offline_favorites_snapshot() {
+                        self.favorites_overlay.loading = false;
+                    } else {
+                        self.favorites_overlay.loading = false;
+                        self.favorites_overlay.error =
+                            Some("Server offline — no favorites snapshot".to_string());
+                    }
+                }
+            }
+            Action::FavoritesScrollUp => match self.favorites_overlay.focus {
+                FavoritesFocus::Categories => {
+                    self.favorites_overlay.selected_category_index =
+                        self.favorites_overlay.selected_category_index.saturating_sub(1);
+                    self.favorites_overlay.selected_item_index = 0;
+                    self.favorites_overlay.sync_category_from_index();
+                }
+                FavoritesFocus::Items => {
+                    self.favorites_overlay.selected_item_index =
+                        self.favorites_overlay.selected_item_index.saturating_sub(1);
+                }
+            },
+            Action::FavoritesScrollDown => match self.favorites_overlay.focus {
+                FavoritesFocus::Categories => {
+                    let max = FavoritesCategory::ALL.len().saturating_sub(1);
+                    self.favorites_overlay.selected_category_index =
+                        (self.favorites_overlay.selected_category_index + 1).min(max);
+                    self.favorites_overlay.selected_item_index = 0;
+                    self.favorites_overlay.sync_category_from_index();
+                }
+                FavoritesFocus::Items => {
+                    let max = self.favorites_overlay.item_count().saturating_sub(1);
+                    self.favorites_overlay.selected_item_index =
+                        (self.favorites_overlay.selected_item_index + 1).min(max);
+                }
+            },
+            Action::FavoritesFocusCategories => {
+                self.favorites_overlay.focus = FavoritesFocus::Categories;
+            }
+            Action::FavoritesFocusItems => {
+                self.favorites_overlay.focus = FavoritesFocus::Items;
+            }
+            Action::FavoritesPlay => {
+                self.favorites_queue_action(true);
+                self.favorites_overlay.visible = false;
+            }
+            Action::FavoritesAppend => {
+                self.favorites_queue_action(false);
+                self.favorites_overlay.visible = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn favorites_queue_action(&mut self, replace: bool) {
+        // Replace/play uses the item list on the right; category pane only picks the section.
+        let idx = self.favorites_overlay.selected_item_index;
+        match self.favorites_overlay.category {
+            FavoritesCategory::Songs => {
+                let songs = if self.favorites_overlay.focus == FavoritesFocus::Categories {
+                    self.favorites_overlay.songs.clone()
+                } else if let Some(song) = self.favorites_overlay.songs.get(idx) {
+                    vec![song.clone()]
+                } else {
+                    return;
+                };
+                self.favorites_apply_songs(&songs, replace);
+            }
+            FavoritesCategory::Albums => {
+                if self.favorites_overlay.offline_snapshot && !self.remote_available() {
+                    self.flash_status_secs(
+                        "Album favorites need a server connection to load tracks",
+                        5,
+                    );
+                    return;
+                }
+                if let Some(album) = self.favorites_overlay.albums.get(idx) {
+                    if replace {
+                        self.queue.songs.clear();
+                        self.queue.cursor = 0;
+                        self.queue.scroll = 0;
+                        self.queue.clear_shuffle_state();
+                        self.fetch_and_replace_queue_with_album(album.id.clone(), true);
+                    } else {
+                        self.fetch_and_append_album_to_queue(album.id.clone());
+                    }
+                }
+            }
+            FavoritesCategory::Artists => {
+                if self.favorites_overlay.offline_snapshot && !self.remote_available() {
+                    self.flash_status_secs(
+                        "Artist favorites need a server connection to load tracks",
+                        5,
+                    );
+                    return;
+                }
+                if let Some(artist) = self.favorites_overlay.artists.get(idx) {
+                    if replace {
+                        self.queue.songs.clear();
+                        self.queue.cursor = 0;
+                        self.queue.scroll = 0;
+                        self.queue.clear_shuffle_state();
+                        self.fetch_all_tracks_for_artist(artist.id.clone(), true, false);
+                    } else {
+                        self.fetch_all_tracks_for_artist(artist.id.clone(), false, false);
+                    }
+                }
+            }
+        }
+    }
+
+    fn favorites_apply_songs(&mut self, songs: &[ratune_subsonic::Song], replace: bool) {
+        if songs.is_empty() {
+            return;
+        }
+        let mut songs: Vec<ratune_subsonic::Song> = songs.to_vec();
+        if self.favorites_overlay.offline_snapshot && !self.remote_available() {
+            let before = songs.len();
+            songs.retain(|s| self.cache.get_const(&s.id));
+            if songs.is_empty() {
+                self.flash_status_secs(
+                    if before == 0 {
+                        "No favorite tracks selected"
+                    } else {
+                        "No cached favorite tracks available offline"
+                    },
+                    5,
+                );
+                return;
+            }
+            if songs.len() < before {
+                self.flash_status_secs(
+                    format!(
+                        "Queued {} cached track(s) ({} not downloaded)",
+                        songs.len(),
+                        before - songs.len()
+                    ),
+                    4,
+                );
+            }
+        }
+        if replace {
+            self.queue.songs.clear();
+            self.queue.cursor = 0;
+            self.queue.scroll = 0;
+            self.queue.clear_shuffle_state();
+        }
+        let was_empty = self.queue.songs.is_empty();
+        for song in songs {
+            self.queue.push(song.clone());
+        }
+        if (replace || was_empty) && !self.queue.songs.is_empty() {
+            self.queue.cursor = 0;
+            self.queue.scroll = 0;
+            self.play_current();
         }
     }
 
