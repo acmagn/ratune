@@ -23,7 +23,7 @@ use crate::history::PlayRecord;
 use crate::keybinds::Keybinds;
 use crate::state::{
     folder_left_default_row, folder_preview_rows, ConfirmAction, DirectoryListing,
-    FolderBrowseState, FolderPreviewRow, FavoritesCategory, FavoritesFocus, FavoritesOverlay,
+    FavoritesCategory, FavoritesFocus, FavoritesOverlay, FolderBrowseState, FolderPreviewRow,
     GlobalConfirm, LibraryState, LoadingState, PlaybackState, PlaylistFocus, PlaylistInputMode,
     PlaylistOverlay, QueueState,
 };
@@ -3168,27 +3168,36 @@ impl App {
         if self.favorites_overlay.visible {
             let idx = self.favorites_overlay.selected_item_index;
             return match self.favorites_overlay.category {
-                FavoritesCategory::Songs => self.favorites_overlay.songs.get(idx).map(|s| {
-                    FavoriteTarget {
-                        id: s.id.clone(),
-                        kind: FavoriteKind::Song,
-                        was_starred: s.starred.is_some(),
-                    }
-                }),
-                FavoritesCategory::Albums => self.favorites_overlay.albums.get(idx).map(|a| {
-                    FavoriteTarget {
-                        id: a.id.clone(),
-                        kind: FavoriteKind::Album,
-                        was_starred: a.starred.is_some(),
-                    }
-                }),
-                FavoritesCategory::Artists => self.favorites_overlay.artists.get(idx).map(|a| {
-                    FavoriteTarget {
-                        id: a.id.clone(),
-                        kind: FavoriteKind::Artist,
-                        was_starred: a.starred.is_some(),
-                    }
-                }),
+                FavoritesCategory::Songs => {
+                    self.favorites_overlay
+                        .songs
+                        .get(idx)
+                        .map(|s| FavoriteTarget {
+                            id: s.id.clone(),
+                            kind: FavoriteKind::Song,
+                            was_starred: s.starred.is_some(),
+                        })
+                }
+                FavoritesCategory::Albums => {
+                    self.favorites_overlay
+                        .albums
+                        .get(idx)
+                        .map(|a| FavoriteTarget {
+                            id: a.id.clone(),
+                            kind: FavoriteKind::Album,
+                            was_starred: a.starred.is_some(),
+                        })
+                }
+                FavoritesCategory::Artists => {
+                    self.favorites_overlay
+                        .artists
+                        .get(idx)
+                        .map(|a| FavoriteTarget {
+                            id: a.id.clone(),
+                            kind: FavoriteKind::Artist,
+                            was_starred: a.starred.is_some(),
+                        })
+                }
             };
         }
         if self.active_tab == Tab::Browser && !self.browse_files() {
@@ -3248,11 +3257,14 @@ impl App {
             }
             return None;
         }
-        self.playback.current_song.as_ref().map(|song| FavoriteTarget {
-            id: song.id.clone(),
-            kind: FavoriteKind::Song,
-            was_starred: song.starred.is_some(),
-        })
+        self.playback
+            .current_song
+            .as_ref()
+            .map(|song| FavoriteTarget {
+                id: song.id.clone(),
+                kind: FavoriteKind::Song,
+                was_starred: song.starred.is_some(),
+            })
     }
 
     fn set_item_starred(&mut self, kind: FavoriteKind, item_id: &str, starred: Option<String>) {
@@ -3266,13 +3278,16 @@ impl App {
                         }
                     }
                 }
-                for a in self.favorites_overlay.albums.iter_mut().filter(|a| a.id == item_id) {
+                for a in self
+                    .favorites_overlay
+                    .albums
+                    .iter_mut()
+                    .filter(|a| a.id == item_id)
+                {
                     a.starred = starred.clone();
                 }
                 if starred.is_none() {
-                    self.favorites_overlay
-                        .albums
-                        .retain(|a| a.id != item_id);
+                    self.favorites_overlay.albums.retain(|a| a.id != item_id);
                     let max = self.favorites_overlay.item_count().saturating_sub(1);
                     self.favorites_overlay.selected_item_index =
                         self.favorites_overlay.selected_item_index.min(max);
@@ -3293,9 +3308,7 @@ impl App {
                     a.starred = starred.clone();
                 }
                 if starred.is_none() {
-                    self.favorites_overlay
-                        .artists
-                        .retain(|a| a.id != item_id);
+                    self.favorites_overlay.artists.retain(|a| a.id != item_id);
                     let max = self.favorites_overlay.item_count().saturating_sub(1);
                     self.favorites_overlay.selected_item_index =
                         self.favorites_overlay.selected_item_index.min(max);
@@ -3344,9 +3357,7 @@ impl App {
             s.starred = starred.clone();
         }
         if starred.is_none() {
-            self.favorites_overlay
-                .songs
-                .retain(|s| s.id != song_id);
+            self.favorites_overlay.songs.retain(|s| s.id != song_id);
             let max = self.favorites_overlay.item_count().saturating_sub(1);
             self.favorites_overlay.selected_item_index =
                 self.favorites_overlay.selected_item_index.min(max);
@@ -3448,24 +3459,15 @@ impl App {
         }
 
         for song in &songs {
-            let starred_at = song
-                .starred
-                .clone()
-                .or_else(|| Some(String::new()));
+            let starred_at = song.starred.clone().or_else(|| Some(String::new()));
             self.set_item_starred(FavoriteKind::Song, &song.id, starred_at);
         }
         for album in albums {
-            let starred_at = album
-                .starred
-                .clone()
-                .or_else(|| Some(String::new()));
+            let starred_at = album.starred.clone().or_else(|| Some(String::new()));
             self.set_item_starred(FavoriteKind::Album, &album.id, starred_at);
         }
         for artist in artists {
-            let starred_at = artist
-                .starred
-                .clone()
-                .or_else(|| Some(String::new()));
+            let starred_at = artist.starred.clone().or_else(|| Some(String::new()));
             self.set_item_starred(FavoriteKind::Artist, &artist.id, starred_at);
         }
 
@@ -4179,7 +4181,7 @@ impl App {
             | Action::PlaylistDelete
             | Action::PlaylistRename
             | Action::PlaylistRemoveTrack
-            |             Action::BrowserAddToPlaylist
+            | Action::BrowserAddToPlaylist
             | Action::PlaylistPickerSelect
             | Action::PlaylistPickerCancel
             | Action::PlaylistPickerScrollUp
@@ -5654,8 +5656,10 @@ impl App {
             }
             Action::FavoritesScrollUp => match self.favorites_overlay.focus {
                 FavoritesFocus::Categories => {
-                    self.favorites_overlay.selected_category_index =
-                        self.favorites_overlay.selected_category_index.saturating_sub(1);
+                    self.favorites_overlay.selected_category_index = self
+                        .favorites_overlay
+                        .selected_category_index
+                        .saturating_sub(1);
                     self.favorites_overlay.selected_item_index = 0;
                     self.favorites_overlay.sync_category_from_index();
                 }

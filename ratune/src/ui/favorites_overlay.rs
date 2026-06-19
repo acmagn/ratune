@@ -161,16 +161,18 @@ fn render_items(
         .style(style_with_bg(theme.background));
 
     if overlay.loading {
-        let list = List::new(vec![ListItem::new("Loading…").style(Style::default().fg(theme.dimmed))])
-            .block(block);
+        let list = List::new(vec![
+            ListItem::new("Loading…").style(Style::default().fg(theme.dimmed))
+        ])
+        .block(block);
         frame.render_widget(list, area);
         return;
     }
 
     if let Some(ref e) = overlay.error {
-        let list = List::new(vec![ListItem::new(format!("Error: {e}")).style(
-            Style::default().fg(accent),
-        )])
+        let list = List::new(vec![
+            ListItem::new(format!("Error: {e}")).style(Style::default().fg(accent))
+        ])
         .block(block);
         frame.render_widget(list, area);
         return;
@@ -230,8 +232,7 @@ fn render_items(
                     .artists
                     .iter()
                     .map(|a| {
-                        ListItem::new(a.name.as_str())
-                            .style(Style::default().fg(theme.foreground))
+                        ListItem::new(a.name.as_str()).style(Style::default().fg(theme.foreground))
                     })
                     .collect();
                 (rows, "")

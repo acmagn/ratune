@@ -30,8 +30,7 @@ use crate::models::{
     LegacyLyricsEnvelope, LyricLine, LyricsBySongIdEnvelope, MusicDirectory,
     MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope, PingEnvelope, Playlist,
     PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
-    SearchEnvelope, SearchResult3, Song, SongEnvelope, Starred2, Starred2Envelope,
-    SubsonicLibrary,
+    SearchEnvelope, SearchResult3, Song, SongEnvelope, Starred2, Starred2Envelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -624,7 +623,12 @@ impl SubsonicClient {
     ///
     /// Uses GET with `id`, matching Navidrome's web UI and typical Subsonic clients.
     /// Navidrome resolves the entity type (album → artist → song) from the ID.
-    pub async fn set_starred(&self, item_type: StarItemType, id: &str, starred: bool) -> Result<()> {
+    pub async fn set_starred(
+        &self,
+        item_type: StarItemType,
+        id: &str,
+        starred: bool,
+    ) -> Result<()> {
         let mut params = self.auth_params();
         match item_type {
             StarItemType::Song => params.push(("id", id.to_string())),
