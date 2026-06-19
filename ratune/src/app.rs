@@ -1820,8 +1820,7 @@ impl App {
             return;
         }
         let tracks = if self.cache.enabled {
-            self.cache
-                .filter_cached_tracks(&self.library_index_tracks)
+            self.cache.filter_cached_tracks(&self.library_index_tracks)
         } else {
             self.library_index_tracks.clone()
         };
@@ -1842,7 +1841,9 @@ impl App {
         }
     }
 
-    fn ensure_offline_browse(&mut self) -> Option<std::sync::Arc<crate::library_index::BrowseSnapshot>> {
+    fn ensure_offline_browse(
+        &mut self,
+    ) -> Option<std::sync::Arc<crate::library_index::BrowseSnapshot>> {
         if self.offline_browse.is_none() && !self.library_index_tracks.is_empty() {
             self.prepare_offline_browse();
         }
@@ -1854,7 +1855,8 @@ impl App {
         if !self.remote_available() {
             let tx = self.library_tx.clone();
             let Some(snapshot) = self.ensure_offline_browse() else {
-                self.library.artists = LoadingState::Error(self.offline_browse_empty_message().into());
+                self.library.artists =
+                    LoadingState::Error(self.offline_browse_empty_message().into());
                 return;
             };
             let artists = snapshot.artists.clone();
@@ -3731,7 +3733,9 @@ impl App {
     }
 
     fn spawn_prefetch_album_cache(&self, album_id: &str) {
-        if !self.config.cache_enabled || !self.config.cache_starred_albums || !self.remote_available()
+        if !self.config.cache_enabled
+            || !self.config.cache_starred_albums
+            || !self.remote_available()
         {
             return;
         }
@@ -3755,9 +3759,7 @@ impl App {
                     .song
                     .into_iter()
                     .map(|s| {
-                        let aid = s
-                            .album_id
-                            .unwrap_or_else(|| album_id.clone());
+                        let aid = s.album_id.unwrap_or_else(|| album_id.clone());
                         (s.id, aid)
                     })
                     .collect::<Vec<_>>(),
@@ -5117,8 +5119,7 @@ impl App {
             return;
         }
         let mut songs: Vec<_> = if !self.server_reachable && self.config.cache_enabled {
-            self.cache
-                .filter_cached_tracks(&self.library_index_tracks)
+            self.cache.filter_cached_tracks(&self.library_index_tracks)
         } else {
             self.library_index_tracks.clone()
         };

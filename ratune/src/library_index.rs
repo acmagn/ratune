@@ -259,11 +259,14 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
             artist.name = artist_name.clone();
         }
 
-        let album = artist.albums.entry(album_id.clone()).or_insert_with(|| AlbumAcc {
-            name: album_name.clone(),
-            artist_name: artist_name.clone(),
-            songs: Vec::new(),
-        });
+        let album = artist
+            .albums
+            .entry(album_id.clone())
+            .or_insert_with(|| AlbumAcc {
+                name: album_name.clone(),
+                artist_name: artist_name.clone(),
+                songs: Vec::new(),
+            });
         if album.name == "Unknown Album" && album_name != "Unknown Album" {
             album.name = album_name;
         }
