@@ -30,7 +30,7 @@ use crate::models::{
     LegacyLyricsEnvelope, LyricLine, LyricsBySongIdEnvelope, MusicDirectory,
     MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope, PingEnvelope, Playlist,
     PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
-    SearchEnvelope, SearchResult3, Song, SongEnvelope, SubsonicLibrary,
+    SearchEnvelope, SearchResult3, Song, SongEnvelope, Starred2, Starred2Envelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -40,6 +40,14 @@ pub const DEFAULT_SERVER_URL: &str = "http://localhost:4533";
 
 const API_VERSION: &str = "1.16.1";
 const CLIENT_NAME: &str = "ratune";
+
+/// Kind of library item for [`SubsonicClient::set_starred`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StarItemType {
+    Song,
+    Album,
+    Artist,
+}
 
 // ── Auth helpers ───────────────────────────────────────────────────────────────
 
@@ -594,6 +602,59 @@ impl SubsonicClient {
             .json()
             .await?;
         check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// List starred songs, albums, and artists (`getStarred2`).
+    pub async fn get_starred2(&self) -> Result<Starred2> {
+        let env: Starred2Envelope = self
+            .http
+            .get(self.endpoint_url("getStarred2"))
+            .query(&self.auth_params())
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        Ok(r.starred2.clone().unwrap_or_default().normalize())
+    }
+
+    /// Star or unstar a song, album, or artist.
+    ///
+    /// Uses GET with `id`, matching Navidrome's web UI and typical Subsonic clients.
+    /// Navidrome resolves the entity type (album → artist → song) from the ID.
+    pub async fn set_starred(
+        &self,
+        item_type: StarItemType,
+        id: &str,
+        starred: bool,
+    ) -> Result<()> {
+        let mut params = self.auth_params();
+        match item_type {
+            StarItemType::Song => params.push(("id", id.to_string())),
+            StarItemType::Album => params.push(("albumId", id.to_string())),
+            StarItemType::Artist => params.push(("artistId", id.to_string())),
+        }
+        let endpoint = if starred { "star" } else { "unstar" };
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url(endpoint))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// Star a song, album, or artist by ID (`star`).
+    pub async fn star(&self, id: &str) -> Result<()> {
+        self.set_starred(StarItemType::Song, id, true).await
+    }
+
+    /// Remove star from a song, album, or artist by ID (`unstar`).
+    pub async fn unstar(&self, id: &str) -> Result<()> {
+        self.set_starred(StarItemType::Song, id, false).await
     }
 
     /// Mark a song as played (scrobble).

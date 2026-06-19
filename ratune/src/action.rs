@@ -66,6 +66,22 @@ pub enum Action {
     ToggleVisualizer,
     /// Toggle the keybind reference popup.
     ToggleHelp,
+    /// Toggle favorite (star) status for the focused or playing track.
+    ToggleFavorite,
+    /// Toggle the favorites (starred) browser overlay.
+    ToggleFavoritesOverlay,
+    /// Favorites overlay: scroll up.
+    FavoritesScrollUp,
+    /// Favorites overlay: scroll down.
+    FavoritesScrollDown,
+    /// Favorites overlay: focus category list.
+    FavoritesFocusCategories,
+    /// Favorites overlay: focus items list.
+    FavoritesFocusItems,
+    /// Favorites overlay: replace queue and play (category or item).
+    FavoritesPlay,
+    /// Favorites overlay: append to queue (category or item).
+    FavoritesAppend,
     /// Scroll the help popup up one line.
     HelpScrollUp,
     /// Scroll the help popup down one line.

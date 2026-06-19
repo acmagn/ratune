@@ -4,6 +4,7 @@ mod cache;
 mod color;
 mod config;
 mod desktop_notify;
+mod favorites_cache;
 mod fzf_picker;
 mod history;
 mod keybinds;
@@ -44,7 +45,7 @@ use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
 use config::{AlbumArtBackend, BrowseMode, Config, HomePanel};
 use keybinds::Keybinds;
-use state::{GlobalConfirm, PlaylistFocus, PlaylistInputMode};
+use state::{FavoritesFocus, GlobalConfirm, PlaylistFocus, PlaylistInputMode};
 
 /// Entry point shared by the `ratune` binary and integration tests.
 pub async fn run() -> Result<()> {
@@ -146,6 +147,7 @@ pub async fn run() -> Result<()> {
         }
         // Background metadata index refresh when missing or stale (Milestone 2).
         app.spawn_library_index_refresh(false);
+        app.fetch_starred();
     }
 
     // Spawn a task that sets a flag on SIGTERM, SIGHUP, SIGPIPE, or SIGINT so the main loop
@@ -696,6 +698,41 @@ async fn run_loop(
                                     // Picker is open: highest priority — swallow all keys.
                                     let action = map_picker_key(key.code, key.modifiers);
                                     app.dispatch(action);
+                                } else if app.favorites_overlay.visible
+                                    && app.active_tab == Tab::Browser
+                                    && !app.help_visible
+                                {
+                                    let is_tab_switch = matches!(
+                                        key.code,
+                                        KeyCode::Tab
+                                            | KeyCode::BackTab
+                                            | KeyCode::Char('1')
+                                            | KeyCode::Char('2')
+                                            | KeyCode::Char('3')
+                                    );
+                                    let is_quit_in_normal =
+                                        app.keybinds.quit.matches(key.code, key.modifiers);
+                                    if is_tab_switch {
+                                        app.favorites_overlay.visible = false;
+                                        let action = map_key(
+                                            key.code,
+                                            key.modifiers,
+                                            app.active_tab,
+                                            &app.keybinds,
+                                            &mut app.pending_gg,
+                                        );
+                                        app.dispatch(action);
+                                    } else if is_quit_in_normal {
+                                        app.favorites_overlay.visible = false;
+                                    } else {
+                                        let action = map_favorites_key(
+                                            key.code,
+                                            key.modifiers,
+                                            &app.favorites_overlay.focus,
+                                            &app.keybinds,
+                                        );
+                                        app.dispatch(action);
+                                    }
                                 } else if app.playlist_overlay.visible
                                     && app.active_tab == Tab::Browser
                                     && !app.help_visible
@@ -1191,6 +1228,39 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
     }
 }
 
+/// Translate a key event into an `Action` when the favorites overlay is open.
+fn map_favorites_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    _focus: &FavoritesFocus,
+    kb: &Keybinds,
+) -> Action {
+    let shift = modifiers.intersects(KeyModifiers::SHIFT);
+    match code {
+        KeyCode::Esc => Action::ToggleFavoritesOverlay,
+        _ if kb.favorites_overlay.matches(code, modifiers) => Action::ToggleFavoritesOverlay,
+        _ if kb.toggle_favorite.matches(code, modifiers) => Action::ToggleFavorite,
+        KeyCode::Char('k') | KeyCode::Up => Action::FavoritesScrollUp,
+        KeyCode::Char('j') | KeyCode::Down => Action::FavoritesScrollDown,
+        KeyCode::Char('h') => Action::FavoritesFocusCategories,
+        KeyCode::Char('l') => Action::FavoritesFocusItems,
+        KeyCode::Enter => Action::FavoritesPlay,
+        _ => {
+            if kb
+                .add_all_replace_album
+                .as_ref()
+                .is_some_and(|spec| spec.matches(code, modifiers))
+            {
+                return Action::FavoritesPlay;
+            }
+            if code == KeyCode::Char('A') || (code == KeyCode::Char('a') && shift) {
+                return Action::FavoritesAppend;
+            }
+            Action::None
+        }
+    }
+}
+
 /// Translate a key event into an `Action` when the playlist overlay is open.
 ///
 /// Called instead of `map_key` whenever `playlist_overlay.visible` is true and
@@ -1290,6 +1360,9 @@ fn map_key(
         if kb.playlist_overlay.matches(code, modifiers) {
             return Action::TogglePlaylistOverlay;
         }
+        if kb.favorites_overlay.matches(code, modifiers) {
+            return Action::ToggleFavoritesOverlay;
+        }
         if kb.browser_add_to_playlist.matches(code, modifiers) {
             return Action::BrowserAddToPlaylist;
         }
@@ -1361,6 +1434,9 @@ fn map_key(
     }
     if kb.toggle_help.matches(code, modifiers) {
         return Action::ToggleHelp;
+    }
+    if kb.toggle_favorite.matches(code, modifiers) {
+        return Action::ToggleFavorite;
     }
     if kb.toggle_dynamic_theme.matches(code, modifiers) {
         return Action::ToggleDynamicTheme;

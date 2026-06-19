@@ -437,6 +437,70 @@ impl Default for PlaylistOverlay {
     }
 }
 
+/// Which slice of `getStarred2` the favorites overlay is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FavoritesCategory {
+    #[default]
+    Songs,
+    Albums,
+    Artists,
+}
+
+impl FavoritesCategory {
+    pub const ALL: [Self; 3] = [Self::Songs, Self::Albums, Self::Artists];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Songs => "Songs",
+            Self::Albums => "Albums",
+            Self::Artists => "Artists",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FavoritesFocus {
+    #[default]
+    Categories,
+    Items,
+}
+
+#[derive(Debug, Default)]
+pub struct FavoritesOverlay {
+    pub visible: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// True when the list comes from the on-disk snapshot (server unreachable).
+    pub offline_snapshot: bool,
+    /// Unix seconds when the snapshot was last synced from the server.
+    pub snapshot_refreshed_at: Option<u64>,
+    pub category: FavoritesCategory,
+    pub focus: FavoritesFocus,
+    pub selected_category_index: usize,
+    pub selected_item_index: usize,
+    pub songs: Vec<ratune_subsonic::Song>,
+    pub albums: Vec<ratune_subsonic::Album>,
+    pub artists: Vec<ratune_subsonic::Artist>,
+}
+
+impl FavoritesOverlay {
+    pub fn item_count(&self) -> usize {
+        match self.category {
+            FavoritesCategory::Songs => self.songs.len(),
+            FavoritesCategory::Albums => self.albums.len(),
+            FavoritesCategory::Artists => self.artists.len(),
+        }
+    }
+
+    pub fn sync_category_from_index(&mut self) {
+        if let Some(cat) = FavoritesCategory::ALL.get(self.selected_category_index) {
+            self.category = *cat;
+        }
+        let max = self.item_count().saturating_sub(1);
+        self.selected_item_index = self.selected_item_index.min(max);
+    }
+}
+
 // ── PlaybackState ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]

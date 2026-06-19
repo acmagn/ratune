@@ -81,6 +81,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         }
         Some(LoadingState::Loaded(listing)) => {
             let make_track_label = |s: &ratune_subsonic::Song| {
+                let star = if s.starred.is_some() { "★ " } else { "" };
                 let dur = s
                     .duration
                     .map(|d| {
@@ -89,7 +90,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                         format!("  {m}:{sec:02}")
                     })
                     .unwrap_or_default();
-                format!("{}{}", s.title, dur)
+                format!("{}{}{}", star, s.title, dur)
             };
 
             let rows =

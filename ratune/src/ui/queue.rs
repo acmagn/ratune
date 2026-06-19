@@ -6,7 +6,7 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::theme::style_with_bg;
 
-const DEFAULT_QUEUE_TEMPLATE: &str = "{n}  {title:<40}  {artist:<25}  {duration:>5}";
+const DEFAULT_QUEUE_TEMPLATE: &str = "{n}{title:<40}  {artist:<25}  {duration:>5}";
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
     let visible = area.height.saturating_sub(2) as usize;
@@ -96,10 +96,9 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
 }
 
 fn format_queue_line(template: &str, s: &ratune_subsonic::Song) -> String {
-    let n = s
-        .track
-        .map(|n| format!("{n:>3}."))
-        .unwrap_or_else(|| "    ".to_string());
+    let num = s.track.map(|n| format!("{n:>2}. ")).unwrap_or_default();
+    let star = if s.starred.is_some() { "★ " } else { "" };
+    let n = format!("{num}{star}");
     let title = s.title.as_str();
     let artist = s.artist.as_deref().unwrap_or("");
     let album = s.album.as_deref().unwrap_or("");
@@ -114,6 +113,11 @@ fn format_queue_line(template: &str, s: &ratune_subsonic::Song) -> String {
         "artist" => Some(artist.to_string()),
         "album" => Some(album.to_string()),
         "duration" => Some(duration.clone()),
+        "favorite" => Some(if s.starred.is_some() {
+            "★ ".to_string()
+        } else {
+            String::new()
+        }),
         "suffix" => Some(
             s.suffix
                 .as_deref()

@@ -71,7 +71,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             } else {
                 visible
                     .iter()
-                    .map(|(_, name)| ListItem::new(*name).style(Style::default().fg(t.foreground)))
+                    .map(|(i, _)| {
+                        let a = &artists[*i];
+                        let star = if a.starred.is_some() { "★ " } else { "" };
+                        let label = format!("{}{}", star, a.name);
+                        ListItem::new(label).style(Style::default().fg(t.foreground))
+                    })
                     .collect()
             };
 

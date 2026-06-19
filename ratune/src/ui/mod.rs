@@ -2,6 +2,7 @@ pub mod albums;
 pub mod art_prepare;
 pub mod artists;
 pub mod browser;
+pub mod favorites_overlay;
 pub mod folder_tracks;
 pub mod folders;
 pub mod home_tab;

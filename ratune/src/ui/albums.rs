@@ -57,9 +57,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             frame.render_widget(list, area);
         }
         Some(LoadingState::Loaded(albums)) => {
-            let make_label = |a: &Album| match a.year {
-                Some(y) => format!("{} ({})", a.name, y),
-                None => a.name.clone(),
+            let make_label = |a: &Album| {
+                let star = if a.starred.is_some() { "★ " } else { "" };
+                match a.year {
+                    Some(y) => format!("{}{} ({})", star, a.name, y),
+                    None => format!("{}{}", star, a.name),
+                }
             };
 
             let visible: Vec<(usize, String)> =

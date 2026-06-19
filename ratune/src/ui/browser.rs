@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use super::{albums, artists, folder_tracks, folders, playlist_overlay, tracks};
+use super::{albums, artists, favorites_overlay, folder_tracks, folders, playlist_overlay, tracks};
 use crate::app::{App, BrowserColumn};
 use crate::config::BrowseMode;
 
@@ -35,6 +35,13 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
                     &app.theme,
                 );
             }
+            favorites_overlay::render_favorites_overlay(
+                frame,
+                area,
+                &app.favorites_overlay,
+                app.accent(),
+                &app.theme,
+            );
             return;
         }
         BrowseMode::Files => {
@@ -68,6 +75,13 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
                     &app.theme,
                 );
             }
+            favorites_overlay::render_favorites_overlay(
+                frame,
+                area,
+                &app.favorites_overlay,
+                app.accent(),
+                &app.theme,
+            );
             return;
         }
         BrowseMode::Artists => {}
@@ -110,4 +124,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     if let Some(picker) = &app.playlist_picker {
         playlist_overlay::render_playlist_picker(frame, area, picker, app.accent(), &app.theme);
     }
+
+    favorites_overlay::render_favorites_overlay(
+        frame,
+        area,
+        &app.favorites_overlay,
+        app.accent(),
+        &app.theme,
+    );
 }

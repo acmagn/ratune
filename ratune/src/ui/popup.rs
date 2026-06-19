@@ -45,6 +45,8 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
             vec![
                 ("p / Space", "Play / pause"),
                 ("n / N", "Next / previous track"),
+                ("f", "Toggle favorite (song / album / artist)"),
+                ("F", "Favorites panel (Browse tab)"),
                 ("x / Z", "Shuffle / unshuffle"),
                 ("R", "Toggle queue loop"),
                 ("\u{2190} / \u{2192}", "Seek \u{b1}10s"),
@@ -89,22 +91,36 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
 }
 
 fn playlist_sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
-    vec![(
-        "Playlists",
-        vec![
-            ("Shift+P", "Open / close playlist panel"),
-            ("j / k", "Scroll playlist / track list"),
-            ("h / l", "Switch between lists"),
-            ("Enter", "Play playlist / track"),
-            ("Shift+A", "Append playlist to queue"),
-            (">", "Add track to playlist (Browser)"),
-            ("c", "Create playlist"),
-            ("r", "Rename playlist"),
-            ("X", "Delete playlist (with confirm)"),
-            ("<", "Remove track from playlist"),
-            ("Escape / q", "Close panel"),
-        ],
-    )]
+    vec![
+        (
+            "Favorites",
+            vec![
+                ("F", "Open / close favorites panel (Browse)"),
+                ("j / k", "Scroll category / item list"),
+                ("h / l", "Switch between lists"),
+                ("Enter / Ctrl+r", "Replace queue and play"),
+                ("Shift+A", "Append to queue"),
+                ("f", "Toggle favorite"),
+                ("Escape / q", "Close panel"),
+            ],
+        ),
+        (
+            "Playlists",
+            vec![
+                ("Shift+P", "Open / close playlist panel"),
+                ("j / k", "Scroll playlist / track list"),
+                ("h / l", "Switch between lists"),
+                ("Enter", "Play playlist / track"),
+                ("Shift+A", "Append playlist to queue"),
+                (">", "Add track to playlist (Browser)"),
+                ("c", "Create playlist"),
+                ("r", "Rename playlist"),
+                ("X", "Delete playlist (with confirm)"),
+                ("<", "Remove track from playlist"),
+                ("Escape / q", "Close panel"),
+            ],
+        ),
+    ]
 }
 
 fn build_blocks(
