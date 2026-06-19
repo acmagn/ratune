@@ -87,6 +87,8 @@ pub struct KeybindsSection {
     pub library_fzf: Option<String>,
     /// Force library index refresh. Default: Ctrl+g
     pub library_refresh: Option<String>,
+    /// Ping the Subsonic server and update online/offline mode (`""` disables). Default: `Shift+c`.
+    pub connection_check: Option<String>,
     /// Append all indexed tracks to the queue (y/n confirm). Default: Ctrl+a (`""` disables)
     pub library_index_append_queue: Option<String>,
     /// Toggle this help popup. Default: i
@@ -135,6 +137,9 @@ pub struct CacheSection {
     /// Prefetch favorite tracks into the offline cache (Subsonic getStarred2). Default: false.
     #[serde(default = "default_cache_starred")]
     pub cache_starred: bool,
+    /// When true, prefetch all tracks from a favorited album into the cache. Default: false.
+    #[serde(default = "default_cache_starred_albums")]
+    pub cache_starred_albums: bool,
     /// Concurrent downloads when prefetching favorite tracks. Default: 2.
     #[serde(default = "default_cache_starred_parallelism")]
     pub cache_starred_parallelism: usize,
@@ -149,6 +154,9 @@ fn default_cache_max_size_gb() -> f64 {
 fn default_cache_starred() -> bool {
     false
 }
+fn default_cache_starred_albums() -> bool {
+    false
+}
 fn default_cache_starred_parallelism() -> usize {
     2
 }
@@ -159,6 +167,7 @@ impl Default for CacheSection {
             enabled: default_cache_enabled(),
             max_size_gb: default_cache_max_size_gb(),
             cache_starred: default_cache_starred(),
+            cache_starred_albums: default_cache_starred_albums(),
             cache_starred_parallelism: default_cache_starred_parallelism(),
         }
     }
@@ -917,6 +926,14 @@ struct ServerSection {
     /// `keyutils` (default) or `secret-service` (gnome-keyring / KWallet). Ignored on macOS/Windows.
     #[serde(default = "default_password_keyring")]
     password_keyring: String,
+    /// Background Subsonic `ping` interval in seconds to detect online/offline transitions.
+    /// `0` disables periodic checks (startup ping still runs). Default: 45.
+    #[serde(default = "default_connection_check_interval_secs")]
+    connection_check_interval_secs: u64,
+}
+
+fn default_connection_check_interval_secs() -> u64 {
+    45
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -967,6 +984,8 @@ pub struct Config {
     pub subsonic_url: String,
     pub subsonic_user: String,
     pub subsonic_pass: String,
+    /// Periodic Subsonic `ping` interval (seconds). `0` = startup ping only.
+    pub connection_check_interval_secs: u64,
     pub default_volume: u8,
     pub max_bit_rate: u32,
     /// Linux: register MPRIS on the session bus (media keys, `playerctl`).
@@ -1044,6 +1063,8 @@ pub struct Config {
     pub cache_max_size_gb: f64,
     /// Prefetch favorite tracks into the offline cache.
     pub cache_starred: bool,
+    /// Prefetch all tracks from favorited albums into the offline cache.
+    pub cache_starred_albums: bool,
     /// Concurrent downloads when prefetching favorite tracks.
     pub cache_starred_parallelism: usize,
     /// Where to fetch lyrics (`lrclib` or `subsonic`).
@@ -1383,6 +1404,7 @@ impl Config {
         Ok(Config {
             subsonic_url: file_cfg.server.url,
             subsonic_user: file_cfg.server.username,
+            connection_check_interval_secs: file_cfg.server.connection_check_interval_secs,
             subsonic_pass,
             default_volume: file_cfg.player.default_volume,
             max_bit_rate: file_cfg.player.max_bit_rate,
@@ -1425,6 +1447,7 @@ impl Config {
             cache_enabled: file_cfg.cache.enabled,
             cache_max_size_gb: file_cfg.cache.max_size_gb,
             cache_starred: file_cfg.cache.cache_starred,
+            cache_starred_albums: file_cfg.cache.cache_starred_albums,
             cache_starred_parallelism: file_cfg.cache.cache_starred_parallelism.max(1),
             lyrics_source: LyricsSource::parse(&file_cfg.lyrics.source)
                 .unwrap_or(LyricsSource::LrcLib),
@@ -2175,6 +2198,7 @@ password_keyring = "secret-service"
             password: String::new(),
             password_command: "printf '%s' 'from-cmd'".into(),
             password_keyring: default_password_keyring(),
+            connection_check_interval_secs: default_connection_check_interval_secs(),
         };
         assert_eq!(
             resolve_subsonic_secret(&server).expect("command"),

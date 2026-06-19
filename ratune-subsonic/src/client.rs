@@ -207,6 +207,27 @@ impl SubsonicClient {
         check_status(&env.response.status, env.response.error.as_ref())
     }
 
+    /// Lightweight reachability probe for online/offline mode switching.
+    ///
+    /// Uses a one-off HTTP client (no connection pool) with short timeouts so a
+    /// stale pooled socket does not hang for tens of seconds after the network drops.
+    /// Any HTTP response from the server counts as reachable (auth errors included).
+    pub async fn is_network_reachable(&self) -> bool {
+        let Ok(http) = ClientBuilder::new()
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(8))
+            .pool_max_idle_per_host(0)
+            .build()
+        else {
+            return false;
+        };
+        http.get(self.endpoint_url("ping"))
+            .query(&self.auth_params())
+            .send()
+            .await
+            .is_ok()
+    }
+
     /// Top-level music folders (`getMusicFolders`).
     pub async fn get_music_folders(&self) -> Result<Vec<MusicFolder>> {
         let env: MusicFoldersEnvelope = self

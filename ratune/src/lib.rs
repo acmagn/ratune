@@ -45,7 +45,7 @@ use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
 use config::{AlbumArtBackend, BrowseMode, Config, HomePanel};
 use keybinds::Keybinds;
-use state::{FavoritesFocus, GlobalConfirm, PlaylistFocus, PlaylistInputMode};
+use state::{FavoritesFocus, GlobalConfirm, LoadingState, PlaylistFocus, PlaylistInputMode};
 
 /// Entry point shared by the `ratune` binary and integration tests.
 pub async fn run() -> Result<()> {
@@ -148,6 +148,15 @@ pub async fn run() -> Result<()> {
         // Background metadata index refresh when missing or stale (Milestone 2).
         app.spawn_library_index_refresh(false);
         app.fetch_starred();
+    } else {
+        app.prepare_offline_browse();
+        if app.browser_browse_mode != BrowseMode::Files {
+            app.fetch_artists();
+        } else {
+            app.folders.roots = LoadingState::Error(
+                "Folder browse requires server — switch to artists (config or toggle)".into(),
+            );
+        }
     }
 
     // Spawn a task that sets a flag on SIGTERM, SIGHUP, SIGPIPE, or SIGINT so the main loop
@@ -300,8 +309,18 @@ fn run_library_fzf_picker(
         return Ok(());
     }
 
+    let tracks = if !app.server_reachable && app.config.cache_enabled {
+        app.cache.filter_cached_tracks(&app.library_index_tracks)
+    } else {
+        app.library_index_tracks.clone()
+    };
+    if tracks.is_empty() {
+        app.flash_status("No cached tracks — play online to download audio");
+        return Ok(());
+    }
+
     fzf_picker::suspend_tui(terminal, app.in_tmux)?;
-    let input = library_index::fzf_input_lines(&app.library_index_tracks);
+    let input = library_index::fzf_input_lines(&tracks);
     let mut fzf_args = app.config.fzf_args.clone();
     if !fzf_args.iter().any(|a| a.starts_with("--header")) {
         fzf_args.insert(0, format!("--header={}", library_index::fzf_header_line()));
@@ -407,6 +426,12 @@ async fn run_loop(
     // 2-second fallback: nudge Kitty art re-transmit when it is missing.
     // Checked once per loop iteration (see below).
     let mut last_art_recovery_fire = Instant::now();
+    let connectivity_interval = if app.config.connection_check_interval_secs > 0 {
+        Duration::from_secs(app.config.connection_check_interval_secs)
+    } else {
+        Duration::MAX
+    };
+    let mut last_connectivity_check = Instant::now();
 
     loop {
         let frame_t0 = Instant::now();
@@ -447,6 +472,13 @@ async fn run_loop(
 
         // Expire status flash messages.
         app.tick_status_flash();
+
+        if connectivity_interval != Duration::MAX
+            && last_connectivity_check.elapsed() >= connectivity_interval
+        {
+            last_connectivity_check = Instant::now();
+            app.spawn_connectivity_check(false);
+        }
 
         // Apply completed NP encodes before draw (previous frame) and after draw (same-frame worker).
         drain_ratatui_np_resize_completions(app);
@@ -1596,6 +1628,11 @@ fn map_key(
     if let Some(spec) = &kb.library_refresh {
         if spec.matches(code, modifiers) {
             return Action::LibraryIndexRefresh;
+        }
+    }
+    if let Some(spec) = &kb.connection_check {
+        if spec.matches(code, modifiers) {
+            return Action::CheckConnection;
         }
     }
     if let Some(spec) = &kb.library_index_append_queue {

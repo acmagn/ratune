@@ -161,6 +161,8 @@ pub enum Action {
     ConfirmLibraryServerAppendQueue,
     /// Dismiss a global confirmation prompt (e.g. library refresh).
     CancelGlobalConfirm,
+    /// Check server connectivity now (optional keybind; periodic check uses `[server].connection_check_interval_secs`).
+    CheckConnection,
     Quit,
     None,
 }
