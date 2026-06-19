@@ -68,6 +68,7 @@ username = ""
 password = ""
 # password_keyring = "keyutils"       # Linux only: "keyutils" (default) or "secret-service"
 # password_command = "secret-tool lookup service subsonic user you"
+# connection_check_interval_secs = 45  # background ping for online/offline; 0 = startup only
 
 # -----------------------------------------------------------------------------
 # [player]
@@ -127,6 +128,7 @@ queue_loop = true
 #                       # If you set library_refresh to Ctrl+r while album replace is also Ctrl+r,
 #                       # the app treats refresh as unset so Ctrl+g default wins.
 # library_index_append_queue = "Ctrl+a"  # append full indexed library to queue (y/n); "" disables
+# connection_check    = "Ctrl+Shift+c" # ping server and update online/offline mode; "" disables
 # toggle_help         = "i"
 # toggle_dynamic_theme = "t"          # cycles dynamic accent (ignored when theme preset is terminal)
 # toggle_lyrics       = "Shift+l"
@@ -436,12 +438,14 @@ notify_on_forced_index_refresh = true
 # max_size_gb — Total on-disk budget for cached audio. Default: 2.0.
 # cache_starred — When true, prefetch favorite tracks while online (Subsonic getStarred2 /
 #   star API). Shares the same max_size_gb LRU pool as normal playback caching. Default: false.
+# cache_starred_albums — When true, prefetch all tracks from a favorited album. Default: false.
 # cache_starred_parallelism — Concurrent favorite-track downloads. Default: 2.
 
 [cache]
 enabled = true
 max_size_gb = 2.0
 cache_starred = false
+cache_starred_albums = false
 cache_starred_parallelism = 2
 
 # -----------------------------------------------------------------------------

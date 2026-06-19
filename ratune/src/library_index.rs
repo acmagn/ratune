@@ -180,9 +180,206 @@ pub fn index_by_id(tracks: &[Song]) -> std::collections::HashMap<String, Song> {
     tracks.iter().cloned().map(|s| (s.id.clone(), s)).collect()
 }
 
+/// Artist/album/track hierarchy derived from a flat library index — used to drive the
+/// Browse tab while offline (no live Subsonic calls).
+#[derive(Debug, Clone)]
+pub struct BrowseSnapshot {
+    pub artists: Vec<ratune_subsonic::Artist>,
+    pub albums_by_artist: std::collections::HashMap<String, Vec<ratune_subsonic::Album>>,
+    pub tracks_by_album: std::collections::HashMap<String, Vec<Song>>,
+}
+
+fn offline_artist_id(song: &Song) -> String {
+    song.artist_id
+        .clone()
+        .or_else(|| {
+            song.artist
+                .as_ref()
+                .map(|name| format!("__offline_artist__{name}"))
+        })
+        .unwrap_or_else(|| "__offline_unknown_artist__".to_string())
+}
+
+fn offline_album_id(song: &Song, artist_id: &str) -> String {
+    song.album_id
+        .clone()
+        .or_else(|| {
+            song.album
+                .as_ref()
+                .map(|name| format!("__offline_album__{artist_id}__{name}"))
+        })
+        .unwrap_or_else(|| format!("__offline_unknown_album__{artist_id}"))
+}
+
+fn album_sort_key(a: &ratune_subsonic::Album) -> (u32, String) {
+    (a.year.unwrap_or(0), a.name.to_lowercase())
+}
+
+fn sort_songs(songs: &mut [Song]) {
+    songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
+}
+
+/// Derive browse columns from the on-disk library index (same data as the fzf picker).
+pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
+    use ratune_subsonic::{Album, Artist};
+    use std::collections::HashMap;
+
+    struct AlbumAcc {
+        name: String,
+        artist_name: String,
+        songs: Vec<Song>,
+    }
+
+    struct ArtistAcc {
+        name: String,
+        albums: HashMap<String, AlbumAcc>,
+    }
+
+    let mut by_artist: HashMap<String, ArtistAcc> = HashMap::new();
+
+    for song in tracks {
+        let artist_id = offline_artist_id(song);
+        let artist_name = song
+            .artist
+            .clone()
+            .unwrap_or_else(|| "Unknown Artist".to_string());
+        let album_id = offline_album_id(song, &artist_id);
+        let album_name = song
+            .album
+            .clone()
+            .unwrap_or_else(|| "Unknown Album".to_string());
+
+        let artist = by_artist
+            .entry(artist_id.clone())
+            .or_insert_with(|| ArtistAcc {
+                name: artist_name.clone(),
+                albums: HashMap::new(),
+            });
+        if artist.name == "Unknown Artist" && artist_name != "Unknown Artist" {
+            artist.name = artist_name.clone();
+        }
+
+        let album = artist.albums.entry(album_id.clone()).or_insert_with(|| AlbumAcc {
+            name: album_name.clone(),
+            artist_name: artist_name.clone(),
+            songs: Vec::new(),
+        });
+        if album.name == "Unknown Album" && album_name != "Unknown Album" {
+            album.name = album_name;
+        }
+        album.songs.push(song.clone());
+    }
+
+    let mut artists: Vec<Artist> = by_artist
+        .iter()
+        .map(|(id, acc)| Artist {
+            id: id.clone(),
+            name: acc.name.clone(),
+            album_count: Some(acc.albums.len() as u32),
+            cover_art: acc
+                .albums
+                .values()
+                .flat_map(|a| a.songs.first())
+                .find_map(|s| s.cover_art.clone()),
+            starred: None,
+            album: Vec::new(),
+        })
+        .collect();
+    artists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    let mut albums_by_artist = HashMap::new();
+    let mut tracks_by_album = HashMap::new();
+
+    for (artist_id, acc) in by_artist {
+        let mut albums: Vec<Album> = acc
+            .albums
+            .into_iter()
+            .map(|(album_id, album_acc)| {
+                let mut songs = album_acc.songs;
+                sort_songs(&mut songs);
+                let song_count = songs.len() as u32;
+                let duration: u32 = songs.iter().filter_map(|s| s.duration).sum();
+                let year = songs.iter().find_map(|s| s.year);
+                let genre = songs.iter().find_map(|s| s.genre.clone());
+                let cover_art = songs
+                    .iter()
+                    .find_map(|s| s.cover_art.clone())
+                    .or_else(|| Some(album_id.clone()));
+                tracks_by_album.insert(album_id.clone(), songs);
+                Album {
+                    id: album_id,
+                    name: album_acc.name,
+                    artist: Some(album_acc.artist_name),
+                    artist_id: Some(artist_id.clone()),
+                    cover_art,
+                    song_count: Some(song_count),
+                    duration: if duration > 0 { Some(duration) } else { None },
+                    year,
+                    genre,
+                    starred: None,
+                    song: Vec::new(),
+                }
+            })
+            .collect();
+
+        albums.sort_by(|a, b| album_sort_key(a).cmp(&album_sort_key(b)));
+        albums_by_artist.insert(artist_id, albums);
+    }
+
+    BrowseSnapshot {
+        artists,
+        albums_by_artist,
+        tracks_by_album,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browse_snapshot_groups_artists_albums_tracks() {
+        fn song(id: &str, artist: &str, album: &str, track: u32) -> Song {
+            Song {
+                id: id.into(),
+                title: format!("Track {track}"),
+                album: Some(album.into()),
+                artist: Some(artist.into()),
+                album_id: Some(format!("al-{album}")),
+                artist_id: Some(format!("ar-{artist}")),
+                track: Some(track),
+                disc_number: Some(1),
+                year: Some(2000),
+                genre: None,
+                cover_art: None,
+                duration: Some(180),
+                bit_rate: None,
+                content_type: None,
+                suffix: None,
+                size: None,
+                path: None,
+                starred: None,
+            }
+        }
+
+        let tracks = vec![
+            song("1", "Alice", "Alpha", 2),
+            song("2", "Alice", "Alpha", 1),
+            song("3", "Bob", "Beta", 1),
+        ];
+        let snap = build_browse_snapshot(&tracks);
+        assert_eq!(snap.artists.len(), 2);
+        assert_eq!(snap.artists[0].name, "Alice");
+        assert_eq!(snap.artists[1].name, "Bob");
+        let alice = snap.artists[0].id.clone();
+        let albums = snap.albums_by_artist.get(&alice).unwrap();
+        assert_eq!(albums.len(), 1);
+        assert_eq!(albums[0].name, "Alpha");
+        let album_tracks = snap.tracks_by_album.get(&albums[0].id).unwrap();
+        assert_eq!(album_tracks.len(), 2);
+        assert_eq!(album_tracks[0].track, Some(1));
+        assert_eq!(album_tracks[1].track, Some(2));
+    }
 
     #[test]
     fn parse_pick_line_basic() {

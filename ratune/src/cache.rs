@@ -149,6 +149,21 @@ impl TrackCache {
             .unwrap_or(false)
     }
 
+    /// Tracks from `tracks` that have audio on disk (for offline browse / fzf).
+    pub fn filter_cached_tracks(
+        &self,
+        tracks: &[ratune_subsonic::Song],
+    ) -> Vec<ratune_subsonic::Song> {
+        if !self.enabled {
+            return tracks.to_vec();
+        }
+        tracks
+            .iter()
+            .filter(|s| self.get_const(&s.id))
+            .cloned()
+            .collect()
+    }
+
     /// Return the cached file path for `song_id` if the file exists on disk.
     ///
     /// Removes stale index entries whose files have been deleted externally.
@@ -268,5 +283,52 @@ impl TrackCache {
         if let Ok(json) = serde_json::to_string_pretty(&self.entries) {
             let _ = std::fs::write(&self.index_path, json);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratune_subsonic::Song;
+
+    fn song(id: &str) -> Song {
+        Song {
+            id: id.into(),
+            title: id.into(),
+            album: None,
+            artist: None,
+            album_id: None,
+            artist_id: None,
+            track: None,
+            disc_number: None,
+            year: None,
+            genre: None,
+            cover_art: None,
+            duration: None,
+            bit_rate: None,
+            content_type: None,
+            suffix: None,
+            size: None,
+            path: None,
+            starred: None,
+        }
+    }
+
+    #[test]
+    fn filter_cached_tracks_keeps_only_on_disk() {
+        let dir = std::env::temp_dir().join(format!("ratune-cache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("XDG_CACHE_HOME", dir.to_str().unwrap());
+
+        let mut cache = TrackCache::load(true, 1.0);
+        cache.put("cached", "al1", b"audio").unwrap();
+        let tracks = vec![song("cached"), song("missing")];
+        let filtered = cache.filter_cached_tracks(&tracks);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "cached");
+
+        std::env::remove_var("XDG_CACHE_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -351,6 +351,11 @@ pub enum LibraryUpdate {
     PrefetchStarredCache(Vec<(String, String)>),
     /// Starred library from `getStarred2` for the favorites overlay.
     StarredFetched(Result<ratune_subsonic::Starred2, String>),
+    /// Background connectivity probe (`ping`); may repeat current state when `forced`.
+    ConnectivityChanged {
+        reachable: bool,
+        forced: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,6 +416,8 @@ pub struct App {
     pub subsonic: Arc<SubsonicClient>,
     /// Set at startup when the Subsonic `ping` fails for a non-auth reason (e.g. no network).
     pub server_reachable: bool,
+    /// Rate-limit connectivity probes triggered by failed network work.
+    last_connectivity_probe: Option<Instant>,
     /// Receives library data from background tokio tasks.
     pub library_rx: mpsc::Receiver<LibraryUpdate>,
     library_tx: mpsc::Sender<LibraryUpdate>,
@@ -470,6 +477,8 @@ pub struct App {
     library_index_by_id: HashMap<String, ratune_subsonic::Song>,
     /// Unix seconds when the index was last fully refreshed, if known.
     pub library_index_refreshed_at: Option<u64>,
+    /// Browse hierarchy built from [`library_index_tracks`] for offline artist/album/track columns.
+    offline_browse: Option<std::sync::Arc<crate::library_index::BrowseSnapshot>>,
     /// True while a background full-library fetch is running.
     pub library_index_refreshing: bool,
     /// When the current refresh started; drives status-bar animation until complete.
@@ -678,6 +687,7 @@ impl App {
             playback: PlaybackState::default(),
             subsonic: Arc::new(subsonic),
             server_reachable: true,
+            last_connectivity_probe: None,
             library_rx,
             library_tx,
             player_tx,
@@ -707,6 +717,7 @@ impl App {
             library_index_tracks,
             library_index_by_id,
             library_index_refreshed_at,
+            offline_browse: None,
             library_index_refreshing: false,
             library_index_refresh_started: None,
             library_server_append_fetching: false,
@@ -1235,8 +1246,7 @@ impl App {
                     Ok(bytes) => {
                         let _ = tx.send(LibraryUpdate::HomeArt { album_id, bytes }).await;
                     }
-                    Err(e) => {
-                        eprintln!("home art fetch({album_id}): {e}");
+                    Err(_e) => {
                         let _ = tx
                             .send(LibraryUpdate::HomeArtFetchFailed { album_id })
                             .await;
@@ -1721,9 +1731,148 @@ impl App {
         self.folder_enter(id, name);
     }
 
+    /// Background Subsonic reachability probe for online ↔ offline transitions mid-session.
+    pub fn spawn_connectivity_check(&self, forced: bool) {
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        let was_reachable = self.server_reachable;
+        tokio::spawn(async move {
+            let reachable = client.is_network_reachable().await;
+            if forced || reachable != was_reachable {
+                let _ = tx
+                    .send(LibraryUpdate::ConnectivityChanged { reachable, forced })
+                    .await;
+            }
+        });
+    }
+
+    fn maybe_probe_connectivity(&mut self) {
+        if !self.server_reachable {
+            return;
+        }
+        const MIN_INTERVAL: Duration = Duration::from_secs(10);
+        if self
+            .last_connectivity_probe
+            .is_some_and(|t| t.elapsed() < MIN_INTERVAL)
+        {
+            return;
+        }
+        self.last_connectivity_probe = Some(Instant::now());
+        self.spawn_connectivity_check(false);
+    }
+
+    fn apply_connectivity_changed(&mut self, reachable: bool, forced: bool) {
+        if self.server_reachable == reachable {
+            if forced {
+                self.flash_status_secs(
+                    if reachable {
+                        "Server reachable"
+                    } else {
+                        "Server unreachable — offline mode"
+                    },
+                    4,
+                );
+            }
+            return;
+        }
+        self.server_reachable = reachable;
+        if reachable {
+            self.flash_status_secs("Server reachable — back online", 5);
+            self.on_went_online();
+        } else {
+            self.flash_status_secs("Server unreachable — offline mode", 8);
+            self.on_went_offline();
+        }
+    }
+
+    fn on_went_offline(&mut self) {
+        self.home_art_loading.clear();
+        self.prepare_offline_browse();
+        if self.browser_browse_mode != BrowseMode::Files {
+            self.fetch_artists();
+        }
+    }
+
+    fn on_went_online(&mut self) {
+        self.offline_browse = None;
+        if self.browser_browse_mode == BrowseMode::Files {
+            if matches!(
+                self.folders.roots,
+                LoadingState::NotLoaded | LoadingState::Error(_)
+            ) {
+                self.fetch_music_folders();
+            }
+        } else {
+            self.fetch_artists();
+        }
+        self.spawn_library_index_refresh(false);
+        self.fetch_starred();
+        if self.config.scrobble_enabled {
+            self.spawn_scrobble_queue_flush();
+        }
+    }
+
+    /// Build (or rebuild) the in-memory browse tree from the on-disk library index.
+    /// When offline and caching is enabled, only tracks with audio on disk are included.
+    pub fn prepare_offline_browse(&mut self) {
+        if self.library_index_tracks.is_empty() {
+            self.offline_browse = None;
+            return;
+        }
+        let tracks = if self.cache.enabled {
+            self.cache
+                .filter_cached_tracks(&self.library_index_tracks)
+        } else {
+            self.library_index_tracks.clone()
+        };
+        if tracks.is_empty() {
+            self.offline_browse = None;
+            return;
+        }
+        self.offline_browse = Some(std::sync::Arc::new(
+            crate::library_index::build_browse_snapshot(&tracks),
+        ));
+    }
+
+    fn offline_browse_empty_message(&self) -> &'static str {
+        if self.cache.enabled && !self.library_index_tracks.is_empty() {
+            "No cached tracks — play online to download audio"
+        } else {
+            "No library index — connect once while [library] enabled"
+        }
+    }
+
+    fn ensure_offline_browse(&mut self) -> Option<std::sync::Arc<crate::library_index::BrowseSnapshot>> {
+        if self.offline_browse.is_none() && !self.library_index_tracks.is_empty() {
+            self.prepare_offline_browse();
+        }
+        self.offline_browse.clone()
+    }
+
     /// Spawn a task to fetch the artist list.
-    pub fn fetch_artists(&self) {
+    pub fn fetch_artists(&mut self) {
         if !self.remote_available() {
+            let tx = self.library_tx.clone();
+            let Some(snapshot) = self.ensure_offline_browse() else {
+                self.library.artists = LoadingState::Error(self.offline_browse_empty_message().into());
+                return;
+            };
+            let artists = snapshot.artists.clone();
+            let cached_n = self
+                .cache
+                .filter_cached_tracks(&self.library_index_tracks)
+                .len();
+            let flash = if self.cache.enabled {
+                Some(format!("Browse: {cached_n} cached track(s)"))
+            } else {
+                None
+            };
+            tokio::spawn(async move {
+                let _ = tx.send(LibraryUpdate::Artists(Ok(artists))).await;
+            });
+            if let Some(msg) = flash {
+                self.flash_status_secs(msg, 5);
+            }
             return;
         }
         let client = self.subsonic.clone();
@@ -1913,8 +2062,21 @@ impl App {
     }
 
     /// Spawn a task to fetch albums for the given artist.
-    pub fn fetch_albums(&self, artist_id: String) {
+    pub fn fetch_albums(&mut self, artist_id: String) {
         if !self.remote_available() {
+            let tx = self.library_tx.clone();
+            let albums = self
+                .ensure_offline_browse()
+                .and_then(|s| s.albums_by_artist.get(&artist_id).cloned())
+                .unwrap_or_default();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(LibraryUpdate::Albums {
+                        artist_id,
+                        result: Ok(albums),
+                    })
+                    .await;
+            });
             return;
         }
         let client = self.subsonic.clone();
@@ -1930,8 +2092,21 @@ impl App {
     }
 
     /// Spawn a task to fetch the track list for the given album.
-    pub fn fetch_tracks(&self, album_id: String) {
+    pub fn fetch_tracks(&mut self, album_id: String) {
         if !self.remote_available() {
+            let tx = self.library_tx.clone();
+            let songs = self
+                .ensure_offline_browse()
+                .and_then(|s| s.tracks_by_album.get(&album_id).cloned())
+                .unwrap_or_default();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(LibraryUpdate::Tracks {
+                        album_id,
+                        result: Ok(songs),
+                    })
+                    .await;
+            });
             return;
         }
         let client = self.subsonic.clone();
@@ -1958,7 +2133,7 @@ impl App {
                 Ok(bytes) => {
                     let _ = tx.send(LibraryUpdate::CoverArt { cover_id, bytes }).await;
                 }
-                Err(e) => eprintln!("fetch_cover_art({cover_id}): {e}"),
+                Err(_e) => {}
             }
         });
     }
@@ -2143,29 +2318,30 @@ impl App {
     pub fn apply_library_update(&mut self, update: LibraryUpdate) {
         match update {
             LibraryUpdate::Artists(result) => {
+                let mut prefetch_albums: Option<String> = None;
                 self.library.artists = match result {
                     Ok(artists) => {
                         if !artists.is_empty() {
-                            // Default to 0 on fresh start; restore keeps whatever was saved.
                             if self.library.selected_artist.is_none() {
                                 self.library.selected_artist = Some(0);
                             }
-                            // Clamp restored index to actual list size.
                             let idx = self.library.selected_artist.unwrap().min(artists.len() - 1);
                             self.library.selected_artist = Some(idx);
-                            // Fetch albums for the selected (or restored) artist.
                             let artist_id = artists[idx].id.clone();
                             if !self.library.albums.contains_key(&artist_id) {
                                 self.library
                                     .albums
                                     .insert(artist_id.clone(), LoadingState::Loading);
-                                self.fetch_albums(artist_id);
+                                prefetch_albums = Some(artist_id);
                             }
                         }
                         LoadingState::Loaded(artists)
                     }
                     Err(e) => LoadingState::Error(e),
                 };
+                if let Some(artist_id) = prefetch_albums {
+                    self.fetch_albums(artist_id);
+                }
                 self.merge_server_starred();
             }
             LibraryUpdate::Albums { artist_id, result } => {
@@ -2182,44 +2358,43 @@ impl App {
                     })
                     .unwrap_or(false);
 
-                self.library.albums.insert(
-                    artist_id,
-                    match result {
-                        Ok(albums) if !albums.is_empty() => {
-                            if is_selected_artist {
-                                // Use restored selection (default 0), clamped to list size.
-                                if self.library.selected_album.is_none() {
-                                    self.library.selected_album = Some(0);
-                                }
-                                let idx =
-                                    self.library.selected_album.unwrap().min(albums.len() - 1);
-                                self.library.selected_album = Some(idx);
-                                let album_id = albums[idx].id.clone();
-                                if !self.library.tracks.contains_key(&album_id) {
-                                    self.library
-                                        .tracks
-                                        .insert(album_id.clone(), LoadingState::Loading);
-                                    self.fetch_tracks(album_id);
-                                }
-                            } else {
-                                // Background prefetch: fetch tracks for first album.
-                                if self.library.selected_album.is_none() {
-                                    self.library.selected_album = Some(0);
-                                }
-                                let first_id = albums[0].id.clone();
-                                if !self.library.tracks.contains_key(&first_id) {
-                                    self.library
-                                        .tracks
-                                        .insert(first_id.clone(), LoadingState::Loading);
-                                    self.fetch_tracks(first_id);
-                                }
+                let mut prefetch_tracks: Option<String> = None;
+                let state = match result {
+                    Ok(albums) if !albums.is_empty() => {
+                        if is_selected_artist {
+                            if self.library.selected_album.is_none() {
+                                self.library.selected_album = Some(0);
                             }
-                            LoadingState::Loaded(albums)
+                            let idx = self.library.selected_album.unwrap().min(albums.len() - 1);
+                            self.library.selected_album = Some(idx);
+                            let album_id = albums[idx].id.clone();
+                            if !self.library.tracks.contains_key(&album_id) {
+                                self.library
+                                    .tracks
+                                    .insert(album_id.clone(), LoadingState::Loading);
+                                prefetch_tracks = Some(album_id);
+                            }
+                        } else {
+                            if self.library.selected_album.is_none() {
+                                self.library.selected_album = Some(0);
+                            }
+                            let first_id = albums[0].id.clone();
+                            if !self.library.tracks.contains_key(&first_id) {
+                                self.library
+                                    .tracks
+                                    .insert(first_id.clone(), LoadingState::Loading);
+                                prefetch_tracks = Some(first_id);
+                            }
                         }
-                        Ok(albums) => LoadingState::Loaded(albums),
-                        Err(e) => LoadingState::Error(e),
-                    },
-                );
+                        LoadingState::Loaded(albums)
+                    }
+                    Ok(albums) => LoadingState::Loaded(albums),
+                    Err(e) => LoadingState::Error(e),
+                };
+                self.library.albums.insert(artist_id, state);
+                if let Some(album_id) = prefetch_tracks {
+                    self.fetch_tracks(album_id);
+                }
                 self.merge_server_starred();
             }
             LibraryUpdate::Tracks { album_id, result } => {
@@ -2331,6 +2506,7 @@ impl App {
             LibraryUpdate::HomeArtFetchFailed { album_id } => {
                 self.home_art_loading.remove(&album_id);
                 self.spawn_pending_home_art_fetches();
+                self.maybe_probe_connectivity();
             }
             LibraryUpdate::Playlists(playlists) => {
                 self.playlist_overlay.playlists = crate::state::LoadingState::Loaded(playlists);
@@ -2493,6 +2669,9 @@ impl App {
                         self.library_index_tracks = tracks;
                         self.library_index_by_id =
                             crate::library_index::index_by_id(&self.library_index_tracks);
+                        if !self.server_reachable {
+                            self.prepare_offline_browse();
+                        }
                         self.merge_server_starred();
                         let msg = if forced {
                             "Library index refresh complete"
@@ -2587,6 +2766,12 @@ impl App {
                                 self.spawn_cache_download(&id, &album_id);
                             }
                         }
+                    } else if !was_starred
+                        && kind == FavoriteKind::Album
+                        && self.config.cache_enabled
+                        && self.config.cache_starred_albums
+                    {
+                        self.spawn_prefetch_album_cache(&id);
                     }
                     self.fetch_starred();
                 }
@@ -2619,6 +2804,9 @@ impl App {
                         }
                     }
                 }
+            }
+            LibraryUpdate::ConnectivityChanged { reachable, forced } => {
+                self.apply_connectivity_changed(reachable, forced);
             }
         }
     }
@@ -3501,29 +3689,83 @@ impl App {
     }
 
     fn maybe_prefetch_starred_cache(&self) {
-        if !self.config.cache_enabled || !self.config.cache_starred || !self.remote_available() {
+        if !self.config.cache_enabled || !self.remote_available() {
+            return;
+        }
+        if !self.config.cache_starred && !self.config.cache_starred_albums {
             return;
         }
         let Some(ref starred) = self.server_starred else {
             return;
         };
-        let pairs: Vec<(String, String)> = starred
-            .songs()
-            .iter()
-            .filter_map(|s| {
-                let album_id = s.album_id.as_deref()?;
-                if album_id.is_empty() {
-                    None
-                } else {
-                    Some((s.id.clone(), album_id.to_string()))
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        if self.config.cache_starred {
+            for song in starred.songs() {
+                if let Some(album_id) = song.album_id.as_ref().filter(|a| !a.is_empty()) {
+                    pairs.push((song.id.clone(), album_id.clone()));
                 }
-            })
-            .collect();
+            }
+        }
+        if self.config.cache_starred_albums {
+            for album in &starred.album {
+                pairs.extend(self.cache_pairs_for_album(&album.id));
+            }
+        }
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        pairs.dedup_by(|a, b| a.0 == b.0);
         if pairs.is_empty() {
             return;
         }
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
+            let _ = tx.send(LibraryUpdate::PrefetchStarredCache(pairs)).await;
+        });
+    }
+
+    fn cache_pairs_for_album(&self, album_id: &str) -> Vec<(String, String)> {
+        self.library_index_tracks
+            .iter()
+            .filter(|s| s.album_id.as_deref() == Some(album_id))
+            .map(|s| (s.id.clone(), album_id.to_string()))
+            .collect()
+    }
+
+    fn spawn_prefetch_album_cache(&self, album_id: &str) {
+        if !self.config.cache_enabled || !self.config.cache_starred_albums || !self.remote_available()
+        {
+            return;
+        }
+        let from_index = self.cache_pairs_for_album(album_id);
+        if !from_index.is_empty() {
+            let uncached: Vec<_> = from_index
+                .into_iter()
+                .filter(|(sid, _)| !self.cache.get_const(sid))
+                .collect();
+            if !uncached.is_empty() {
+                self.spawn_prefetch_starred_downloads(uncached);
+            }
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        let album_id = album_id.to_string();
+        tokio::spawn(async move {
+            let pairs = match client.get_album(&album_id).await {
+                Ok(album) => album
+                    .song
+                    .into_iter()
+                    .map(|s| {
+                        let aid = s
+                            .album_id
+                            .unwrap_or_else(|| album_id.clone());
+                        (s.id, aid)
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => return,
+            };
+            if pairs.is_empty() {
+                return;
+            }
             let _ = tx.send(LibraryUpdate::PrefetchStarredCache(pairs)).await;
         });
     }
@@ -3630,6 +3872,10 @@ impl App {
                     self.pending_global_confirm = Some(GlobalConfirm::LibraryIndexRefresh);
                     self.flash_status_secs("Full library index refresh? (y/n)", 12);
                 }
+            }
+            Action::CheckConnection => {
+                self.flash_status_secs("Checking server…", 10);
+                self.spawn_connectivity_check(true);
             }
             Action::ConfirmLibraryIndexRefresh => {
                 if self.pending_global_confirm == Some(GlobalConfirm::LibraryIndexRefresh) {
@@ -4870,9 +5116,19 @@ impl App {
             self.flash_status("Library index empty");
             return;
         }
-        let n = self.library_index_tracks.len();
+        let mut songs: Vec<_> = if !self.server_reachable && self.config.cache_enabled {
+            self.cache
+                .filter_cached_tracks(&self.library_index_tracks)
+        } else {
+            self.library_index_tracks.clone()
+        };
+        if songs.is_empty() {
+            self.flash_status_secs("No cached tracks to queue", 5);
+            return;
+        }
+        let n = songs.len();
         let was_empty = self.queue.songs.is_empty();
-        for song in self.library_index_tracks.iter().cloned() {
+        for song in songs.drain(..) {
             self.queue.push(song);
         }
         if was_empty && !self.queue.songs.is_empty() {

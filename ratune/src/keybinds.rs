@@ -166,6 +166,8 @@ pub struct Keybinds {
     pub library_fzf: Option<KeySpec>,
     /// Force library index refresh (`None` = disabled).
     pub library_refresh: Option<KeySpec>,
+    /// Ping Subsonic and refresh online/offline mode (`None` = disabled).
+    pub connection_check: Option<KeySpec>,
     /// Append entire metadata index to queue after y/n (`None` = disabled).
     pub library_index_append_queue: Option<KeySpec>,
     pub toggle_help: KeySpec,
@@ -264,6 +266,7 @@ impl Keybinds {
                 modifiers: KeyModifiers::CONTROL,
             }),
         );
+        let connection_check = resolve_opt(sec.connection_check.as_deref(), None);
         let library_index_append_queue = resolve_opt(
             sec.library_index_append_queue.as_deref(),
             Some(KeySpec {
@@ -349,6 +352,7 @@ impl Keybinds {
             quit: resolve(sec.quit.as_deref(), KeySpec::new(KeyCode::Char('q'))),
             library_fzf,
             library_refresh,
+            connection_check,
             library_index_append_queue,
             toggle_help: resolve(sec.toggle_help.as_deref(), KeySpec::new(KeyCode::Char('i'))),
             toggle_dynamic_theme: resolve(
