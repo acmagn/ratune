@@ -34,6 +34,7 @@ Ratune was built to bring together a combination of features often missing from 
 - **Playback**: Gapless queue, seek, shuffle/unshuffle, and playlist management.
 - **Album Art**: Display using Kitty graphics and [ratatui-image](https://github.com/ratatui/ratatui-image) (see link for compatible terminals)
 - **Lyrics**: Synced lyrics via LRCLib (default) or your Subsonic server. Optional on-disk cache for offline use
+- **Offline mode**: Starts without a server when needed; plays cached tracks, browse from library index, and detects reconnect automatically
 - **Visualizer**: FFT spectrum analyzer.
 - **Fuzzy finder**: Optional library index + external picker (fzf/skim) for fast track selection.
 - **Folder navigation**: Optional Browse layout that follows server music folders for servers that provide it.

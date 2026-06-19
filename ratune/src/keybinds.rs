@@ -266,7 +266,13 @@ impl Keybinds {
                 modifiers: KeyModifiers::CONTROL,
             }),
         );
-        let connection_check = resolve_opt(sec.connection_check.as_deref(), None);
+        let connection_check = resolve_opt(
+            sec.connection_check.as_deref(),
+            Some(KeySpec {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::SHIFT,
+            }),
+        );
         let library_index_append_queue = resolve_opt(
             sec.library_index_append_queue.as_deref(),
             Some(KeySpec {

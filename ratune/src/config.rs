@@ -87,7 +87,7 @@ pub struct KeybindsSection {
     pub library_fzf: Option<String>,
     /// Force library index refresh. Default: Ctrl+g
     pub library_refresh: Option<String>,
-    /// Ping the Subsonic server and update online/offline mode (`""` disables). Default: disabled.
+    /// Ping the Subsonic server and update online/offline mode (`""` disables). Default: `Shift+c`.
     pub connection_check: Option<String>,
     /// Append all indexed tracks to the queue (y/n confirm). Default: Ctrl+a (`""` disables)
     pub library_index_append_queue: Option<String>,
