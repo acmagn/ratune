@@ -1789,6 +1789,8 @@ impl App {
         self.home_art_loading.clear();
         self.prepare_offline_browse();
         if self.browser_browse_mode != BrowseMode::Files {
+            self.library.albums.clear();
+            self.library.tracks.clear();
             self.fetch_artists();
         }
     }
@@ -1803,6 +1805,8 @@ impl App {
                 self.fetch_music_folders();
             }
         } else {
+            self.library.albums.clear();
+            self.library.tracks.clear();
             self.fetch_artists();
         }
         self.spawn_library_index_refresh(false);
