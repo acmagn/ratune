@@ -1443,10 +1443,7 @@ impl Config {
         Ok(Config {
             subsonic_url: file_cfg.server.url,
             subsonic_user: file_cfg.server.username,
-            server_alias: file_cfg
-                .server
-                .alias
-                .filter(|s| !s.trim().is_empty()),
+            server_alias: file_cfg.server.alias.filter(|s| !s.trim().is_empty()),
             connection_check_interval_secs: file_cfg.server.connection_check_interval_secs,
             subsonic_pass,
             default_volume: file_cfg.player.default_volume,
