@@ -24,8 +24,8 @@ use crate::keybinds::Keybinds;
 use crate::state::{
     folder_left_default_row, folder_preview_rows, ConfirmAction, DirectoryListing,
     FavoritesCategory, FavoritesFocus, FavoritesOverlay, FolderBrowseState, FolderPreviewRow,
-    GlobalConfirm, LibraryState, LoadingState, NowPlayingPaneFocus, PlaybackState, PlaylistFocus, PlaylistInputMode,
-    PlaylistOverlay, QueueState, RadioField, RadioInputMode, RadioState,
+    GlobalConfirm, LibraryState, LoadingState, NowPlayingPaneFocus, PlaybackState, PlaylistFocus,
+    PlaylistInputMode, PlaylistOverlay, QueueState, RadioField, RadioInputMode, RadioState,
 };
 use crate::theme::Theme;
 use image::{imageops::FilterType, DynamicImage};
@@ -73,7 +73,8 @@ fn humanize_playback_error(message: &str) -> String {
         return "Playback failed: OGG stream could not start".to_string();
     }
     if lower.contains("playlist redirect limit") {
-        return "Playback failed: too many playlist redirects — use a direct stream URL".to_string();
+        return "Playback failed: too many playlist redirects — use a direct stream URL"
+            .to_string();
     }
     if lower.contains("m3u playlist") || lower.contains("pls playlist") {
         return "Playback failed: use a direct stream URL, not a playlist file".to_string();
@@ -994,11 +995,7 @@ impl App {
     /// Cover art id for the track shown in now playing (`Song::cover_art`).
     #[must_use]
     pub fn expected_cover_art_id(&self) -> Option<&str> {
-        self.playback
-            .current_song
-            .as_ref()?
-            .cover_art
-            .as_deref()
+        self.playback.current_song.as_ref()?.cover_art.as_deref()
     }
 
     /// True when `art_cache` belongs to the current now-playing track (not a stale queue fetch).
@@ -2282,15 +2279,14 @@ impl App {
             let flash = |msg: String| async {
                 crate::debug::log(&msg);
                 if crate::debug::enabled() {
-                    let _ = tx
-                        .send(LibraryUpdate::StatusFlash { msg, secs: 6 })
-                        .await;
+                    let _ = tx.send(LibraryUpdate::StatusFlash { msg, secs: 6 }).await;
                 }
             };
             if let Some(ref id) = uploaded_id {
                 match client.get_cover_art(id).await {
-                    Ok(bytes) if !bytes.is_empty()
-                        && crate::ui::art_prepare::art_bytes_decode(&bytes).is_some() =>
+                    Ok(bytes)
+                        if !bytes.is_empty()
+                            && crate::ui::art_prepare::art_bytes_decode(&bytes).is_some() =>
                     {
                         crate::debug::log(format!(
                             "radio art: using uploaded cover {id} ({} bytes)",
@@ -2700,10 +2696,7 @@ impl App {
                 if expected != Some(cover_id.as_str()) {
                     crate::debug::log(format!(
                         "cover art discarded: got {cover_id}, expected {expected:?} (current={:?})",
-                        self.playback
-                            .current_song
-                            .as_ref()
-                            .map(|s| s.id.as_str())
+                        self.playback.current_song.as_ref().map(|s| s.id.as_str())
                     ));
                     return;
                 }
@@ -3096,7 +3089,7 @@ impl App {
                     }
                     Err(e) => self.flash_status_secs(format!("Radio: {e}"), 5),
                 }
-            },
+            }
         }
     }
 
@@ -3261,9 +3254,7 @@ impl App {
                                 || self
                                     .art_cache
                                     .as_ref()
-                                    .is_some_and(|(cached_id, _)| {
-                                        cached_id == &cache_key
-                                    })
+                                    .is_some_and(|(cached_id, _)| cached_id == &cache_key)
                                     && self.art_cache_decoded.is_none();
                             if needs_fetch {
                                 self.apply_dynamic_accent(None);
@@ -3846,7 +3837,9 @@ impl App {
             _ => return,
         };
         let new_sel = if delta < 0 {
-            self.radio.selected.saturating_sub(delta.unsigned_abs() as usize)
+            self.radio
+                .selected
+                .saturating_sub(delta.unsigned_abs() as usize)
         } else {
             (self.radio.selected + delta as usize).min(len - 1)
         };
@@ -3949,11 +3942,7 @@ impl App {
                 stream_url,
                 home_page_url,
                 ..
-            } => Some((
-                name.as_str(),
-                stream_url.as_str(),
-                home_page_url.as_str(),
-            )),
+            } => Some((name.as_str(), stream_url.as_str(), home_page_url.as_str())),
             _ => None,
         }
     }
@@ -4057,40 +4046,38 @@ impl App {
                     }
                 }
             }
-            Action::RadioInputConfirm => {
-                match self.radio.input_mode.clone() {
-                    RadioInputMode::Creating {
-                        name,
-                        stream_url,
-                        home_page_url,
-                        ..
-                    } if Self::radio_form_is_valid(&self.radio.input_mode) => {
-                        let home = home_page_url.trim();
-                        self.spawn_save_radio_station(
-                            None,
-                            name.trim().to_string(),
-                            stream_url.trim().to_string(),
-                            (!home.is_empty()).then(|| home.to_string()),
-                        );
-                    }
-                    RadioInputMode::Editing {
-                        station_id,
-                        name,
-                        stream_url,
-                        home_page_url,
-                        ..
-                    } if Self::radio_form_is_valid(&self.radio.input_mode) => {
-                        let home = home_page_url.trim();
-                        self.spawn_save_radio_station(
-                            Some(station_id),
-                            name.trim().to_string(),
-                            stream_url.trim().to_string(),
-                            (!home.is_empty()).then(|| home.to_string()),
-                        );
-                    }
-                    _ => {}
+            Action::RadioInputConfirm => match self.radio.input_mode.clone() {
+                RadioInputMode::Creating {
+                    name,
+                    stream_url,
+                    home_page_url,
+                    ..
+                } if Self::radio_form_is_valid(&self.radio.input_mode) => {
+                    let home = home_page_url.trim();
+                    self.spawn_save_radio_station(
+                        None,
+                        name.trim().to_string(),
+                        stream_url.trim().to_string(),
+                        (!home.is_empty()).then(|| home.to_string()),
+                    );
                 }
-            }
+                RadioInputMode::Editing {
+                    station_id,
+                    name,
+                    stream_url,
+                    home_page_url,
+                    ..
+                } if Self::radio_form_is_valid(&self.radio.input_mode) => {
+                    let home = home_page_url.trim();
+                    self.spawn_save_radio_station(
+                        Some(station_id),
+                        name.trim().to_string(),
+                        stream_url.trim().to_string(),
+                        (!home.is_empty()).then(|| home.to_string()),
+                    );
+                }
+                _ => {}
+            },
             Action::RadioInputCancel => {
                 self.radio.input_mode = RadioInputMode::Normal;
             }
@@ -4889,7 +4876,13 @@ impl App {
             }
             Action::AddAllToQueuePrepend => self.handle_add_all_to_queue(AddAllMode::Prepend),
             Action::PlayPause => {
-                if self.is_playing_radio() || self.playback.current_song.as_ref().is_some_and(Self::is_radio_song) {
+                if self.is_playing_radio()
+                    || self
+                        .playback
+                        .current_song
+                        .as_ref()
+                        .is_some_and(Self::is_radio_song)
+                {
                     if !self.playback.player_loaded {
                         self.play_selected_radio_station();
                     } else if self.playback.paused {
@@ -5450,12 +5443,7 @@ impl App {
             Direction::PageUp => self.radio.selected.saturating_sub(page),
             Direction::PageDown => (self.radio.selected + page).min(len - 1),
         };
-        LibraryState::clamp_vertical_scroll(
-            &mut self.radio.scroll,
-            self.radio.selected,
-            len,
-            page,
-        );
+        LibraryState::clamp_vertical_scroll(&mut self.radio.scroll, self.radio.selected, len, page);
     }
 
     fn handle_navigate_home(&mut self, dir: Direction) {

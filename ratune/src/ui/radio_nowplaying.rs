@@ -13,11 +13,7 @@ use crate::theme::style_with_bg;
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
     let t = &app.theme;
     let accent = app.accent();
-    let border_color = if is_active {
-        t.border_active
-    } else {
-        t.border
-    };
+    let border_color = if is_active { t.border_active } else { t.border };
     let title_color = if is_active { accent } else { t.dimmed };
 
     let queue_n = app.queue.songs.len();
@@ -48,25 +44,25 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
 
     match &app.radio.stations {
         LoadingState::NotLoaded | LoadingState::Loading => {
-            let list = List::new(vec![ListItem::new("Loading stations…").style(
-                Style::default().fg(t.dimmed),
-            )])
+            let list = List::new(vec![
+                ListItem::new("Loading stations…").style(Style::default().fg(t.dimmed))
+            ])
             .block(block);
             frame.render_widget(list, area);
         }
         LoadingState::Error(e) => {
-            let list = List::new(vec![ListItem::new(format!("Error: {e}")).style(
-                Style::default().fg(accent),
-            )])
+            let list = List::new(vec![
+                ListItem::new(format!("Error: {e}")).style(Style::default().fg(accent))
+            ])
             .block(block);
             frame.render_widget(list, area);
         }
         LoadingState::Loaded(stations) => {
             if stations.is_empty() {
-                let list = List::new(vec![ListItem::new("No stations configured").style(
-                    Style::default().fg(t.dimmed),
-                )])
-                .block(block);
+                let list =
+                    List::new(vec![ListItem::new("No stations configured")
+                        .style(Style::default().fg(t.dimmed))])
+                    .block(block);
                 frame.render_widget(list, area);
                 return;
             }
@@ -103,9 +99,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                     };
                     let label = format!("{marker}{}", station.name);
                     let style = if global_idx == app.radio.selected {
-                        Style::default()
-                            .fg(accent)
-                            .add_modifier(Modifier::BOLD)
+                        Style::default().fg(accent).add_modifier(Modifier::BOLD)
                     } else if playing {
                         Style::default().fg(t.foreground)
                     } else {
@@ -117,11 +111,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
 
             let list = List::new(items)
                 .block(block)
-                .highlight_style(
-                    Style::default()
-                        .fg(accent)
-                        .add_modifier(Modifier::BOLD),
-                )
+                .highlight_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
                 .style(style_with_bg(t.surface));
 
             let mut state = ListState::default();
@@ -198,12 +188,10 @@ fn render_radio_hints(app: &App, frame: &mut Frame, area: Rect, hint_rows: usize
         );
     } else {
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    "j/k station · Enter tune · Ctrl+g queue",
-                    Style::default().fg(t.dimmed),
-                ),
-            ])),
+            Paragraph::new(Line::from(vec![Span::styled(
+                "j/k station · Enter tune · Ctrl+g queue",
+                Style::default().fg(t.dimmed),
+            )])),
             hint_area,
         );
     }

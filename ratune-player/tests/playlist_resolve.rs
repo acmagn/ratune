@@ -39,5 +39,8 @@ fn spawn_player_plays_pls_playlist_url() {
         );
         return;
     }
-    assert!(started, "TrackStarted never received for .pls URL within 30s");
+    assert!(
+        started,
+        "TrackStarted never received for .pls URL within 30s"
+    );
 }

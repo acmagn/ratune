@@ -4,11 +4,19 @@ fn probe(url: &str) {
     eprintln!("\n=== {url} ===");
     let t0 = Instant::now();
     let open = ratune_player::stream::open_live_stream(url);
-    eprintln!("open ({:?}): {:?}", t0.elapsed(), open.as_ref().map(|_| "ok").map_err(|e| e.to_string()));
+    eprintln!(
+        "open ({:?}): {:?}",
+        t0.elapsed(),
+        open.as_ref().map(|_| "ok").map_err(|e| e.to_string())
+    );
     let Ok(reader) = open else { return };
     let t1 = Instant::now();
     let dec = rodio::Decoder::builder().with_data(reader).build();
-    eprintln!("decode ({:?}): {:?}", t1.elapsed(), dec.as_ref().map(|_| "ok").map_err(|e| e.to_string()));
+    eprintln!(
+        "decode ({:?}): {:?}",
+        t1.elapsed(),
+        dec.as_ref().map(|_| "ok").map_err(|e| e.to_string())
+    );
     if let Ok(mut d) = dec {
         let t2 = Instant::now();
         let s = d.next();

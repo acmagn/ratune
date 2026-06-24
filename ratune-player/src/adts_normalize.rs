@@ -42,7 +42,11 @@ fn adts_frame_length(header: &[u8; ADTS_HEADER_LEN]) -> Option<usize> {
 }
 
 fn normalize_sync_byte(b: u8) -> u8 {
-    if b == 0xF9 { 0xF1 } else { b }
+    if b == 0xF9 {
+        0xF1
+    } else {
+        b
+    }
 }
 
 impl<R: Read> AdtsNormalizeReader<R> {
@@ -52,10 +56,7 @@ impl<R: Read> AdtsNormalizeReader<R> {
         header[1] = normalize_sync_byte(header[1]);
         self.inner.read_exact(&mut header[2..])?;
         let frame_len = adts_frame_length(&header).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid ADTS header",
-            )
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid ADTS header")
         })?;
         self.payload_remaining = frame_len - ADTS_HEADER_LEN;
         self.pending.extend(header);
@@ -89,11 +90,7 @@ impl<R: Read> Read for AdtsNormalizeReader<R> {
                 let take = want.min(self.payload_remaining);
                 let n = self.inner.read(&mut out[written..written + take])?;
                 if n == 0 {
-                    return if written == 0 {
-                        Ok(0)
-                    } else {
-                        Ok(written)
-                    };
+                    return if written == 0 { Ok(0) } else { Ok(written) };
                 }
                 written += n;
                 self.payload_remaining -= n;
@@ -125,9 +122,7 @@ mod tests {
     #[test]
     fn rewrites_mpeg2_sync_to_mpeg4() {
         // Minimal valid-ish ADTS frame: 7-byte header + 4 payload bytes.
-        let mut raw = vec![
-            0xFF, 0xF9, 0x50, 0x80, 0x03, 0xE0, 0x00, 1, 2, 3, 4,
-        ];
+        let mut raw = vec![0xFF, 0xF9, 0x50, 0x80, 0x03, 0xE0, 0x00, 1, 2, 3, 4];
         // Fix frame length field to 11 (7 header + 4 payload): bits in bytes 3-5
         raw[3] = 0x00;
         raw[4] = 0x01;

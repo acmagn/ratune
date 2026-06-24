@@ -383,10 +383,7 @@ fn play_payload(
     let mut newer: Option<(PlayPayload, Option<Duration>, u64)> = None;
     loop {
         match cmd_rx.try_recv() {
-            Ok(PlayerCommand::PlayLiveStream {
-                url: u,
-                gen: g,
-            }) => {
+            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
                 *skip_gen = g;
                 play_live_stream(
                     u,
@@ -479,10 +476,7 @@ fn play_live_stream(
     let mut final_gen = gen;
     loop {
         match cmd_rx.try_recv() {
-            Ok(PlayerCommand::PlayLiveStream {
-                url: u,
-                gen: g,
-            }) => {
+            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
                 final_url = u;
                 final_gen = g;
                 *skip_gen = g;
@@ -509,10 +503,7 @@ fn play_live_stream(
 
     loop {
         match cmd_rx.try_recv() {
-            Ok(PlayerCommand::PlayLiveStream {
-                url: u,
-                gen: g,
-            }) if g != final_gen => {
+            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) if g != final_gen => {
                 drop(source);
                 play_live_stream(
                     u,
@@ -613,7 +604,9 @@ fn handle_command(
         PlayerCommand::PlayUrl { .. }
         | PlayerCommand::PlayCached { .. }
         | PlayerCommand::PlayLiveStream { .. } => {
-            unreachable!("PlayUrl / PlayCached / PlayLiveStream must be dispatched via play_payload()");
+            unreachable!(
+                "PlayUrl / PlayCached / PlayLiveStream must be dispatched via play_payload()"
+            );
         }
         PlayerCommand::EnqueueNext { url, duration } => match download_and_decode(&url) {
             Ok(source) => {

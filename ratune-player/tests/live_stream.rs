@@ -17,7 +17,11 @@ fn live_stream_opens_and_decodes() {
 
     let start = Instant::now();
     let sample = decoder.next();
-    eprintln!("first sample in {:?}: {:?}", start.elapsed(), sample.is_some());
+    eprintln!(
+        "first sample in {:?}: {:?}",
+        start.elapsed(),
+        sample.is_some()
+    );
     assert!(sample.is_some());
     assert!(start.elapsed() < Duration::from_secs(30));
 }
@@ -45,4 +49,3 @@ fn live_stream_decodes_past_prebuffer() {
         "decoder stalled after prebuffer (only {samples} samples in 5s)"
     );
 }
-

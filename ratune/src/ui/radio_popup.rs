@@ -30,11 +30,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     let accent = app.accent();
     let block = Block::default()
         .title(" Internet Radio ")
-        .title_style(
-            Style::default()
-                .fg(accent)
-                .add_modifier(Modifier::BOLD),
-        )
+        .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
@@ -42,18 +38,17 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
 
     match &app.radio.stations {
         LoadingState::NotLoaded | LoadingState::Loading => {
-            let list = List::new(vec![ListItem::new("Loading stations…").style(
-                Style::default().fg(t.dimmed),
-            )])
+            let list = List::new(vec![
+                ListItem::new("Loading stations…").style(Style::default().fg(t.dimmed))
+            ])
             .block(block);
             frame.render_widget(list, popup);
         }
         LoadingState::Error(e) => {
             let list = List::new(vec![
                 ListItem::new(format!("Error: {e}")).style(Style::default().fg(accent)),
-                ListItem::new("Press r to retry · c to add a station").style(
-                    Style::default().fg(t.dimmed),
-                ),
+                ListItem::new("Press r to retry · c to add a station")
+                    .style(Style::default().fg(t.dimmed)),
             ])
             .block(block);
             frame.render_widget(list, popup);
@@ -98,9 +93,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
                     };
                     let label = format!("{marker}{}", station.name);
                     let style = if global_idx == app.radio.selected {
-                        Style::default()
-                            .fg(accent)
-                            .add_modifier(Modifier::BOLD)
+                        Style::default().fg(accent).add_modifier(Modifier::BOLD)
                     } else if playing {
                         Style::default().fg(t.foreground)
                     } else {
@@ -243,9 +236,8 @@ fn render_form(app: &App, frame: &mut Frame, area: Rect) {
             }
 
             frame.render_widget(
-                Paragraph::new("Tab next field · Enter save · Esc cancel").style(
-                    Style::default().fg(t.dimmed),
-                ),
+                Paragraph::new("Tab next field · Enter save · Esc cancel")
+                    .style(Style::default().fg(t.dimmed)),
                 rows[3],
             );
         }

@@ -78,10 +78,7 @@ impl Read for StreamingReader {
                 .unwrap()
         };
         if let Some(err) = self.inner.error.lock().unwrap().clone() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                err,
-            ));
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
         }
         let available = buf.len().saturating_sub(pos);
         if available == 0 {
@@ -142,7 +139,9 @@ pub fn open_live_stream(url: &str) -> Result<StreamingReader> {
 
 fn open_live_stream_resolved(url: &str, depth: u8) -> Result<StreamingReader> {
     if depth >= MAX_PLAYLIST_DEPTH {
-        return Err(anyhow!("playlist redirect limit reached — use a direct stream URL"));
+        return Err(anyhow!(
+            "playlist redirect limit reached — use a direct stream URL"
+        ));
     }
     let likely_aac = hint_from_url(url) == StreamFormatHint::Aac;
     let reader = if likely_aac {
@@ -231,10 +230,7 @@ fn open_stream_with_prebuffer(
         }
         let guard = inner.buf.lock().unwrap();
         let wait_for = Duration::from_millis(200);
-        let (guard, _) = inner
-            .cond
-            .wait_timeout(guard, wait_for)
-            .unwrap();
+        let (guard, _) = inner.cond.wait_timeout(guard, wait_for).unwrap();
         drop(guard);
     }
 
@@ -414,8 +410,7 @@ fn find_mpeg4_adts_sync_offset(buf: &[u8]) -> Option<usize> {
 
 /// Byte offset of the first ADTS sync word (`0xFFF` + layer `00`).
 fn find_adts_sync_offset(buf: &[u8]) -> Option<usize> {
-    buf.windows(2)
-        .position(|w| is_adts_sync(w[0], w[1]))
+    buf.windows(2).position(|w| is_adts_sync(w[0], w[1]))
 }
 
 fn trim_leading_ws(buf: &[u8]) -> &[u8] {
@@ -434,8 +429,7 @@ fn try_resolve_playlist_bytes(buf: &[u8]) -> Result<Option<String>> {
     let trimmed = trim_leading_ws(buf);
     let head = &trimmed[..trimmed.len().min(4096)];
     if head.starts_with(b"#EXTM3U") {
-        let text = std::str::from_utf8(head)
-            .context("playlist is not valid UTF-8")?;
+        let text = std::str::from_utf8(head).context("playlist is not valid UTF-8")?;
         if text.contains("#EXT-X-") || text.to_ascii_lowercase().contains(".m3u8") {
             return Err(anyhow!(
                 "HLS stream (.m3u8) is not supported — find a direct MP3/Icecast URL"
@@ -444,8 +438,7 @@ fn try_resolve_playlist_bytes(buf: &[u8]) -> Result<Option<String>> {
         return Ok(parse_m3u_stream_url(text));
     }
     if head.starts_with(b"[playlist]") {
-        let text = std::str::from_utf8(head)
-            .context("playlist is not valid UTF-8")?;
+        let text = std::str::from_utf8(head).context("playlist is not valid UTF-8")?;
         return Ok(parse_pls_stream_url(text));
     }
     if let Some(url) = parse_bare_stream_url(head) {
@@ -499,7 +492,9 @@ fn parse_bare_stream_url(buf: &[u8]) -> Option<String> {
     }
     let line = text.lines().find(|l| !l.trim().is_empty())?.trim();
     if (line.starts_with("http://") || line.starts_with("https://"))
-        && line.chars().all(|c| !c.is_control() || c == '\r' || c == '\n')
+        && line
+            .chars()
+            .all(|c| !c.is_control() || c == '\r' || c == '\n')
     {
         Some(line.to_string())
     } else {
@@ -581,10 +576,7 @@ mod stream_tests {
             error: Mutex::new(None),
             content_type: Mutex::new(None),
         });
-        let mut reader = StreamingReader {
-            inner,
-            pos: 0,
-        };
+        let mut reader = StreamingReader { inner, pos: 0 };
         let start = Instant::now();
         reader.seek(SeekFrom::End(0)).unwrap();
         assert!(start.elapsed() < Duration::from_secs(1));

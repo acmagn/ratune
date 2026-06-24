@@ -46,7 +46,9 @@ use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
 use config::{AlbumArtBackend, BrowseMode, Config, HomePanel};
 use keybinds::Keybinds;
-use state::{FavoritesFocus, GlobalConfirm, LoadingState, PlaylistFocus, PlaylistInputMode, RadioInputMode};
+use state::{
+    FavoritesFocus, GlobalConfirm, LoadingState, PlaylistFocus, PlaylistInputMode, RadioInputMode,
+};
 
 /// Entry point shared by the `ratune` binary and integration tests.
 pub async fn run() -> Result<()> {
@@ -553,116 +555,120 @@ async fn run_loop(
                             app.art_cache_fingerprint,
                             app.art_cache.as_ref().map(|(id, _)| id.clone()),
                         ) {
-                        let show_art = app.config.nowplaying_show_art;
-                        let layout_opts = ui::layout::layout_options_for_app(app);
-                        let center = ui::layout::build_layout(terminal_rect, &layout_opts).center;
+                            let show_art = app.config.nowplaying_show_art;
+                            let layout_opts = ui::layout::layout_options_for_app(app);
+                            let center =
+                                ui::layout::build_layout(terminal_rect, &layout_opts).center;
 
-                        let boxed = app
-                            .config
-                            .now_playing_layout
-                            .trim()
-                            .eq_ignore_ascii_case("boxed");
+                            let boxed = app
+                                .config
+                                .now_playing_layout
+                                .trim()
+                                .eq_ignore_ascii_case("boxed");
 
-                        let art_position =
-                            ui::layout::placement_from_str(&app.config.nowplaying_art_position)
-                                .unwrap_or(ui::layout::Placement::Left);
-                        let queue_position =
-                            ui::layout::placement_from_str(&app.config.nowplaying_queue_position)
-                                .unwrap_or(ui::layout::Placement::Right);
-                        let visualizer_position =
-                            ui::layout::placement_from_str(&app.config.visualizer_location)
-                                .unwrap_or(ui::layout::Placement::Right);
-                        let now_playing_position =
-                            ui::layout::placement_from_str(&app.config.now_playing_box_location)
-                                .unwrap_or(ui::layout::Placement::Right);
-                        let lyrics_position =
-                            ui::layout::placement_from_str(&app.config.lyrics_location)
-                                .unwrap_or(queue_position);
+                            let art_position =
+                                ui::layout::placement_from_str(&app.config.nowplaying_art_position)
+                                    .unwrap_or(ui::layout::Placement::Left);
+                            let queue_position = ui::layout::placement_from_str(
+                                &app.config.nowplaying_queue_position,
+                            )
+                            .unwrap_or(ui::layout::Placement::Right);
+                            let visualizer_position =
+                                ui::layout::placement_from_str(&app.config.visualizer_location)
+                                    .unwrap_or(ui::layout::Placement::Right);
+                            let now_playing_position = ui::layout::placement_from_str(
+                                &app.config.now_playing_box_location,
+                            )
+                            .unwrap_or(ui::layout::Placement::Right);
+                            let lyrics_position =
+                                ui::layout::placement_from_str(&app.config.lyrics_location)
+                                    .unwrap_or(queue_position);
 
-                        let rects = ui::layout::now_playing_rects(
-                            center,
-                            show_art,
-                            art_position,
-                            queue_position,
-                            app.config.nowplaying_left_width_percent,
-                            app.config.nowplaying_vertical_fill_top_percent,
-                            app.visualizer_visible,
-                            visualizer_position,
-                            app.lyrics_visible,
-                            lyrics_position,
-                            boxed,
-                            now_playing_position,
-                        );
-                        let art_rect_opt = rects.art;
+                            let rects = ui::layout::now_playing_rects(
+                                center,
+                                show_art,
+                                art_position,
+                                queue_position,
+                                app.config.nowplaying_left_width_percent,
+                                app.config.nowplaying_vertical_fill_top_percent,
+                                app.visualizer_visible,
+                                visualizer_position,
+                                app.lyrics_visible,
+                                lyrics_position,
+                                boxed,
+                                now_playing_position,
+                            );
+                            let art_rect_opt = rects.art;
 
-                        if kitty_cover_unrenderable.as_deref() == Some(cover_id.as_str()) {
-                            if art_displayed {
-                                let _ = ui::kitty_art::clear_image(app.in_tmux);
-                                art_displayed = false;
-                            }
-                        } else if let Some(art_rect) = art_rect_opt {
-                            let inner = ui::kitty_art::album_art_placeholder_inner(art_rect);
-                            let font = app
-                                .art_picker
-                                .as_ref()
-                                .map(|p| p.font_size())
-                                .or(app.cell_px)
-                                .unwrap_or((10, 20));
-                            let placement = if app.ensure_art_cache_decoded() {
-                                app.art_cache_decoded.as_ref().map(|(_, img)| {
-                                    ui::art_prepare::contain_fit_rect_in_cells(img, inner, font)
-                                })
-                            } else {
-                                None
-                            }
-                            .unwrap_or(inner);
-                            if placement.width == 0 || placement.height == 0 {
+                            if kitty_cover_unrenderable.as_deref() == Some(cover_id.as_str()) {
                                 if art_displayed {
                                     let _ = ui::kitty_art::clear_image(app.in_tmux);
                                     art_displayed = false;
                                 }
-                                last_rendered_art = None;
-                            } else {
-                                let stored_matches = last_rendered_art
+                            } else if let Some(art_rect) = art_rect_opt {
+                                let inner = ui::kitty_art::album_art_placeholder_inner(art_rect);
+                                let font = app
+                                    .art_picker
                                     .as_ref()
-                                    .map(|(last_fp, r)| *last_fp == fp && r == &placement)
-                                    .unwrap_or(false);
-
-                                if stored_matches && art_displayed {
-                                    // Image is already visible — nothing to do.
+                                    .map(|p| p.font_size())
+                                    .or(app.cell_px)
+                                    .unwrap_or((10, 20));
+                                let placement = if app.ensure_art_cache_decoded() {
+                                    app.art_cache_decoded.as_ref().map(|(_, img)| {
+                                        ui::art_prepare::contain_fit_rect_in_cells(img, inner, font)
+                                    })
                                 } else {
-                                    let prepared =
-                                        app.ensure_np_kitty_prepared(placement, font).cloned();
-                                    let in_tmux = app.in_tmux;
-                                    let tmux_offset = app.tmux_status_offset;
-                                    if let Some(prepared) = prepared {
-                                        match ui::kitty_art::transmit_np_image(
-                                            &prepared,
-                                            placement,
-                                            in_tmux,
-                                            tmux_offset,
-                                        ) {
-                                            Ok(()) => {
-                                                last_rendered_art = Some((fp, placement));
-                                                art_displayed = true;
-                                            }
-                                            Err(e) => {
-                                                eprintln!("kitty render: {e}");
-                                                let _ = ui::kitty_art::clear_image(app.in_tmux);
-                                                kitty_cover_unrenderable = Some(cover_id.clone());
-                                                last_rendered_art = None;
-                                                art_displayed = false;
+                                    None
+                                }
+                                .unwrap_or(inner);
+                                if placement.width == 0 || placement.height == 0 {
+                                    if art_displayed {
+                                        let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                        art_displayed = false;
+                                    }
+                                    last_rendered_art = None;
+                                } else {
+                                    let stored_matches = last_rendered_art
+                                        .as_ref()
+                                        .map(|(last_fp, r)| *last_fp == fp && r == &placement)
+                                        .unwrap_or(false);
+
+                                    if stored_matches && art_displayed {
+                                        // Image is already visible — nothing to do.
+                                    } else {
+                                        let prepared =
+                                            app.ensure_np_kitty_prepared(placement, font).cloned();
+                                        let in_tmux = app.in_tmux;
+                                        let tmux_offset = app.tmux_status_offset;
+                                        if let Some(prepared) = prepared {
+                                            match ui::kitty_art::transmit_np_image(
+                                                &prepared,
+                                                placement,
+                                                in_tmux,
+                                                tmux_offset,
+                                            ) {
+                                                Ok(()) => {
+                                                    last_rendered_art = Some((fp, placement));
+                                                    art_displayed = true;
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("kitty render: {e}");
+                                                    let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                                    kitty_cover_unrenderable =
+                                                        Some(cover_id.clone());
+                                                    last_rendered_art = None;
+                                                    art_displayed = false;
+                                                }
                                             }
                                         }
                                     }
                                 }
+                            } else if art_displayed {
+                                // Art column hidden — clear Kitty overlay.
+                                let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                last_rendered_art = None;
+                                art_displayed = false;
                             }
-                        } else if art_displayed {
-                            // Art column hidden — clear Kitty overlay.
-                            let _ = ui::kitty_art::clear_image(app.in_tmux);
-                            last_rendered_art = None;
-                            art_displayed = false;
-                        }
                         }
                     } else if art_displayed {
                         // Stale cover (e.g. queue album art while radio is playing).
@@ -1339,7 +1345,11 @@ fn map_radio_picker_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -
     }
 }
 
-fn map_radio_form_key(code: KeyCode, _modifiers: KeyModifiers, input_mode: &RadioInputMode) -> Action {
+fn map_radio_form_key(
+    code: KeyCode,
+    _modifiers: KeyModifiers,
+    input_mode: &RadioInputMode,
+) -> Action {
     match input_mode {
         RadioInputMode::ConfirmingDelete { .. } => match code {
             KeyCode::Char('y') | KeyCode::Char('Y') => Action::RadioConfirmYes,
@@ -2214,7 +2224,9 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                 return;
             }
             let visible_row = (y - queue_area.y - 1) as usize;
-            if app.np_radio_pane_available() && app.np_pane_focus == crate::state::NowPlayingPaneFocus::Radio {
+            if app.np_radio_pane_available()
+                && app.np_pane_focus == crate::state::NowPlayingPaneFocus::Radio
+            {
                 let visible_rows = queue_area.height.saturating_sub(2) as usize;
                 let hint_rows = if app.queue.songs.is_empty() { 1 } else { 2 };
                 let list_rows = visible_rows.saturating_sub(hint_rows).max(1);

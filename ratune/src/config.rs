@@ -1429,10 +1429,7 @@ impl Config {
             && !scrobble_api_secret.is_empty()
             && !scrobble_session_key.is_empty();
 
-        let radio_enabled = file_cfg
-            .radio
-            .enabled
-            .unwrap_or_else(default_radio_enabled);
+        let radio_enabled = file_cfg.radio.enabled.unwrap_or_else(default_radio_enabled);
         let radio_fetch_station_icons = file_cfg
             .radio
             .fetch_station_icons
