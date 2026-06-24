@@ -246,7 +246,7 @@ fn render_track_list(
 
     let (items, sel) = match &overlay.tracks {
         LoadingState::NotLoaded => (
-            vec![ListItem::new("Select a playlist").style(Style::default().fg(theme.dimmed))],
+            vec![ListItem::new("Loading…").style(Style::default().fg(theme.dimmed))],
             None,
         ),
         LoadingState::Loading => (
