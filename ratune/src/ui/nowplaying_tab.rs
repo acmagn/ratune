@@ -51,7 +51,18 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
         render_art_placeholder(app, frame, r);
     }
     if let Some(r) = rects.queue {
-        queue::render(app, frame, r, true);
+        if app.np_radio_pane_available() {
+            match app.np_pane_focus {
+                crate::state::NowPlayingPaneFocus::Radio => {
+                    super::radio_nowplaying::render(app, frame, r, true);
+                }
+                crate::state::NowPlayingPaneFocus::Queue => {
+                    queue::render(app, frame, r, true);
+                }
+            }
+        } else {
+            queue::render(app, frame, r, true);
+        }
     }
     if let Some(r) = rects.visualizer {
         render_visualizer_pane(app, frame, r);
@@ -89,6 +100,11 @@ fn sync_np_ratatui_protocol(app: &mut App, art_rect: Rect) {
     }
     if let Some(p) = app.art_picker.as_mut() {
         p.set_background_color(crate::theme::surface_pad_rgba(app.theme.surface));
+    }
+    if !app.np_art_cache_matches() {
+        app.np_art_state = None;
+        app.np_art_prep_key = None;
+        return;
     }
     if app.art_cache.is_none() {
         app.np_art_state = None;
@@ -134,7 +150,15 @@ fn sync_np_ratatui_protocol(app: &mut App, art_rect: Rect) {
 
 fn render_art_placeholder(app: &mut App, frame: &mut Frame, area: Rect) {
     let t = &app.theme;
+    let art_title = app
+        .playback
+        .current_song
+        .as_ref()
+        .filter(|s| App::is_radio_song(s))
+        .map(|s| format!(" {} ", s.title))
+        .unwrap_or_else(|| " Album Art ".to_string());
     let block = crate::ui::kitty_art::album_art_block()
+        .title(art_title)
         .title_style(Style::default().fg(t.dimmed).add_modifier(Modifier::BOLD))
         .border_style(Style::default().fg(t.border));
     frame.render_widget(block, area);
@@ -143,6 +167,7 @@ fn render_art_placeholder(app: &mut App, frame: &mut Frame, area: Rect) {
         && !app.ratatui_uses_kitty_apc()
         && !app.help_visible
         && app.config.nowplaying_show_art
+        && app.np_art_cache_matches()
     {
         let inner = crate::ui::kitty_art::album_art_placeholder_inner(area);
         if inner.width > 0 && inner.height > 0 {

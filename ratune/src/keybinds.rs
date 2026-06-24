@@ -147,6 +147,8 @@ pub struct Keybinds {
     pub shuffle: KeySpec,
     pub unshuffle: KeySpec,
     pub toggle_queue_loop: KeySpec,
+    pub toggle_radio: KeySpec,
+    pub np_focus_queue: KeySpec,
     pub clear_queue: KeySpec,
     pub remove_from_queue: KeySpec,
     pub search: KeySpec,
@@ -323,8 +325,22 @@ impl Keybinds {
             toggle_queue_loop: resolve(
                 sec.toggle_queue_loop.as_deref(),
                 KeySpec {
+                    code: KeyCode::Char('q'),
+                    modifiers: KeyModifiers::SHIFT,
+                },
+            ),
+            toggle_radio: resolve(
+                sec.toggle_radio.as_deref(),
+                KeySpec {
                     code: KeyCode::Char('r'),
                     modifiers: KeyModifiers::SHIFT,
+                },
+            ),
+            np_focus_queue: resolve(
+                sec.np_focus_queue.as_deref(),
+                KeySpec {
+                    code: KeyCode::Char('g'),
+                    modifiers: KeyModifiers::CONTROL,
                 },
             ),
             clear_queue: resolve(

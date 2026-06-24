@@ -12,8 +12,21 @@ use crate::theme::style_with_bg;
 /// Width reserved for the key column (padded with spaces to align descriptions).
 const KEY_COL_W: usize = 12;
 
-fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
-    vec![
+fn sections(radio_enabled: bool) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+    let mut playback = vec![
+        ("p / Space", "Play / pause"),
+        ("n / N", "Next / previous track"),
+        ("f", "Toggle favorite (song / album / artist)"),
+        ("F", "Favorites panel (Browse tab)"),
+        ("x / Z", "Shuffle / unshuffle"),
+        ("Q", "Toggle queue loop"),
+    ];
+    if radio_enabled {
+        playback.push(("Shift+R", "Open / close internet radio picker"));
+    }
+    playback.push(("\u{2190} / \u{2192}", "Seek \u{b1}10s"));
+
+    let mut out = vec![
         (
             "Navigation",
             vec![
@@ -40,18 +53,7 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("Enter", "Go to artist in Browse"),
             ],
         ),
-        (
-            "Playback",
-            vec![
-                ("p / Space", "Play / pause"),
-                ("n / N", "Next / previous track"),
-                ("f", "Toggle favorite (song / album / artist)"),
-                ("F", "Favorites panel (Browse tab)"),
-                ("x / Z", "Shuffle / unshuffle"),
-                ("R", "Toggle queue loop"),
-                ("\u{2190} / \u{2192}", "Seek \u{b1}10s"),
-            ],
-        ),
+        ("Playback", playback),
         (
             "Queue",
             vec![
@@ -87,7 +89,40 @@ fn sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
             "App",
             vec![("i", "Toggle this help"), ("q", "Quit (or close help)")],
         ),
-    ]
+    ];
+
+    if radio_enabled {
+        out.insert(
+            3,
+            (
+                "Radio",
+                vec![
+                    ("Shift+R", "Open / close station picker"),
+                    ("Enter", "Play selected station"),
+                    ("c", "Add a new station"),
+                    ("e", "Edit selected station"),
+                    ("X", "Delete selected station"),
+                    ("n / N", "Next / previous station (while playing)"),
+                    ("r", "Refresh station list"),
+                ],
+            ),
+        );
+        out.insert(
+            4,
+            (
+                "Now Playing (radio)",
+                vec![
+                    ("j / k", "Change station (radio pane)"),
+                    ("Enter", "Tune in to selected station"),
+                    ("Ctrl+g", "Switch radio pane ↔ library queue"),
+                    ("p / Space", "Pause / resume live stream"),
+                    ("n / N", "Next / previous station"),
+                ],
+            ),
+        );
+    }
+
+    out
 }
 
 fn playlist_sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
@@ -193,7 +228,7 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
     // Keep each category within one column where possible, while aiming for
     // roughly equal column heights.
 
-    let mut blocks = build_blocks(sections(), accent, fg, dim);
+    let mut blocks = build_blocks(sections(app.config.radio_enabled), accent, fg, dim);
     blocks.push(vec![Line::from("")]);
     blocks.extend(build_blocks(playlist_sections(), accent, fg, dim));
     let (left_all, right_all) = pack_blocks_into_two_columns(blocks);

@@ -112,6 +112,8 @@ queue_loop = true
 # add_all_prepend     = "Ctrl+Shift+p"     # browser: prepend artist/album tracks
 # shuffle             = "x"
 # unshuffle           = "z"
+# toggle_queue_loop   = "Shift+q"     # wrap queue after last track
+# toggle_radio        = "Shift+r"     # open/close internet radio picker
 # clear_queue         = "Shift+d"     # clear entire queue
 # remove_from_queue   = "d"           # now playing: remove highlighted track
 # search              = "/"           # filter lists where supported
@@ -509,6 +511,17 @@ cache_starred_parallelism = 2
 #                      endpoint so Navidrome (etc.) records play counts. Uses the
 #                      local listen threshold (min(50%, 30 s)), independent of
 #                      Last.fm's min(50%, 4 min) rule.
+
+# [radio] — Internet radio
+#
+# enabled             — Show radio picker (Shift+R) and Now Playing radio pane (default: true)
+# fetch_station_icons — When true (default), download homepage icons for Now Playing
+#                       art if the station has no logo uploaded in Navidrome.
+#                       Set false to avoid outbound HTTP to station websites.
+
+# [radio]
+# enabled = true
+# fetch_station_icons = true
 
 [scrobble]
 enabled = false

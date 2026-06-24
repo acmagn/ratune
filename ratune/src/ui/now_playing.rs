@@ -607,14 +607,27 @@ fn queue_position_now_playing(app: &App) -> Option<(usize, usize)> {
 }
 
 fn np_context(app: &App) -> NowPlayingContext<'_> {
+    let is_radio = app
+        .playback
+        .current_song
+        .as_ref()
+        .is_some_and(App::is_radio_song);
     NowPlayingContext {
         song: app.playback.current_song.as_ref(),
         elapsed: app.playback.elapsed,
         total: app.playback.total,
         paused: app.playback.paused,
         volume_percent: app.config.default_volume,
-        queue_total_duration_secs: queue_total_duration_secs(&app.queue),
-        queue_position: queue_position_now_playing(app),
+        queue_total_duration_secs: if is_radio {
+            None
+        } else {
+            queue_total_duration_secs(&app.queue)
+        },
+        queue_position: if is_radio {
+            None
+        } else {
+            queue_position_now_playing(app)
+        },
     }
 }
 
@@ -817,8 +830,79 @@ fn build_progress_bar(
     }
 }
 
+fn render_live_progress_line(
+    app: &App,
+    frame: &mut Frame,
+    area: Rect,
+    t: &crate::theme::Theme,
+    accent_color: ratatui::style::Color,
+    label: &str,
+    right: String,
+    animate: bool,
+) {
+    let col_w = area.width as usize;
+    let bar_w = col_w.saturating_sub(label.len() + right.len() + 4);
+    let ratio = if animate {
+        0.35 + 0.1 * ((app.playback.elapsed.as_secs() % 4) as f64 / 4.0)
+    } else {
+        0.0
+    };
+    let spec = parse_progress_style(&app.config.progress_style);
+    let (filled_str, partial_str, empty_str) = build_progress_bar(spec, ratio, bar_w);
+    let progress = Line::from(vec![
+        Span::styled(label, Style::default().fg(accent_color)),
+        Span::raw("  "),
+        Span::styled(filled_str, Style::default().fg(accent_color)),
+        Span::styled(partial_str, Style::default().fg(accent_color)),
+        Span::styled(empty_str, Style::default().fg(t.dimmed)),
+        Span::raw("  "),
+        Span::styled(right, Style::default().fg(t.dimmed)),
+    ]);
+    if area.height <= 1 {
+        frame.render_widget(
+            Paragraph::new(progress).style(style_with_bg(t.surface)),
+            area,
+        );
+        return;
+    }
+    let lines = vec![Line::from(""), Line::from(""), progress, Line::from("")];
+    frame.render_widget(Paragraph::new(lines).style(style_with_bg(t.surface)), area);
+}
+
 fn render_progress_widget(app: &App, frame: &mut Frame, area: Rect) {
     let t = &app.theme;
+    let accent_color = app.accent();
+
+    if app.radio_buffering() {
+        render_live_progress_line(
+            app,
+            frame,
+            area,
+            t,
+            accent_color,
+            "Buffering",
+            String::new(),
+            false,
+        );
+        return;
+    }
+
+    if app.radio_now_playing_active() && app.playback.current_song.is_some() {
+        let e = app.playback.elapsed.as_secs();
+        let elapsed_str = format!("{}:{:02}", e / 60, e % 60);
+        render_live_progress_line(
+            app,
+            frame,
+            area,
+            t,
+            accent_color,
+            "● LIVE",
+            elapsed_str,
+            true,
+        );
+        return;
+    }
+
     let (elapsed_str, total_str, ratio) = if app.playback.current_song.is_some() {
         let e = app.playback.elapsed.as_secs();
         let elapsed_str = format!("{}:{:02}", e / 60, e % 60);
@@ -841,8 +925,6 @@ fn render_progress_widget(app: &App, frame: &mut Frame, area: Rect) {
 
     let col_w = area.width as usize;
     let bar_w = col_w.saturating_sub(elapsed_str.len() + total_str.len() + 4);
-
-    let accent_color = app.accent();
 
     let spec = parse_progress_style(&app.config.progress_style);
     let (filled_str, partial_str, empty_str) = build_progress_bar(spec, ratio, bar_w);

@@ -38,13 +38,23 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         .style(style_with_bg(t.surface));
 
     if app.queue.songs.is_empty() {
-        let mut msg = "Queue is empty — press 'a' to add tracks".to_string();
-        if app.config.show_fzf_hint
-            && app.config.library_index_enabled
-            && app.keybinds.library_fzf.is_some()
+        let msg = if app
+            .playback
+            .current_song
+            .as_ref()
+            .is_some_and(App::is_radio_song)
         {
-            msg.push_str(" · Ctrl+f: library picker");
-        }
+            "Playing live radio — library queue is unchanged".to_string()
+        } else {
+            let mut m = "Queue is empty — press 'a' to add tracks".to_string();
+            if app.config.show_fzf_hint
+                && app.config.library_index_enabled
+                && app.keybinds.library_fzf.is_some()
+            {
+                m.push_str(" · Ctrl+f: library picker");
+            }
+            m
+        };
         let item = ListItem::new(msg).style(Style::default().fg(t.dimmed));
         let list = List::new(vec![item]).block(block);
         frame.render_widget(list, area);
