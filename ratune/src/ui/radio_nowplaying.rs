@@ -68,8 +68,8 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             }
 
             let visible_rows = area.height.saturating_sub(2) as usize;
-            let hint_rows = radio_hint_rows(app.queue.songs.len());
-            let list_rows = visible_rows.saturating_sub(hint_rows).max(1);
+            const HINT_ROWS: usize = 1;
+            let list_rows = visible_rows.saturating_sub(HINT_ROWS).max(1);
             app.queue_viewport_rows = list_rows;
             LibraryState::clamp_vertical_scroll(
                 &mut app.radio.scroll,
@@ -123,76 +123,31 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             state.select(Some(selected));
             frame.render_stateful_widget(list, area, &mut state);
 
-            if hint_rows > 0 {
-                render_radio_hints(app, frame, area, hint_rows, queue_n);
+            if area.height > 4 {
+                render_radio_hints(app, frame, area, queue_n);
             }
         }
     }
 }
 
-fn radio_hint_rows(queue_len: usize) -> usize {
-    if queue_len > 0 {
-        2
-    } else {
-        1
-    }
-}
-
-fn render_radio_hints(app: &App, frame: &mut Frame, area: Rect, hint_rows: usize, queue_n: usize) {
+fn render_radio_hints(app: &App, frame: &mut Frame, area: Rect, queue_n: usize) {
     let t = &app.theme;
-    let y = area.y + area.height.saturating_sub(hint_rows as u16 + 1);
+    let hint = if queue_n > 0 {
+        "Ctrl+g library queue · Enter play queue"
+    } else {
+        "Ctrl+g library queue"
+    };
     let hint_area = Rect {
         x: area.x + 1,
-        y,
+        y: area.y + area.height.saturating_sub(1),
         width: area.width.saturating_sub(2),
-        height: hint_rows as u16,
+        height: 1,
     };
-    if hint_area.height == 0 {
-        return;
-    }
-
-    let line1 = Line::from(vec![
-        Span::styled("j/k", Style::default().fg(t.dimmed)),
-        Span::styled(" change station  ·  ", Style::default().fg(t.dimmed)),
-        Span::styled("Enter", Style::default().fg(t.dimmed)),
-        Span::styled(" tune in", Style::default().fg(t.dimmed)),
-    ]);
-    if queue_n == 0 {
-        frame.render_widget(Paragraph::new(line1), hint_area);
-        return;
-    }
-
-    let line2 = Line::from(vec![
-        Span::styled("Ctrl+g", Style::default().fg(t.dimmed)),
-        Span::styled(" library queue  ·  ", Style::default().fg(t.dimmed)),
-        Span::styled("Enter", Style::default().fg(t.dimmed)),
-        Span::styled(" play queue", Style::default().fg(t.dimmed)),
-    ]);
-    if hint_area.height >= 2 {
-        let row_h = hint_area.height / 2;
-        frame.render_widget(
-            Paragraph::new(line1),
-            Rect {
-                height: row_h,
-                ..hint_area
-            },
-        );
-        frame.render_widget(
-            Paragraph::new(line2),
-            Rect {
-                y: hint_area.y + row_h,
-                height: hint_area.height - row_h,
-                x: hint_area.x,
-                width: hint_area.width,
-            },
-        );
-    } else {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                "j/k station · Enter tune · Ctrl+g queue",
-                Style::default().fg(t.dimmed),
-            )])),
-            hint_area,
-        );
-    }
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            hint,
+            Style::default().fg(t.dimmed),
+        )])),
+        hint_area,
+    );
 }

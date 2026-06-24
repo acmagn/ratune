@@ -78,7 +78,7 @@ impl Read for StreamingReader {
                 .unwrap()
         };
         if let Some(err) = self.inner.error.lock().unwrap().clone() {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+            return Err(std::io::Error::other(err));
         }
         let available = buf.len().saturating_sub(pos);
         if available == 0 {

@@ -501,78 +501,75 @@ fn play_live_stream(
         }
     };
 
-    loop {
-        match cmd_rx.try_recv() {
-            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) if g != final_gen => {
-                drop(source);
-                play_live_stream(
-                    u,
-                    g,
-                    cmd_rx,
-                    skip_gen,
-                    player,
-                    evt_tx,
-                    current_total,
-                    was_playing,
-                    next_total,
-                    next_queued,
-                    about_to_finish_sent,
-                    prev_elapsed,
-                    sample_buffer,
-                );
-                return;
-            }
-            Ok(PlayerCommand::PlayUrl {
-                url: u,
-                duration: d,
-                gen: g,
-            }) => {
-                drop(source);
-                play_payload(
-                    PlayPayload::Url(u),
-                    d,
-                    g,
-                    cmd_rx,
-                    skip_gen,
-                    player,
-                    evt_tx,
-                    current_total,
-                    was_playing,
-                    next_total,
-                    next_queued,
-                    about_to_finish_sent,
-                    prev_elapsed,
-                    sample_buffer,
-                );
-                return;
-            }
-            Ok(PlayerCommand::PlayCached {
-                path: p,
-                duration: d,
-                gen: g,
-            }) => {
-                drop(source);
-                play_payload(
-                    PlayPayload::Cached(p),
-                    d,
-                    g,
-                    cmd_rx,
-                    skip_gen,
-                    player,
-                    evt_tx,
-                    current_total,
-                    was_playing,
-                    next_total,
-                    next_queued,
-                    about_to_finish_sent,
-                    prev_elapsed,
-                    sample_buffer,
-                );
-                return;
-            }
-            Ok(_) => break,
-            Err(_) => break,
+    match cmd_rx.try_recv() {
+        Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) if g != final_gen => {
+            drop(source);
+            play_live_stream(
+                u,
+                g,
+                cmd_rx,
+                skip_gen,
+                player,
+                evt_tx,
+                current_total,
+                was_playing,
+                next_total,
+                next_queued,
+                about_to_finish_sent,
+                prev_elapsed,
+                sample_buffer,
+            );
+            return;
         }
+        Ok(PlayerCommand::PlayUrl {
+            url: u,
+            duration: d,
+            gen: g,
+        }) => {
+            drop(source);
+            play_payload(
+                PlayPayload::Url(u),
+                d,
+                g,
+                cmd_rx,
+                skip_gen,
+                player,
+                evt_tx,
+                current_total,
+                was_playing,
+                next_total,
+                next_queued,
+                about_to_finish_sent,
+                prev_elapsed,
+                sample_buffer,
+            );
+            return;
+        }
+        Ok(PlayerCommand::PlayCached {
+            path: p,
+            duration: d,
+            gen: g,
+        }) => {
+            drop(source);
+            play_payload(
+                PlayPayload::Cached(p),
+                d,
+                g,
+                cmd_rx,
+                skip_gen,
+                player,
+                evt_tx,
+                current_total,
+                was_playing,
+                next_total,
+                next_queued,
+                about_to_finish_sent,
+                prev_elapsed,
+                sample_buffer,
+            );
+            return;
+        }
+        Ok(_) | Err(_) => {}
     }
 
     if *skip_gen != final_gen {

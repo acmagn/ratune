@@ -112,8 +112,6 @@ fn sections(radio_enabled: bool) -> Vec<(&'static str, Vec<(&'static str, &'stat
             (
                 "Now Playing (radio)",
                 vec![
-                    ("j / k", "Change station (radio pane)"),
-                    ("Enter", "Tune in to selected station"),
                     ("Ctrl+g", "Switch radio pane ↔ library queue"),
                     ("p / Space", "Pause / resume live stream"),
                     ("n / N", "Next / previous station"),

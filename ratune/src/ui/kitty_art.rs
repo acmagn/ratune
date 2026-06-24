@@ -431,17 +431,16 @@ fn placeholder_row(cols: u16, image_id: u32, row_index: usize) -> String {
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-/// Same [`Block`] as `nowplaying_tab::render_art_placeholder` — use with [`album_art_placeholder_inner`].
+/// Bordered shell for the Now Playing art column (no title — set at render time).
 pub fn album_art_block() -> Block<'static> {
     Block::default()
-        .title(" Album Art ")
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
 }
 
-/// Content rectangle inside the "Album Art" bordered box (matches ratatui’s [`Block::inner`]).
+/// Content rectangle inside the album-art bordered box (matches ratatui’s [`Block::inner`]).
 pub fn album_art_placeholder_inner(outer: Rect) -> Rect {
-    album_art_block().inner(outer)
+    album_art_block().title(" Album Art ").inner(outer)
 }
 
 /// Cached resize + zlib for Now Playing Kitty APC (image id 1).
