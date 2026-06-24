@@ -954,6 +954,9 @@ struct ServerSection {
     /// `0` disables periodic checks (startup ping still runs). Default: 45.
     #[serde(default = "default_connection_check_interval_secs")]
     connection_check_interval_secs: u64,
+    /// Optional label shown in the status bar instead of the server URL.
+    #[serde(default)]
+    alias: Option<String>,
 }
 
 fn default_connection_check_interval_secs() -> u64 {
@@ -1008,6 +1011,8 @@ pub struct Config {
     pub subsonic_url: String,
     pub subsonic_user: String,
     pub subsonic_pass: String,
+    /// When set, shown in the status bar instead of the server URL.
+    pub server_alias: Option<String>,
     /// Periodic Subsonic `ping` interval (seconds). `0` = startup ping only.
     pub connection_check_interval_secs: u64,
     pub default_volume: u8,
@@ -1438,6 +1443,10 @@ impl Config {
         Ok(Config {
             subsonic_url: file_cfg.server.url,
             subsonic_user: file_cfg.server.username,
+            server_alias: file_cfg
+                .server
+                .alias
+                .filter(|s| !s.trim().is_empty()),
             connection_check_interval_secs: file_cfg.server.connection_check_interval_secs,
             subsonic_pass,
             default_volume: file_cfg.player.default_volume,
@@ -2237,6 +2246,7 @@ password_keyring = "secret-service"
             password_command: "printf '%s' 'from-cmd'".into(),
             password_keyring: default_password_keyring(),
             connection_check_interval_secs: default_connection_check_interval_secs(),
+            alias: None,
         };
         assert_eq!(
             resolve_subsonic_secret(&server).expect("command"),

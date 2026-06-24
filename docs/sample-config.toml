@@ -47,6 +47,7 @@
 #
 # url       — Base URL of the server (no trailing path required in most setups).
 # username  — Subsonic username.
+# alias     — Optional label shown in the status bar instead of the server URL (privacy).
 #
 # Secret (pick one):
 #   password = "" (default) — OS keyring via keyring-core. First run prompts once; stored as service
@@ -66,6 +67,7 @@
 url = ""
 username = ""
 password = ""
+# alias = "Home server"
 # password_keyring = "keyutils"       # Linux only: "keyutils" (default) or "secret-service"
 # password_command = "secret-tool lookup service subsonic user you"
 # connection_check_interval_secs = 45  # background ping for online/offline; 0 = startup only
