@@ -27,10 +27,11 @@ use crate::error::check_status;
 use crate::models::{
     parse_music_library_root_folder_id, structured_lyrics_to_lines, Album, AlbumEnvelope, Artist,
     ArtistEnvelope, Artists, ArtistsEnvelope, DirectoryChild, IndexesEnvelope,
-    LegacyLyricsEnvelope, LyricLine, LyricsBySongIdEnvelope, MusicDirectory,
-    MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope, PingEnvelope, Playlist,
-    PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
-    SearchEnvelope, SearchResult3, Song, SongEnvelope, Starred2, Starred2Envelope, SubsonicLibrary,
+    InternetRadioStation, InternetRadioStationsEnvelope, LegacyLyricsEnvelope, LyricLine,
+    LyricsBySongIdEnvelope, MusicDirectory, MusicDirectoryEnvelope, MusicFolder,
+    MusicFoldersEnvelope, PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope,
+    PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope, SearchEnvelope, SearchResult3, Song,
+    SongEnvelope, Starred2, Starred2Envelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -40,6 +41,13 @@ pub const DEFAULT_SERVER_URL: &str = "http://localhost:4533";
 
 const API_VERSION: &str = "1.16.1";
 const CLIENT_NAME: &str = "ratune";
+
+/// HTTP User-Agent for Subsonic API and external image fetches (some sites block `reqwest/*`).
+pub const USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (compatible; ratune/",
+    env!("CARGO_PKG_VERSION"),
+    "; +https://github.com/acmagn/ratune)"
+);
 
 /// Kind of library item for [`SubsonicClient::set_starred`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +149,7 @@ impl SubsonicClient {
     /// Trailing slashes are stripped automatically.
     pub fn new(base_url: &str, username: &str, password: &str) -> Result<Self> {
         let http = ClientBuilder::new()
+            .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(30))
             .build()?;
         Ok(Self {
@@ -494,6 +503,13 @@ impl SubsonicClient {
         Ok(bytes.to_vec())
     }
 
+    /// Fetch arbitrary image bytes from an external URL (e.g. station favicon).
+    pub async fn fetch_external_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let response = self.http.get(url).send().await?.error_for_status()?;
+        let bytes = response.bytes().await?;
+        Ok(bytes.to_vec())
+    }
+
     /// Fetch all playlists visible to the authenticated user (`getPlaylists`).
     pub async fn get_playlists(&self) -> Result<Vec<Playlist>> {
         let env: PlaylistsEnvelope = self
@@ -617,6 +633,89 @@ impl SubsonicClient {
         let env: PingEnvelope = self
             .http
             .get(self.endpoint_url("deletePlaylist"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// List internet radio stations configured on the server (`getInternetRadioStations`).
+    pub async fn get_internet_radio_stations(&self) -> Result<Vec<InternetRadioStation>> {
+        let env: InternetRadioStationsEnvelope = self
+            .http
+            .get(self.endpoint_url("getInternetRadioStations"))
+            .query(&self.auth_params())
+            .send()
+            .await?
+            .json()
+            .await?;
+        let r = &env.response;
+        check_status(&r.status, r.error.as_ref())?;
+        Ok(r.internet_radio_stations
+            .as_ref()
+            .map(|c| c.internet_radio_station.clone())
+            .unwrap_or_default())
+    }
+
+    /// Add an internet radio station (`createInternetRadioStation`). Admin only.
+    pub async fn create_internet_radio_station(
+        &self,
+        name: &str,
+        stream_url: &str,
+        home_page_url: Option<&str>,
+    ) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("name", name.to_string()));
+        params.push(("streamUrl", stream_url.to_string()));
+        if let Some(url) = home_page_url.filter(|s| !s.is_empty()) {
+            params.push(("homepageUrl", url.to_string()));
+        }
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("createInternetRadioStation"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// Update an internet radio station (`updateInternetRadioStation`). Admin only.
+    pub async fn update_internet_radio_station(
+        &self,
+        id: &str,
+        name: &str,
+        stream_url: &str,
+        home_page_url: Option<&str>,
+    ) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("id", id.to_string()));
+        params.push(("name", name.to_string()));
+        params.push(("streamUrl", stream_url.to_string()));
+        if let Some(url) = home_page_url.filter(|s| !s.is_empty()) {
+            params.push(("homepageUrl", url.to_string()));
+        }
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("updateInternetRadioStation"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
+    /// Delete an internet radio station (`deleteInternetRadioStation`). Admin only.
+    pub async fn delete_internet_radio_station(&self, id: &str) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("id", id.to_string()));
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("deleteInternetRadioStation"))
             .query(&params)
             .send()
             .await?

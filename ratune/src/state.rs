@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use ratune_subsonic::models::{Album, Artist, MusicFolder, Song};
+use ratune_subsonic::models::{Album, Artist, InternetRadioStation, MusicFolder, Song};
+use serde::{Deserialize, Serialize};
 
 // ── LoadingState ──────────────────────────────────────────────────────────────
 
@@ -80,6 +81,106 @@ impl LibraryState {
             self.selected_track.and_then(|i| songs.get(i))
         } else {
             None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NowPlayingPaneFocus {
+    #[default]
+    Queue,
+    Radio,
+}
+
+// ── RadioState ────────────────────────────────────────────────────────────────
+
+/// Which field is focused in the radio station create/edit form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadioField {
+    Name,
+    StreamUrl,
+    HomePageUrl,
+}
+
+impl RadioField {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Name => Self::StreamUrl,
+            Self::StreamUrl => Self::HomePageUrl,
+            Self::HomePageUrl => Self::Name,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Name => Self::HomePageUrl,
+            Self::StreamUrl => Self::Name,
+            Self::HomePageUrl => Self::StreamUrl,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::StreamUrl => "Stream URL",
+            Self::HomePageUrl => "Homepage (optional)",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum RadioInputMode {
+    Normal,
+    Creating {
+        name: String,
+        stream_url: String,
+        home_page_url: String,
+        focused: RadioField,
+    },
+    Editing {
+        station_id: String,
+        name: String,
+        stream_url: String,
+        home_page_url: String,
+        focused: RadioField,
+    },
+    ConfirmingDelete {
+        station_id: String,
+        name: String,
+    },
+}
+
+impl Default for RadioInputMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+impl RadioInputMode {
+    pub fn is_normal(&self) -> bool {
+        matches!(self, Self::Normal)
+    }
+}
+
+/// Internet radio station list (`getInternetRadioStations`) and Shift+R picker.
+#[derive(Debug)]
+pub struct RadioState {
+    pub stations: LoadingState<Vec<InternetRadioStation>>,
+    pub selected: usize,
+    pub scroll: usize,
+    pub input_mode: RadioInputMode,
+    pub picker_visible: bool,
+}
+
+impl Default for RadioState {
+    fn default() -> Self {
+        Self {
+            stations: LoadingState::NotLoaded,
+            selected: 0,
+            scroll: 0,
+            input_mode: RadioInputMode::Normal,
+            picker_visible: false,
         }
     }
 }

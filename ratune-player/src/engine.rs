@@ -14,10 +14,12 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use reqwest::header::ACCEPT_ENCODING;
 use rodio::{Decoder, DeviceSinkBuilder, Player};
 
+use crate::adts_normalize::AdtsNormalizeReader;
+use crate::stream::{open_live_stream, StreamFormatHint, StreamingReader};
 use crate::tap::SampleTap;
 
 type SampleBuffer = Arc<Mutex<VecDeque<f32>>>;
@@ -40,6 +42,12 @@ pub enum PlayerCommand {
     PlayCached {
         path: PathBuf,
         duration: Option<Duration>,
+        gen: u64,
+    },
+    /// Same as [`PlayUrl`](Self::PlayUrl), but streams incrementally for live radio.
+    /// `duration` is always `None`; gapless enqueue is not used.
+    PlayLiveStream {
+        url: String,
         gen: u64,
     },
     /// Append the next track to the player queue for gapless playback.
@@ -178,6 +186,23 @@ fn player_thread(
                     play_payload(
                         PlayPayload::Cached(path),
                         duration,
+                        gen,
+                        &cmd_rx,
+                        &mut skip_gen,
+                        &player,
+                        &evt_tx,
+                        &mut current_total,
+                        &mut was_playing,
+                        &mut next_total,
+                        &mut next_queued,
+                        &mut about_to_finish_sent,
+                        &mut prev_elapsed,
+                        &sample_buffer,
+                    );
+                }
+                Ok(PlayerCommand::PlayLiveStream { url, gen }) => {
+                    play_live_stream(
+                        url,
                         gen,
                         &cmd_rx,
                         &mut skip_gen,
@@ -358,6 +383,25 @@ fn play_payload(
     let mut newer: Option<(PlayPayload, Option<Duration>, u64)> = None;
     loop {
         match cmd_rx.try_recv() {
+            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
+                *skip_gen = g;
+                play_live_stream(
+                    u,
+                    g,
+                    cmd_rx,
+                    skip_gen,
+                    player,
+                    evt_tx,
+                    current_total,
+                    was_playing,
+                    next_total,
+                    next_queued,
+                    about_to_finish_sent,
+                    prev_elapsed,
+                    sample_buffer,
+                );
+                return;
+            }
             Ok(PlayerCommand::PlayUrl {
                 url: u,
                 duration: d,
@@ -409,6 +453,137 @@ fn play_payload(
     let _ = evt_tx.send(PlayerEvent::TrackStarted);
 }
 
+/// Incrementally stream a live radio URL (no known duration, no gapless enqueue).
+#[allow(clippy::too_many_arguments)]
+fn play_live_stream(
+    url: String,
+    gen: u64,
+    cmd_rx: &mpsc::Receiver<PlayerCommand>,
+    skip_gen: &mut u64,
+    player: &Player,
+    evt_tx: &mpsc::Sender<PlayerEvent>,
+    current_total: &mut Option<Duration>,
+    was_playing: &mut bool,
+    next_total: &mut Option<Duration>,
+    next_queued: &mut bool,
+    about_to_finish_sent: &mut bool,
+    prev_elapsed: &mut Duration,
+    sample_buffer: &SampleBuffer,
+) {
+    *skip_gen = gen;
+
+    let mut final_url = url;
+    let mut final_gen = gen;
+    loop {
+        match cmd_rx.try_recv() {
+            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
+                final_url = u;
+                final_gen = g;
+                *skip_gen = g;
+            }
+            Ok(_other) => break,
+            Err(_) => break,
+        }
+    }
+
+    player.stop();
+    *was_playing = false;
+    *next_total = None;
+    *next_queued = false;
+    *about_to_finish_sent = false;
+    *prev_elapsed = Duration::ZERO;
+
+    let source = match live_stream_and_decode(&final_url) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = evt_tx.send(PlayerEvent::Error(format!("playback error: {e}")));
+            return;
+        }
+    };
+
+    match cmd_rx.try_recv() {
+        Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) if g != final_gen => {
+            drop(source);
+            play_live_stream(
+                u,
+                g,
+                cmd_rx,
+                skip_gen,
+                player,
+                evt_tx,
+                current_total,
+                was_playing,
+                next_total,
+                next_queued,
+                about_to_finish_sent,
+                prev_elapsed,
+                sample_buffer,
+            );
+            return;
+        }
+        Ok(PlayerCommand::PlayUrl {
+            url: u,
+            duration: d,
+            gen: g,
+        }) => {
+            drop(source);
+            play_payload(
+                PlayPayload::Url(u),
+                d,
+                g,
+                cmd_rx,
+                skip_gen,
+                player,
+                evt_tx,
+                current_total,
+                was_playing,
+                next_total,
+                next_queued,
+                about_to_finish_sent,
+                prev_elapsed,
+                sample_buffer,
+            );
+            return;
+        }
+        Ok(PlayerCommand::PlayCached {
+            path: p,
+            duration: d,
+            gen: g,
+        }) => {
+            drop(source);
+            play_payload(
+                PlayPayload::Cached(p),
+                d,
+                g,
+                cmd_rx,
+                skip_gen,
+                player,
+                evt_tx,
+                current_total,
+                was_playing,
+                next_total,
+                next_queued,
+                about_to_finish_sent,
+                prev_elapsed,
+                sample_buffer,
+            );
+            return;
+        }
+        Ok(_) | Err(_) => {}
+    }
+
+    if *skip_gen != final_gen {
+        drop(source);
+        return;
+    }
+
+    *current_total = None;
+    let tapped = SampleTap::new(source, sample_buffer.clone());
+    player.append(tapped);
+    player.play();
+    let _ = evt_tx.send(PlayerEvent::TrackStarted);
+}
+
 #[allow(clippy::too_many_arguments)] // Engine thread: one place for all command side-effects.
 fn handle_command(
     cmd: PlayerCommand,
@@ -423,8 +598,12 @@ fn handle_command(
     sample_buffer: &SampleBuffer,
 ) {
     match cmd {
-        PlayerCommand::PlayUrl { .. } | PlayerCommand::PlayCached { .. } => {
-            unreachable!("PlayUrl / PlayCached must be dispatched via play_payload()");
+        PlayerCommand::PlayUrl { .. }
+        | PlayerCommand::PlayCached { .. }
+        | PlayerCommand::PlayLiveStream { .. } => {
+            unreachable!(
+                "PlayUrl / PlayCached / PlayLiveStream must be dispatched via play_payload()"
+            );
         }
         PlayerCommand::EnqueueNext { url, duration } => match download_and_decode(&url) {
             Ok(source) => {
@@ -527,6 +706,83 @@ fn build_symphonia_decoder(bytes: Vec<u8>) -> Result<Decoder<Cursor<Vec<u8>>>> {
         .with_coarse_seek(true)
         .build()
         .context("decoding audio (unsupported or corrupt file?)")
+}
+
+/// Live HTTP reader, optionally normalizing MPEG-2 ADTS for symphonia.
+enum LiveDecodeReader {
+    Raw(StreamingReader),
+    Aac(AdtsNormalizeReader<StreamingReader>),
+}
+
+impl std::io::Read for LiveDecodeReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Raw(r) => r.read(out),
+            Self::Aac(r) => r.read(out),
+        }
+    }
+}
+
+impl std::io::Seek for LiveDecodeReader {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Self::Raw(r) => r.seek(pos),
+            Self::Aac(r) => r.seek(pos),
+        }
+    }
+}
+
+/// Max time to probe/decode after the stream has connected and prebuffered.
+const LIVE_DECODE_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+fn live_stream_and_decode(url: &str) -> Result<Decoder<LiveDecodeReader>> {
+    let mut reader = open_live_stream(url)?;
+    let decode_hint = reader.prepare_for_decode(url);
+    let reader = if decode_hint.format == StreamFormatHint::Aac {
+        LiveDecodeReader::Aac(AdtsNormalizeReader::new(reader))
+    } else {
+        LiveDecodeReader::Raw(reader)
+    };
+
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("ratune-live-decode".into())
+        .spawn(move || {
+            let mut builder = Decoder::builder().with_data(reader).with_coarse_seek(true);
+            if let Some(ext) = decode_hint.extension_hint() {
+                builder = builder.with_hint(ext);
+            }
+            if let Some(mime) = decode_hint.mime_hint() {
+                builder = builder.with_mime_type(mime);
+            }
+            let result = builder
+                .build()
+                .context("decoding live stream (unsupported format?)");
+            let _ = tx.send(result);
+        })
+        .context("failed to spawn live decode thread")?;
+
+    match rx.recv_timeout(LIVE_DECODE_PROBE_TIMEOUT) {
+        Ok(Ok(decoder)) => Ok(decoder),
+        Ok(Err(e)) => Err(e),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(match decode_hint.format {
+            StreamFormatHint::Aac => anyhow!(
+                "AAC radio stream timed out during decode — server may be blocking or using an unsupported AAC variant"
+            ),
+            StreamFormatHint::Ogg => anyhow!(
+                "OGG radio stream timed out during decode"
+            ),
+            StreamFormatHint::Unknown => anyhow!(
+                "live stream timed out during decode (unsupported format or blocked URL)"
+            ),
+            StreamFormatHint::Mp3 => anyhow!(
+                "MP3 stream timed out during decode — server may be slow or blocking this client"
+            ),
+        }),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(anyhow!("live stream decode thread exited unexpectedly"))
+        }
+    }
 }
 
 fn download_and_decode(url: &str) -> Result<Decoder<Cursor<Vec<u8>>>> {

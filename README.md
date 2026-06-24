@@ -1,7 +1,7 @@
 # Ratune
 
 A terminal music player for Subsonic-compatible servers.
-Built in Rust with [Ratatui](https://github.com/ratatui/ratatui), featuring  album art graphics (including in tmux), gapless playback, fuzzy finder support, and a highly configurable UI.
+Built in Rust with [Ratatui](https://github.com/ratatui/ratatui), featuring album art graphics (including in tmux), gapless playback, internet radio, fuzzy finder support, and a highly configurable UI.
 
 <img src="docs/screenshots/customized_visual.png" alt="Visualizer now playing customization" width="90%" />
 
@@ -32,6 +32,7 @@ Ratune was built to bring together a combination of features often missing from 
 ## Highlights
 
 - **Playback**: Gapless queue, seek, shuffle/unshuffle, and playlist management.
+- **Internet radio**: Stations from your server
 - **Album Art**: Display using Kitty graphics and [ratatui-image](https://github.com/ratatui/ratatui-image) (see link for compatible terminals)
 - **Lyrics**: Synced lyrics via LRCLib (default) or your Subsonic server. Optional on-disk cache for offline use
 - **Offline mode**: Starts without a server when needed; plays cached tracks, browse from library index, and detects reconnect automatically
@@ -236,6 +237,10 @@ preset = "dynamic"
 
 [library]
 # enabled, index path, fzf binary, fzf args, …  → see sample-config.toml
+
+[radio]
+enabled = true
+# fetch_station_icons = true   # homepage favicons when no server logo
 ```
 
 Remapping is done in `[keybinds]`; colors in `[theme]`; now-playing strip vs queue are different keys — see the sample and in-app help (`i`).
@@ -250,6 +255,16 @@ Ratune syncs favorites with your server through the Subsonic **star** / **unstar
 - **Albums and artists** can be favorited too (Navidrome supports all three via the star API)
 - **Offline:** the favorites list is cached at `~/.cache/ratune/favorites.json`; open `F` without a connection to browse the last sync and play tracks already in the audio cache
 - **`[cache].cache_starred = true`:** while online, prefetch favorite **songs** into the offline cache (same `max_size_gb` pool as play-time caching)
+
+### Internet radio
+
+Ratune plays internet radio stations configured on your Subsonic-compatible server — no separate stream proxy; the client connects directly to each station URL.
+
+- **Enable / disable:** `[radio] enabled = true` (default) in [`docs/sample-config.toml`](docs/sample-config.toml); set `false` to disable radio entirely
+- **Station picker:** default keybinding **`Shift+R`** to browse, play, add, edit, and delete stations (`toggle_radio` in `[keybinds]`)
+- **Live playback:** progress shows **● LIVE** and elapsed listen time; **n** / **N** change stations while tuned in
+- **Formats:** direct Icecast/SHOUTcast URLs (MP3, AAC, and Ogg Vorbis).
+- **Station art:** Navidrome-uploaded logos, or optional homepage favicon fetch (`[radio] fetch_station_icons`)
 
 ### Folder navigation (Browse)
 
@@ -350,7 +365,9 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `n` / `N` | Next / previous |
 | `f` / `F` | Toggle favorite / toggle favorites panel (Browse) |
 | `x` / `z` | Shuffle / unshuffle |
-| `R` | Toggle queue loop |
+| `Q` | Toggle queue loop |
+| `Shift+R` | Internet radio station picker |
+| `Ctrl+g` | Now Playing: radio pane ↔ library queue |
 | `+` / `-` | Volume |
 | `←` / `→` | Seek (Now playing) |
 | `/` | Search |
@@ -377,7 +394,7 @@ Ratune captures pointer input when your terminal supports it. Keyboard navigatio
 | Progress bar | Seek to position |
 | Browse | Select artist, album, or track; folder mode: directory or preview row |
 | Home | Recent albums (including art strip), recent tracks, rediscover rows |
-| Now playing | Queue row to select; double-click same row to play |
+| Now playing | Queue row to select; double-click same row to play; radio pane row to select station |
 
 Scroll the mouse wheel over Browse lists to move the selection (`[ui.browsetab] mouse_wheel_scroll_lines` in the sample config).
 
@@ -469,7 +486,7 @@ Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | Path | Purpose |
 | --- | --- |
 | `~/.config/ratune/config.toml` | Config |
-| `~/.config/ratune/state.json` | UI state, queue, browser position |
+| `~/.config/ratune/state.json` | UI state, queue, browser position, Now Playing pane focus |
 | `~/.local/share/ratune/history.json` | Play history |
 | `~/.local/share/ratune/scrobble-queue.json` | Pending Last.fm scrobbles (offline retry) |
 | `~/.cache/ratune/` | Track cache, library index JSON, etc. |

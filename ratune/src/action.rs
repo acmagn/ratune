@@ -15,9 +15,9 @@ pub enum Action {
     Navigate(Direction),
     Select,
     Back,
-    /// Cycle tabs forward: Home → Browser → NowPlaying → Home (Tab key)
+    /// Cycle tabs forward: Home → Browser → Now Playing → Home (Tab key)
     SwitchTab,
-    /// Cycle tabs backward: Home → NowPlaying → Browser → Home (Backtick / Shift+Tab)
+    /// Cycle tabs backward: Home → Now Playing → Browser → Home (Backtick / Shift+Tab)
     SwitchTabReverse,
     /// Jump directly to Home tab (key '1')
     GoToHome,
@@ -27,6 +27,12 @@ pub enum Action {
     ToggleBrowserFolder,
     /// Jump directly to NowPlaying tab (key '3')
     GoToNowPlaying,
+    /// Open or close the internet radio station picker (default: Shift+R).
+    ToggleRadioPicker,
+    /// Play the selected station from the radio picker and close it.
+    RadioPickerSelect,
+    /// Close the radio picker without playing.
+    RadioPickerCancel,
     FocusLeft,
     FocusRight,
     AddToQueue,
@@ -49,6 +55,8 @@ pub enum Action {
     Unshuffle,
     /// Toggle whether the queue loops after the last track (↻ control).
     ToggleQueueLoop,
+    /// Toggle Now Playing pane focus between live radio and library queue.
+    ToggleNpPaneFocus,
     SeekForward,
     SeekBackward,
     /// Seek to an exact position (used by progress-bar clicks).
@@ -92,6 +100,28 @@ pub enum Action {
     HomeSectionPrev,
     /// Refresh Home tab data (re-rolls rediscover suggestions).
     HomeRefresh,
+    /// Refresh internet radio stations while the picker is open.
+    RadioRefresh,
+    /// Open the new-station form on the Radio tab.
+    RadioCreate,
+    /// Open the edit-station form for the selected station.
+    RadioEdit,
+    /// Prompt to delete the selected station.
+    RadioDelete,
+    /// Move to the next field in the radio station form.
+    RadioFieldNext,
+    /// Move to the previous field in the radio station form.
+    RadioFieldPrev,
+    /// Submit the radio station form.
+    RadioInputConfirm,
+    /// Cancel the radio station form or delete prompt.
+    RadioInputCancel,
+    /// Feed a character into the focused radio form field.
+    RadioInputChar(char),
+    /// Confirm deleting a radio station.
+    RadioConfirmYes,
+    /// Cancel deleting a radio station.
+    RadioConfirmNo,
     /// Navigate the art strip left (decrement selected album).
     HomeAlbumLeft,
     /// Navigate the art strip right (increment selected album).

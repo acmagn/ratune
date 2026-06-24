@@ -14,6 +14,8 @@ pub mod nowplaying_tab;
 pub mod playlist_overlay;
 pub mod popup;
 pub mod queue;
+pub mod radio_nowplaying;
+pub mod radio_popup;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod terminal_palette;
@@ -24,10 +26,6 @@ use crate::app::{App, Tab};
 use ratatui::Frame;
 
 use home_tab::render_home_tab;
-
-// Colour palette constants removed — all colours are now accessed via
-// `app.theme.*` (see `ratune/src/theme.rs`) so that the [theme] config
-// section can override them at runtime.
 
 // ── Top-level render ──────────────────────────────────────────────────────────
 
@@ -40,7 +38,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             render_home_tab(frame, areas.center, app, app.accent(), app.help_visible);
             now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);
-            // Tab bar (skip if terminal is too small).
             if total_rows >= 20 {
                 tab_bar::render_tab_bar(
                     frame,
@@ -56,7 +53,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             browser::render(app, frame, areas.center);
             now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);
-            // Tab bar (skip if terminal is too small).
             if total_rows >= 20 {
                 tab_bar::render_tab_bar(
                     frame,
@@ -72,7 +68,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             nowplaying_tab::render(app, frame, areas.center);
             now_playing::render(app, frame, areas.now_playing);
             status_bar::render(app, frame, areas.status_bar);
-            // Tab bar (skip if terminal is too small).
             if total_rows >= 20 {
                 tab_bar::render_tab_bar(
                     frame,
@@ -84,7 +79,9 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             }
         }
     }
-    // Popup renders last so it layers on top of everything.
+    if app.radio.picker_visible && app.config.radio_enabled {
+        radio_popup::render(app, frame, frame.area());
+    }
     if app.help_visible {
         popup::render_help(app, frame);
     }

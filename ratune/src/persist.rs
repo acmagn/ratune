@@ -7,6 +7,7 @@ use ratune_player::PlayerCommand;
 use ratune_subsonic::Song;
 
 use crate::app::{App, BrowserColumn, Tab};
+use crate::state::NowPlayingPaneFocus;
 
 // ── Saved state ───────────────────────────────────────────────────────────────
 
@@ -30,6 +31,9 @@ pub struct SavedState {
     /// Omitted in older state files: keep volume from `config.toml` on restore.
     #[serde(default)]
     pub player_volume: Option<u8>,
+    /// Now Playing sidebar: library queue vs radio station list.
+    #[serde(default)]
+    pub np_pane_focus: NowPlayingPaneFocus,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -57,6 +61,7 @@ pub fn save_state(app: &App) -> Result<()> {
         queue: app.queue.songs.clone(),
         queue_cursor: app.queue.cursor,
         player_volume: Some(app.config.default_volume),
+        np_pane_focus: app.np_pane_focus,
     };
     let path = state_path()?;
     if let Some(parent) = path.parent() {
@@ -92,6 +97,12 @@ pub fn restore_state(app: &mut App) -> Result<()> {
         .min(app.queue.songs.len().saturating_sub(1));
     app.queue.scroll = app.queue.cursor;
     app.queue.adopt_current_order_as_shuffle_baseline();
+
+    app.np_pane_focus = if app.config.radio_enabled {
+        state.np_pane_focus
+    } else {
+        NowPlayingPaneFocus::Queue
+    };
 
     if let Some(vol) = state.player_volume {
         let v = vol.min(100);

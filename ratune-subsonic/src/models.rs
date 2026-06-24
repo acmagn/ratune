@@ -173,6 +173,80 @@ pub struct PlaylistDetail {
     pub songs: Vec<Song>,
 }
 
+/// An internet radio station from `getInternetRadioStations`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InternetRadioStation {
+    pub id: String,
+    pub name: String,
+    pub stream_url: String,
+    pub home_page_url: Option<String>,
+    /// OpenSubsonic / Navidrome uploaded image — pass to `getCoverArt`.
+    pub cover_art: Option<String>,
+}
+
+impl InternetRadioStation {
+    /// Stable cache key for now-playing art (not always a `getCoverArt` id).
+    #[must_use]
+    pub fn art_cache_key(&self) -> String {
+        format!("radio:{}", self.id)
+    }
+
+    /// Navidrome `getCoverArt` id when the station has an uploaded logo.
+    #[must_use]
+    pub fn uploaded_cover_art_id(&self) -> Option<&str> {
+        self.cover_art.as_deref().filter(|id| !id.is_empty())
+    }
+
+    /// Hostname for the now-playing subtitle (from `homePageUrl`).
+    #[must_use]
+    pub fn display_subtitle(&self) -> Option<String> {
+        self.home_page_url.as_ref().and_then(|u| {
+            url::Url::parse(u)
+                .ok()
+                .and_then(|p| p.host_str().map(str::to_string))
+        })
+    }
+
+    /// Favicon URL used by Navidrome when no uploaded station image exists.
+    #[must_use]
+    pub fn favicon_url(&self) -> Option<String> {
+        Self::site_origin(
+            self.home_page_url
+                .as_deref()
+                .or(Some(self.stream_url.as_str()))?,
+        )
+        .map(|origin| format!("{origin}/favicon.ico"))
+    }
+
+    /// Homepage logo candidates, best/largest sources first (`apple-touch-icon` then favicon).
+    #[must_use]
+    pub fn station_icon_urls(&self) -> Vec<String> {
+        let base = self
+            .home_page_url
+            .as_deref()
+            .or(Some(self.stream_url.as_str()));
+        let Some(origin) = base.and_then(Self::site_origin) else {
+            return Vec::new();
+        };
+        [
+            format!("{origin}/apple-touch-icon.png"),
+            format!("{origin}/apple-touch-icon-precomposed.png"),
+            format!("{origin}/favicon.ico"),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    fn site_origin(base: &str) -> Option<String> {
+        let mut parsed = url::Url::parse(base).ok()?;
+        parsed.set_path("/");
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        Some(parsed.as_str().trim_end_matches('/').to_string())
+    }
+}
+
 /// Combined search result from `search3`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchResult3 {
@@ -564,6 +638,48 @@ impl Starred2 {
     }
 }
 
+fn deserialize_internet_radio_station_list<'de, D>(
+    deserializer: D,
+) -> Result<Vec<InternetRadioStation>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        Single(InternetRadioStation),
+        List(Vec<InternetRadioStation>),
+    }
+    match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::Single(o) => Ok(vec![o]),
+        OneOrMany::List(v) => Ok(v),
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct InternetRadioStationsContainer {
+    #[serde(
+        default,
+        rename = "internetRadioStation",
+        deserialize_with = "deserialize_internet_radio_station_list"
+    )]
+    pub internet_radio_station: Vec<InternetRadioStation>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct InternetRadioStationsEnvelope {
+    #[serde(rename = "subsonic-response")]
+    pub response: InternetRadioStationsBody,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct InternetRadioStationsBody {
+    pub status: String,
+    pub error: Option<SubsonicError>,
+    #[serde(rename = "internetRadioStations")]
+    pub internet_radio_stations: Option<InternetRadioStationsContainer>,
+}
+
 #[derive(Deserialize)]
 pub(crate) struct Starred2Envelope {
     #[serde(rename = "subsonic-response")]
@@ -734,6 +850,109 @@ mod tests {
         let starred = starred.normalize();
         assert_eq!(starred.songs().len(), 1);
         assert_eq!(starred.songs()[0].id, "1");
+    }
+
+    #[test]
+    fn deserialize_internet_radio_stations_envelope() {
+        let j = r#"{
+            "subsonic-response": {
+                "status": "ok",
+                "internetRadioStations": {
+                    "internetRadioStation": [
+                        {
+                            "id": "1",
+                            "name": "Dream Factory",
+                            "streamUrl": "http://example.com/stream.aac",
+                            "homePageUrl": "http://example.com/"
+                        },
+                        {
+                            "id": "2",
+                            "name": "Solo Station",
+                            "streamUrl": "http://example.com/solo.ogg"
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let env: InternetRadioStationsEnvelope = serde_json::from_str(j).unwrap();
+        assert_eq!(env.response.status, "ok");
+        let stations = env
+            .response
+            .internet_radio_stations
+            .unwrap()
+            .internet_radio_station;
+        assert_eq!(stations.len(), 2);
+        assert_eq!(stations[0].name, "Dream Factory");
+        assert_eq!(stations[0].stream_url, "http://example.com/stream.aac");
+        assert_eq!(stations[1].home_page_url, None);
+    }
+
+    #[test]
+    fn internet_radio_station_art_cache_key() {
+        let s = InternetRadioStation {
+            id: "rd-1".into(),
+            name: "Test".into(),
+            stream_url: "http://x/stream".into(),
+            home_page_url: None,
+            cover_art: Some("ra-rd-1_abc".into()),
+        };
+        assert_eq!(s.art_cache_key(), "radio:rd-1");
+        assert_eq!(s.uploaded_cover_art_id(), Some("ra-rd-1_abc"));
+        let s2 = InternetRadioStation {
+            cover_art: None,
+            ..s
+        };
+        assert_eq!(s2.uploaded_cover_art_id(), None);
+        let s3 = InternetRadioStation {
+            cover_art: Some(String::new()),
+            ..s2
+        };
+        assert_eq!(s3.uploaded_cover_art_id(), None);
+    }
+
+    #[test]
+    fn deserialize_radio_station_with_cover_art() {
+        let j = r#"{"id":"1","name":"FM","streamUrl":"http://x/aac","coverArt":"ra-1_0"}"#;
+        let s: InternetRadioStation = serde_json::from_str(j).unwrap();
+        assert_eq!(s.cover_art.as_deref(), Some("ra-1_0"));
+    }
+
+    #[test]
+    fn internet_radio_station_favicon_url_from_homepage() {
+        let s = InternetRadioStation {
+            id: "1".into(),
+            name: "YourClassical".into(),
+            stream_url: "http://stream.example/aac".into(),
+            home_page_url: Some("https://www.yourclassical.org".into()),
+            cover_art: None,
+        };
+        assert_eq!(
+            s.favicon_url().as_deref(),
+            Some("https://www.yourclassical.org/favicon.ico")
+        );
+        assert_eq!(
+            s.station_icon_urls(),
+            vec![
+                "https://www.yourclassical.org/apple-touch-icon.png".to_string(),
+                "https://www.yourclassical.org/apple-touch-icon-precomposed.png".to_string(),
+                "https://www.yourclassical.org/favicon.ico".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn internet_radio_station_icon_urls_from_homepage_with_path() {
+        let s = InternetRadioStation {
+            id: "1".into(),
+            name: "Site".into(),
+            stream_url: "http://stream.example/aac".into(),
+            home_page_url: Some("https://www.example.com/listen/live".into()),
+            cover_art: None,
+        };
+        assert_eq!(
+            s.station_icon_urls().first().map(String::as_str),
+            Some("https://www.example.com/apple-touch-icon.png")
+        );
     }
 
     #[test]

@@ -38,6 +38,26 @@ struct FileConfig {
     pub library: LibrarySection,
     #[serde(default)]
     pub scrobble: ScrobbleSection,
+    #[serde(default)]
+    pub radio: RadioSection,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct RadioSection {
+    /// Enable Internet Radio (Shift+R picker, Now Playing radio pane). Default: true.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Fetch homepage icons for station art when no logo is uploaded in Navidrome.
+    #[serde(default)]
+    pub fetch_station_icons: Option<bool>,
+}
+
+fn default_radio_enabled() -> bool {
+    true
+}
+
+fn default_radio_fetch_station_icons() -> bool {
+    true
 }
 
 // ── [keybinds] ────────────────────────────────────────────────────────────────
@@ -65,8 +85,12 @@ pub struct KeybindsSection {
     pub add_all_prepend: Option<String>,
     pub shuffle: Option<String>,
     pub unshuffle: Option<String>,
-    /// Toggle queue loop after the last track. Default: Shift+r
+    /// Toggle queue loop after the last track. Default: Shift+q
     pub toggle_queue_loop: Option<String>,
+    /// Open or close the internet radio station picker. Default: Shift+r
+    pub toggle_radio: Option<String>,
+    /// Toggle Now Playing focus between live radio and library queue. Default: Ctrl+g
+    pub np_focus_queue: Option<String>,
     pub clear_queue: Option<String>,
     /// Remove highlighted track from queue (Now Playing tab). Default: d
     pub remove_from_queue: Option<String>,
@@ -992,6 +1016,10 @@ pub struct Config {
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     pub queue_loop: bool,
+    /// Internet Radio (picker, Now Playing pane, station management).
+    pub radio_enabled: bool,
+    /// When false, skip HTTP fetches to station homepages for Now Playing art.
+    pub radio_fetch_station_icons: bool,
     /// Raw keybind strings — parsed into `Keybinds` by `App::new`.
     pub keybinds: KeybindsSection,
     /// Raw theme colour strings — parsed into `Theme` by `App::new`.
@@ -1401,6 +1429,12 @@ impl Config {
             && !scrobble_api_secret.is_empty()
             && !scrobble_session_key.is_empty();
 
+        let radio_enabled = file_cfg.radio.enabled.unwrap_or_else(default_radio_enabled);
+        let radio_fetch_station_icons = file_cfg
+            .radio
+            .fetch_station_icons
+            .unwrap_or_else(default_radio_fetch_station_icons);
+
         Ok(Config {
             subsonic_url: file_cfg.server.url,
             subsonic_user: file_cfg.server.username,
@@ -1410,6 +1444,8 @@ impl Config {
             max_bit_rate: file_cfg.player.max_bit_rate,
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
+            radio_enabled,
+            radio_fetch_station_icons,
             keybinds: file_cfg.keybinds,
             theme: file_cfg.theme,
             lyrics_visible,
@@ -1567,7 +1603,9 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # add_all_prepend  = "Ctrl+Shift+p"
 # shuffle       = "x"
 # unshuffle     = "z"
-# toggle_queue_loop = "R"
+# toggle_queue_loop = "Q"
+# toggle_radio      = "R"
+# np_focus_queue = "Ctrl+g"
 # clear_queue   = "Shift+d"
 # remove_from_queue = "d"
 # search        = "/"
@@ -2330,5 +2368,17 @@ cache_enabled = false
     fn parses_queue_loop() {
         let fc: FileConfig = toml::from_str("[player]\nqueue_loop = false\n").expect("toml");
         assert!(!fc.player.queue_loop);
+    }
+
+    #[test]
+    fn radio_enabled_defaults_true() {
+        let fc: FileConfig = toml::from_str("").expect("toml");
+        assert_eq!(fc.radio.enabled, None);
+    }
+
+    #[test]
+    fn parses_radio_enabled() {
+        let fc: FileConfig = toml::from_str("[radio]\nenabled = false\n").expect("toml");
+        assert_eq!(fc.radio.enabled, Some(false));
     }
 }

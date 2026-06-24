@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 
 use ratune_player::{spawn_player, PlayerCommand, PlayerEvent, SampleBuffer};
-use ratune_subsonic::{StarItemType, SubsonicClient};
+use ratune_subsonic::{InternetRadioStation, StarItemType, SubsonicClient};
 
 use serde::{Deserialize, Serialize};
 
@@ -24,8 +24,8 @@ use crate::keybinds::Keybinds;
 use crate::state::{
     folder_left_default_row, folder_preview_rows, ConfirmAction, DirectoryListing,
     FavoritesCategory, FavoritesFocus, FavoritesOverlay, FolderBrowseState, FolderPreviewRow,
-    GlobalConfirm, LibraryState, LoadingState, PlaybackState, PlaylistFocus, PlaylistInputMode,
-    PlaylistOverlay, QueueState,
+    GlobalConfirm, LibraryState, LoadingState, NowPlayingPaneFocus, PlaybackState, PlaylistFocus,
+    PlaylistInputMode, PlaylistOverlay, QueueState, RadioField, RadioInputMode, RadioState,
 };
 use crate::theme::Theme;
 use image::{imageops::FilterType, DynamicImage};
@@ -56,6 +56,37 @@ fn humanize_playback_error(message: &str) -> String {
         || lower.contains("dns")
     {
         return "Playback failed: network error".to_string();
+    }
+    if lower.contains("decoding live stream") || lower.contains("format of the data") {
+        return "Playback failed: radio stream format not supported".to_string();
+    }
+    if lower.contains("live stream timed out") || lower.contains("timed out during decode") {
+        return "Playback failed: radio stream timed out".to_string();
+    }
+    if lower.contains("hls stream") || lower.contains(".m3u8") {
+        return "Playback failed: HLS streams are not supported".to_string();
+    }
+    if lower.contains("aac radio stream") {
+        return "Playback failed: AAC stream could not start".to_string();
+    }
+    if lower.contains("ogg radio stream") {
+        return "Playback failed: OGG stream could not start".to_string();
+    }
+    if lower.contains("playlist redirect limit") {
+        return "Playback failed: too many playlist redirects — use a direct stream URL"
+            .to_string();
+    }
+    if lower.contains("m3u playlist") || lower.contains("pls playlist") {
+        return "Playback failed: use a direct stream URL, not a playlist file".to_string();
+    }
+    if lower.contains("returned a web page") {
+        return "Playback failed: stream URL is not audio (check the station URL)".to_string();
+    }
+    if lower.contains("stream prebuffer timeout") {
+        return "Playback failed: radio stream too slow to start (retry)".to_string();
+    }
+    if lower.contains("stream returned no data") {
+        return "Playback failed: radio stream returned no data".to_string();
     }
     if lower.contains("enqueue error") {
         return "Next track: download failed".to_string();
@@ -90,15 +121,34 @@ enum ResolvedPlayback {
     Cached(PathBuf),
 }
 
+/// Prefix for synthetic [`Song::id`] values built from internet radio stations.
+pub const RADIO_SONG_ID_PREFIX: &str = "radio:";
+
 // ── Tab ───────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tab {
     #[default]
     Home,
     Browser,
     NowPlaying,
+}
+
+impl<'de> Deserialize<'de> for Tab {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "home" => Tab::Home,
+            "browser" => Tab::Browser,
+            "now_playing" => Tab::NowPlaying,
+            "radio" => Tab::NowPlaying,
+            _ => Tab::Home,
+        })
+    }
 }
 
 impl Tab {
@@ -265,6 +315,11 @@ pub enum LibraryUpdate {
         cover_id: String,
         bytes: Vec<u8>,
     },
+    /// Brief status line (used for `RATUNE_DEBUG` diagnostics from background tasks).
+    StatusFlash {
+        msg: String,
+        secs: u64,
+    },
     /// Lyrics fetched for a song; `lines` is empty when the track has no lyrics.
     Lyrics {
         song_id: String,
@@ -356,6 +411,10 @@ pub enum LibraryUpdate {
         reachable: bool,
         forced: bool,
     },
+    /// Internet radio stations from `getInternetRadioStations`.
+    RadioStations(Result<Vec<InternetRadioStation>, String>),
+    /// Create / update / delete internet radio station finished.
+    RadioMutation(Result<(), String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,6 +466,9 @@ pub struct App {
     pub active_tab: Tab,
     pub browser_focus: BrowserColumn,
     pub library: LibraryState,
+    pub radio: RadioState,
+    /// Now Playing tab: which pane receives j/k and the active border while radio is on.
+    pub np_pane_focus: NowPlayingPaneFocus,
     pub folders: FolderBrowseState,
     pub queue: QueueState,
     pub playback: PlaybackState,
@@ -679,6 +741,8 @@ impl App {
             active_tab: Tab::Home,
             browser_focus: BrowserColumn::Artists,
             library: LibraryState::default(),
+            radio: RadioState::default(),
+            np_pane_focus: NowPlayingPaneFocus::Queue,
             folders: FolderBrowseState::default(),
             queue: QueueState {
                 loop_enabled: config.queue_loop,
@@ -780,6 +844,10 @@ impl App {
             mpris: None,
         };
         app.load_persisted_favorites();
+        if !app.config.radio_enabled {
+            app.close_radio_picker();
+            app.np_pane_focus = NowPlayingPaneFocus::Queue;
+        }
         Ok(app)
     }
 
@@ -859,6 +927,9 @@ impl App {
 
     /// Decode the current cover once and cache in `art_cache_decoded`.
     pub fn ensure_art_cache_decoded(&mut self) -> bool {
+        if !self.np_art_cache_matches() {
+            return false;
+        }
         let Some(fp) = self.art_cache_fingerprint else {
             return false;
         };
@@ -911,11 +982,37 @@ impl App {
 
     /// Accent from cached cover pixels when available, else decode from bytes.
     fn accent_from_art_cache(&self) -> Option<Color> {
+        if !self.np_art_cache_matches() {
+            return None;
+        }
         if let Some((_, img)) = self.art_cache_decoded.as_ref() {
             return extract_accent_from_image(img);
         }
         let (_, bytes) = self.art_cache.as_ref()?;
         extract_accent(bytes)
+    }
+
+    /// Cover art id for the track shown in now playing (`Song::cover_art`).
+    #[must_use]
+    pub fn expected_cover_art_id(&self) -> Option<&str> {
+        self.playback.current_song.as_ref()?.cover_art.as_deref()
+    }
+
+    /// True when `art_cache` belongs to the current now-playing track (not a stale queue fetch).
+    #[must_use]
+    pub fn np_art_cache_matches(&self) -> bool {
+        matches!(
+            (self.expected_cover_art_id(), self.art_cache.as_ref()),
+            (Some(expected), Some((cached, _))) if expected == cached.as_str()
+        )
+    }
+
+    /// Drop now-playing cover bytes and ratatui/kitty prep state (e.g. switching to radio).
+    pub fn clear_now_playing_art_cache(&mut self) {
+        self.art_cache = None;
+        self.art_cache_fingerprint = None;
+        self.art_cache_decoded = None;
+        self.clear_np_ratatui_art_state();
     }
 
     /// Drop all `ratatui-image` protocol state (tab switch, help overlay, fzf suspend, …).
@@ -1811,6 +1908,9 @@ impl App {
         }
         self.spawn_library_index_refresh(false);
         self.fetch_starred();
+        if self.config.radio_enabled {
+            self.fetch_radio_stations();
+        }
         if self.config.scrobble_enabled {
             self.spawn_scrobble_queue_flush();
         }
@@ -2144,6 +2244,137 @@ impl App {
         });
     }
 
+    /// Station logo via Navidrome `getCoverArt` when uploaded, else homepage icons.
+    pub fn fetch_radio_station_art(&self, station: &InternetRadioStation) {
+        let cache_key = station.art_cache_key();
+        let uploaded_id = station.uploaded_cover_art_id().map(str::to_string);
+        let icon_urls = station.station_icon_urls();
+        crate::debug::log(format!(
+            "radio art fetch: station={:?} cache_key={cache_key} homepage={:?} icons={icon_urls:?} uploaded={uploaded_id:?}",
+            station.name,
+            station.home_page_url,
+        ));
+        if !self.remote_available() {
+            crate::debug::log("radio art fetch: skipped (offline / remote unavailable)");
+            return;
+        }
+        let needs_fetch = self
+            .art_cache
+            .as_ref()
+            .map(|(cached_id, _)| cached_id != &cache_key)
+            .unwrap_or(true)
+            || self
+                .art_cache
+                .as_ref()
+                .is_some_and(|(cached_id, _)| cached_id == &cache_key)
+                && self.art_cache_decoded.is_none();
+        if !needs_fetch {
+            crate::debug::log("radio art fetch: skipped (cache hit)");
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        let fetch_icons = self.config.radio_fetch_station_icons;
+        tokio::spawn(async move {
+            let flash = |msg: String| async {
+                crate::debug::log(&msg);
+                if crate::debug::enabled() {
+                    let _ = tx.send(LibraryUpdate::StatusFlash { msg, secs: 6 }).await;
+                }
+            };
+            if let Some(ref id) = uploaded_id {
+                match client.get_cover_art(id).await {
+                    Ok(bytes)
+                        if !bytes.is_empty()
+                            && crate::ui::art_prepare::art_bytes_decode(&bytes).is_some() =>
+                    {
+                        crate::debug::log(format!(
+                            "radio art: using uploaded cover {id} ({} bytes)",
+                            bytes.len()
+                        ));
+                        let _ = tx
+                            .send(LibraryUpdate::CoverArt {
+                                cover_id: cache_key,
+                                bytes,
+                            })
+                            .await;
+                        return;
+                    }
+                    Ok(bytes) => {
+                        flash(format!(
+                            "radio art: uploaded cover {id} not decodable ({} bytes)",
+                            bytes.len()
+                        ))
+                        .await;
+                    }
+                    Err(e) => {
+                        flash(format!("radio art: getCoverArt({id}) failed: {e}")).await;
+                    }
+                }
+            }
+            if icon_urls.is_empty() {
+                flash("radio art: no homepage or stream URL for station icon".into()).await;
+                return;
+            }
+            if !fetch_icons {
+                flash("radio art: station icons disabled in config".into()).await;
+                return;
+            }
+            let mut best: Option<(String, Vec<u8>, u32)> = None;
+            for url in icon_urls {
+                match client.fetch_external_bytes(&url).await {
+                    Ok(bytes) if !bytes.is_empty() => {
+                        if let Some(img) = crate::ui::art_prepare::art_bytes_decode(&bytes) {
+                            let area = img.width().saturating_mul(img.height());
+                            if best
+                                .as_ref()
+                                .map(|(_, _, best_area)| area > *best_area)
+                                .unwrap_or(true)
+                            {
+                                best = Some((url, bytes, area));
+                            }
+                        } else {
+                            crate::debug::log(format!(
+                                "radio art: {url} not decodable ({} bytes)",
+                                bytes.len()
+                            ));
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        crate::debug::log(format!("radio art: {url} failed: {e}"));
+                    }
+                }
+            }
+            if let Some((url, bytes, area)) = best {
+                crate::debug::log(format!(
+                    "radio art: using {url} ({} bytes, ~{}px)",
+                    bytes.len(),
+                    area.isqrt()
+                ));
+                let _ = tx
+                    .send(LibraryUpdate::CoverArt {
+                        cover_id: cache_key,
+                        bytes,
+                    })
+                    .await;
+            } else {
+                flash("radio art: no decodable station icon from homepage".into()).await;
+            }
+        });
+    }
+
+    fn radio_station_for_song<'a>(
+        song: &ratune_subsonic::Song,
+        stations: &'a [InternetRadioStation],
+    ) -> Option<&'a InternetRadioStation> {
+        if !Self::is_radio_song(song) {
+            return None;
+        }
+        let station_id = song.id.strip_prefix(RADIO_SONG_ID_PREFIX)?;
+        stations.iter().find(|s| s.id == station_id)
+    }
+
     /// Spawn a task to fetch lyrics from the configured source.
     ///
     /// No network request is made when lyrics are disabled or the pane is hidden.
@@ -2457,8 +2688,24 @@ impl App {
                 }
             }
             LibraryUpdate::CoverArt { cover_id, bytes } => {
+                let expected = self
+                    .playback
+                    .current_song
+                    .as_ref()
+                    .and_then(|s| s.cover_art.as_deref());
+                if expected != Some(cover_id.as_str()) {
+                    crate::debug::log(format!(
+                        "cover art discarded: got {cover_id}, expected {expected:?} (current={:?})",
+                        self.playback.current_song.as_ref().map(|s| s.id.as_str())
+                    ));
+                    return;
+                }
+                crate::debug::log(format!(
+                    "cover art applied: {cover_id} ({} bytes)",
+                    bytes.len()
+                ));
                 let fp = crate::ui::art_prepare::art_bytes_fingerprint(&bytes);
-                let decoded = image::load_from_memory(&bytes).ok();
+                let decoded = crate::ui::art_prepare::art_bytes_decode(&bytes);
                 let accent = decoded
                     .as_ref()
                     .and_then(extract_accent_from_image)
@@ -2470,6 +2717,9 @@ impl App {
                 self.apply_dynamic_accent(accent);
                 #[cfg(target_os = "linux")]
                 self.mpris_emit_props();
+            }
+            LibraryUpdate::StatusFlash { msg, secs } => {
+                self.flash_status_secs(msg, secs);
             }
             LibraryUpdate::Lyrics { song_id, lines } => {
                 self.lyrics_loading = false;
@@ -2814,12 +3064,41 @@ impl App {
             LibraryUpdate::ConnectivityChanged { reachable, forced } => {
                 self.apply_connectivity_changed(reachable, forced);
             }
+            LibraryUpdate::RadioStations(result) => match result {
+                Ok(stations) => {
+                    self.radio.stations = LoadingState::Loaded(stations);
+                    if let LoadingState::Loaded(list) = &self.radio.stations {
+                        if self.radio.selected >= list.len() {
+                            self.radio.selected = list.len().saturating_sub(1);
+                        }
+                        if self.radio_now_playing_active() {
+                            self.sync_radio_selection_from_playback();
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.radio.stations = LoadingState::Error(e);
+                }
+            },
+            LibraryUpdate::RadioMutation(result) => {
+                self.radio.input_mode = RadioInputMode::Normal;
+                match result {
+                    Ok(()) => {
+                        self.flash_status("Radio stations updated");
+                        self.fetch_radio_stations();
+                    }
+                    Err(e) => self.flash_status_secs(format!("Radio: {e}"), 5),
+                }
+            }
         }
     }
 
     // ── Player event ingestion ────────────────────────────────────────────────
 
     fn scrobble_track_started(&mut self, song: &ratune_subsonic::Song) {
+        if Self::is_radio_song(song) {
+            return;
+        }
         self.play_recorded = false;
         self.audioscrobbler_scrobbled = false;
         self.track_started_at = Some(ratune_scrobble::TrackInfo::now_secs());
@@ -2834,6 +3113,9 @@ impl App {
         let Some(song) = self.playback.current_song.clone() else {
             return;
         };
+        if Self::is_radio_song(&song) {
+            return;
+        }
 
         if !self.play_recorded {
             let threshold =
@@ -2953,6 +3235,38 @@ impl App {
         match event {
             PlayerEvent::TrackStarted => {
                 self.playback.paused = false;
+                if let Some(song) = self.playback.current_song.clone() {
+                    if Self::is_radio_song(&song) {
+                        self.playback.player_loaded = true;
+                        let station = match &self.radio.stations {
+                            LoadingState::Loaded(stations) => {
+                                Self::radio_station_for_song(&song, stations).cloned()
+                            }
+                            _ => None,
+                        };
+                        if let Some(station) = station {
+                            let cache_key = station.art_cache_key();
+                            let needs_fetch = self
+                                .art_cache
+                                .as_ref()
+                                .map(|(cached_id, _)| cached_id != &cache_key)
+                                .unwrap_or(true)
+                                || self
+                                    .art_cache
+                                    .as_ref()
+                                    .is_some_and(|(cached_id, _)| cached_id == &cache_key)
+                                    && self.art_cache_decoded.is_none();
+                            if needs_fetch {
+                                self.apply_dynamic_accent(None);
+                                self.fetch_radio_station_art(&station);
+                            } else if self.art_cache_decoded.is_some() {
+                                let accent = self.accent_from_art_cache();
+                                self.apply_dynamic_accent(accent);
+                            }
+                        }
+                        return;
+                    }
+                }
                 if let Some(song) = self.queue.current().cloned() {
                     // Fetch cover art when the track has one and it differs from cache.
                     let cover_id = song.cover_art.clone();
@@ -3092,6 +3406,18 @@ impl App {
                 }
             }
             PlayerEvent::TrackEnded => {
+                if self
+                    .playback
+                    .current_song
+                    .as_ref()
+                    .is_some_and(Self::is_radio_song)
+                {
+                    self.playback.current_song = None;
+                    self.playback.player_loaded = false;
+                    self.playback.elapsed = Duration::ZERO;
+                    self.playback.total = None;
+                    return;
+                }
                 if self.queue.next() {
                     self.play_current();
                 } else if !self.queue.songs.is_empty() && self.queue.loop_enabled {
@@ -3109,7 +3435,7 @@ impl App {
                 self.playback.player_loaded = false;
                 self.status_flash = Some((
                     humanize_playback_error(&e),
-                    Instant::now() + Duration::from_secs(10),
+                    Instant::now() + Duration::from_secs(12),
                 ));
             }
         }
@@ -3287,6 +3613,7 @@ impl App {
     /// Send a PlayUrl command for the song the queue cursor points at.
     fn play_current(&mut self) {
         if let Some(song) = self.queue.current().cloned() {
+            self.np_pane_focus = NowPlayingPaneFocus::Queue;
             self.play_gen += 1;
             // Advance the prefetch gen so stale background downloads are discarded.
             self.prefetch_gen.fetch_add(1, Ordering::Release);
@@ -3323,6 +3650,490 @@ impl App {
             }
         }
         ResolvedPlayback::Url(self.subsonic.stream_url(&song.id, self.config.max_bit_rate))
+    }
+
+    #[must_use]
+    pub fn is_radio_song(song: &ratune_subsonic::Song) -> bool {
+        song.id.starts_with(RADIO_SONG_ID_PREFIX)
+    }
+
+    fn song_from_radio_station(station: &InternetRadioStation) -> ratune_subsonic::Song {
+        ratune_subsonic::Song {
+            id: format!("{RADIO_SONG_ID_PREFIX}{}", station.id),
+            title: station.name.clone(),
+            artist: Some("Radio".into()),
+            album: station.display_subtitle(),
+            cover_art: Some(station.art_cache_key()),
+            album_id: None,
+            artist_id: None,
+            track: None,
+            disc_number: None,
+            year: None,
+            genre: None,
+            duration: None,
+            bit_rate: None,
+            content_type: None,
+            suffix: None,
+            size: None,
+            path: None,
+            starred: None,
+        }
+    }
+
+    /// Fetch internet radio stations for the picker and Now Playing radio pane.
+    pub fn fetch_radio_stations(&mut self) {
+        if !self.config.radio_enabled {
+            return;
+        }
+        if !self.remote_available() {
+            self.radio.stations = LoadingState::Error("Offline — radio unavailable".into());
+            return;
+        }
+        self.radio.stations = LoadingState::Loading;
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let result = client
+                .get_internet_radio_stations()
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(LibraryUpdate::RadioStations(result)).await;
+        });
+    }
+
+    fn on_tab_entered(&mut self) {
+        if self.active_tab == Tab::Home {
+            self.refresh_home_data();
+            self.home_art_needs_redraw = true;
+        }
+    }
+
+    pub fn close_radio_picker(&mut self) {
+        self.radio.picker_visible = false;
+        self.radio.input_mode = RadioInputMode::Normal;
+    }
+
+    pub fn open_radio_picker(&mut self) {
+        if !self.config.radio_enabled {
+            return;
+        }
+        self.radio.picker_visible = true;
+        if matches!(
+            &self.radio.stations,
+            LoadingState::NotLoaded | LoadingState::Error(_)
+        ) {
+            self.fetch_radio_stations();
+        }
+        self.sync_radio_selection_from_playback();
+    }
+
+    fn toggle_radio_picker(&mut self) {
+        if !self.config.radio_enabled {
+            return;
+        }
+        if self.radio.picker_visible && self.radio.input_mode.is_normal() {
+            self.close_radio_picker();
+        } else if !self.radio.picker_visible {
+            self.open_radio_picker();
+        }
+    }
+
+    fn play_radio_from_picker(&mut self) {
+        self.play_selected_radio_station();
+        self.close_radio_picker();
+        self.clear_art_on_tab_switch();
+        self.active_tab = Tab::NowPlaying;
+        self.clear_browser_search();
+    }
+
+    #[must_use]
+    pub fn radio_buffering(&self) -> bool {
+        self.playback
+            .current_song
+            .as_ref()
+            .is_some_and(Self::is_radio_song)
+            && !self.playback.player_loaded
+    }
+
+    fn play_radio_station(&mut self, station: &InternetRadioStation) {
+        if !self.config.radio_enabled {
+            return;
+        }
+        self.play_gen += 1;
+        self.prefetch_gen.fetch_add(1, Ordering::Release);
+        let song = Self::song_from_radio_station(station);
+        // Set now-playing metadata before spawning art fetch — otherwise a fast favicon
+        // response can arrive before `current_song` is set and be discarded as stale.
+        self.playback.current_song = Some(song);
+        self.np_pane_focus = NowPlayingPaneFocus::Radio;
+        self.sync_radio_selection_from_playback();
+        self.clear_now_playing_art_cache();
+        self.apply_dynamic_accent(None);
+        self.fetch_radio_station_art(station);
+        self.playback.player_loaded = false;
+        self.playback.paused = false;
+        self.playback.elapsed = Duration::ZERO;
+        self.playback.total = None;
+        let url = station.stream_url.trim().to_string();
+        if url.is_empty() {
+            self.flash_status_secs("Radio: stream URL is empty", 5);
+            return;
+        }
+        let gen = self.play_gen;
+        if self
+            .player_tx
+            .send(PlayerCommand::PlayLiveStream { url, gen })
+            .is_err()
+        {
+            self.flash_status_secs("Playback failed: audio engine unavailable", 5);
+        }
+    }
+
+    fn play_selected_radio_station(&mut self) {
+        let station = match &self.radio.stations {
+            LoadingState::Loaded(stations) => stations.get(self.radio.selected).cloned(),
+            _ => None,
+        };
+        if let Some(station) = station {
+            self.play_radio_station(&station);
+        }
+    }
+
+    /// Mouse click on a visible row in the radio picker list.
+    pub fn click_radio_row(&mut self, visible_row: usize) {
+        let len = match &self.radio.stations {
+            LoadingState::Loaded(stations) => stations.len(),
+            _ => return,
+        };
+        let idx = self.radio.scroll + visible_row;
+        if idx < len {
+            self.radio.selected = idx;
+            self.play_radio_from_picker();
+        }
+    }
+
+    /// Select a visible row in the Now Playing radio pane (does not start playback).
+    pub fn select_radio_visible_row(&mut self, visible_row: usize) {
+        let len = match &self.radio.stations {
+            LoadingState::Loaded(stations) => stations.len(),
+            _ => return,
+        };
+        let idx = self.radio.scroll + visible_row;
+        if idx < len {
+            self.radio.selected = idx;
+            self.np_pane_focus = NowPlayingPaneFocus::Radio;
+            LibraryState::clamp_vertical_scroll(
+                &mut self.radio.scroll,
+                self.radio.selected,
+                len,
+                self.queue_viewport_rows.max(1),
+            );
+        }
+    }
+
+    fn radio_station_step(&mut self, delta: i32) {
+        let len = match &self.radio.stations {
+            LoadingState::Loaded(stations) if !stations.is_empty() => stations.len(),
+            _ => return,
+        };
+        let new_sel = if delta < 0 {
+            self.radio
+                .selected
+                .saturating_sub(delta.unsigned_abs() as usize)
+        } else {
+            (self.radio.selected + delta as usize).min(len - 1)
+        };
+        self.radio.selected = new_sel;
+        let visible = self.queue_viewport_rows.max(1);
+        LibraryState::clamp_vertical_scroll(
+            &mut self.radio.scroll,
+            self.radio.selected,
+            len,
+            visible,
+        );
+        if self.is_playing_radio() {
+            self.play_selected_radio_station();
+        }
+    }
+
+    #[must_use]
+    pub fn is_playing_radio(&self) -> bool {
+        self.playback
+            .current_song
+            .as_ref()
+            .is_some_and(Self::is_radio_song)
+            && self.playback.player_loaded
+    }
+
+    /// Live radio is the current now-playing source (including while buffering).
+    #[must_use]
+    pub fn radio_now_playing_active(&self) -> bool {
+        self.playback
+            .current_song
+            .as_ref()
+            .is_some_and(Self::is_radio_song)
+    }
+
+    /// Now Playing can split the sidebar between radio stations and the library queue.
+    #[must_use]
+    pub fn np_radio_pane_available(&self) -> bool {
+        self.config.radio_enabled
+    }
+
+    /// Align Radio tab selection with the station in `playback.current_song`.
+    pub fn sync_radio_selection_from_playback(&mut self) {
+        let Some(song) = self.playback.current_song.as_ref() else {
+            return;
+        };
+        if !Self::is_radio_song(song) {
+            return;
+        };
+        let Some(station_id) = song.id.strip_prefix(RADIO_SONG_ID_PREFIX) else {
+            return;
+        };
+        let LoadingState::Loaded(stations) = &self.radio.stations else {
+            return;
+        };
+        if let Some(idx) = stations.iter().position(|s| s.id == station_id) {
+            self.radio.selected = idx;
+            LibraryState::clamp_vertical_scroll(
+                &mut self.radio.scroll,
+                self.radio.selected,
+                stations.len(),
+                self.queue_viewport_rows.max(1),
+            );
+        }
+    }
+
+    fn play_queue_from_np(&mut self) {
+        if self.queue.songs.is_empty() {
+            return;
+        }
+        self.np_pane_focus = NowPlayingPaneFocus::Queue;
+        self.play_current();
+    }
+
+    fn handle_toggle_np_pane_focus(&mut self) {
+        if !self.np_radio_pane_available() {
+            self.np_pane_focus = NowPlayingPaneFocus::Queue;
+            return;
+        }
+        self.np_pane_focus = match self.np_pane_focus {
+            NowPlayingPaneFocus::Radio => NowPlayingPaneFocus::Queue,
+            NowPlayingPaneFocus::Queue => {
+                if self.radio_now_playing_active() {
+                    self.sync_radio_selection_from_playback();
+                }
+                NowPlayingPaneFocus::Radio
+            }
+        };
+    }
+
+    fn radio_form_values(mode: &RadioInputMode) -> Option<(&str, &str, &str)> {
+        match mode {
+            RadioInputMode::Creating {
+                name,
+                stream_url,
+                home_page_url,
+                ..
+            }
+            | RadioInputMode::Editing {
+                name,
+                stream_url,
+                home_page_url,
+                ..
+            } => Some((name.as_str(), stream_url.as_str(), home_page_url.as_str())),
+            _ => None,
+        }
+    }
+
+    fn radio_form_is_valid(mode: &RadioInputMode) -> bool {
+        Self::radio_form_values(mode).is_some_and(|(name, stream_url, _)| {
+            !name.trim().is_empty() && !stream_url.trim().is_empty()
+        })
+    }
+
+    fn radio_form_focused_buffer(mode: &mut RadioInputMode) -> Option<&mut String> {
+        match mode {
+            RadioInputMode::Creating {
+                name,
+                stream_url,
+                home_page_url,
+                focused,
+            }
+            | RadioInputMode::Editing {
+                name,
+                stream_url,
+                home_page_url,
+                focused,
+                ..
+            } => Some(match focused {
+                RadioField::Name => name,
+                RadioField::StreamUrl => stream_url,
+                RadioField::HomePageUrl => home_page_url,
+            }),
+            _ => None,
+        }
+    }
+
+    fn radio_form_focused_field(mode: &RadioInputMode) -> Option<RadioField> {
+        match mode {
+            RadioInputMode::Creating { focused, .. } | RadioInputMode::Editing { focused, .. } => {
+                Some(*focused)
+            }
+            _ => None,
+        }
+    }
+
+    fn radio_form_set_focus(mode: &mut RadioInputMode, field: RadioField) {
+        match mode {
+            RadioInputMode::Creating { focused, .. } | RadioInputMode::Editing { focused, .. } => {
+                *focused = field;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn handle_radio_mutation(&mut self, action: Action) {
+        match action {
+            Action::RadioCreate => {
+                self.radio.input_mode = RadioInputMode::Creating {
+                    name: String::new(),
+                    stream_url: String::new(),
+                    home_page_url: String::new(),
+                    focused: RadioField::Name,
+                };
+            }
+            Action::RadioEdit => {
+                if let LoadingState::Loaded(stations) = &self.radio.stations {
+                    if let Some(station) = stations.get(self.radio.selected) {
+                        self.radio.input_mode = RadioInputMode::Editing {
+                            station_id: station.id.clone(),
+                            name: station.name.clone(),
+                            stream_url: station.stream_url.clone(),
+                            home_page_url: station.home_page_url.clone().unwrap_or_default(),
+                            focused: RadioField::Name,
+                        };
+                    }
+                }
+            }
+            Action::RadioDelete => {
+                if let LoadingState::Loaded(stations) = &self.radio.stations {
+                    if let Some(station) = stations.get(self.radio.selected) {
+                        self.radio.input_mode = RadioInputMode::ConfirmingDelete {
+                            station_id: station.id.clone(),
+                            name: station.name.clone(),
+                        };
+                    }
+                }
+            }
+            Action::RadioFieldNext => {
+                if let Some(focused) = Self::radio_form_focused_field(&self.radio.input_mode) {
+                    Self::radio_form_set_focus(&mut self.radio.input_mode, focused.next());
+                }
+            }
+            Action::RadioFieldPrev => {
+                if let Some(focused) = Self::radio_form_focused_field(&self.radio.input_mode) {
+                    Self::radio_form_set_focus(&mut self.radio.input_mode, focused.prev());
+                }
+            }
+            Action::RadioInputChar(c) => {
+                if let Some(buffer) = Self::radio_form_focused_buffer(&mut self.radio.input_mode) {
+                    if c == '\x08' {
+                        buffer.pop();
+                    } else {
+                        buffer.push(c);
+                    }
+                }
+            }
+            Action::RadioInputConfirm => match self.radio.input_mode.clone() {
+                RadioInputMode::Creating {
+                    name,
+                    stream_url,
+                    home_page_url,
+                    ..
+                } if Self::radio_form_is_valid(&self.radio.input_mode) => {
+                    let home = home_page_url.trim();
+                    self.spawn_save_radio_station(
+                        None,
+                        name.trim().to_string(),
+                        stream_url.trim().to_string(),
+                        (!home.is_empty()).then(|| home.to_string()),
+                    );
+                }
+                RadioInputMode::Editing {
+                    station_id,
+                    name,
+                    stream_url,
+                    home_page_url,
+                    ..
+                } if Self::radio_form_is_valid(&self.radio.input_mode) => {
+                    let home = home_page_url.trim();
+                    self.spawn_save_radio_station(
+                        Some(station_id),
+                        name.trim().to_string(),
+                        stream_url.trim().to_string(),
+                        (!home.is_empty()).then(|| home.to_string()),
+                    );
+                }
+                _ => {}
+            },
+            Action::RadioInputCancel => {
+                self.radio.input_mode = RadioInputMode::Normal;
+            }
+            Action::RadioConfirmYes => {
+                if let RadioInputMode::ConfirmingDelete { station_id, .. } =
+                    self.radio.input_mode.clone()
+                {
+                    self.spawn_delete_radio_station(station_id);
+                }
+            }
+            Action::RadioConfirmNo => {
+                self.radio.input_mode = RadioInputMode::Normal;
+            }
+            _ => {}
+        }
+    }
+
+    fn spawn_save_radio_station(
+        &self,
+        station_id: Option<String>,
+        name: String,
+        stream_url: String,
+        home_page_url: Option<String>,
+    ) {
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let result = if let Some(id) = station_id {
+                client
+                    .update_internet_radio_station(
+                        &id,
+                        &name,
+                        &stream_url,
+                        home_page_url.as_deref(),
+                    )
+                    .await
+            } else {
+                client
+                    .create_internet_radio_station(&name, &stream_url, home_page_url.as_deref())
+                    .await
+            }
+            .map_err(|e| e.to_string());
+            let _ = tx.send(LibraryUpdate::RadioMutation(result)).await;
+        });
+    }
+
+    fn spawn_delete_radio_station(&self, station_id: String) {
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let result = client
+                .delete_internet_radio_station(&station_id)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(LibraryUpdate::RadioMutation(result)).await;
+        });
     }
 
     /// Spawn a background task to download `song_id` for caching.
@@ -3939,39 +4750,36 @@ impl App {
             Action::SwitchTab => {
                 self.playlist_overlay.visible = false;
                 self.playlist_picker = None;
+                self.close_radio_picker();
                 self.clear_art_on_tab_switch();
                 self.active_tab = self.active_tab.next();
                 self.clear_browser_search();
-                if self.active_tab == Tab::Home {
-                    self.refresh_home_data();
-                    self.home_art_needs_redraw = true;
-                }
+                self.on_tab_entered();
             }
             Action::SwitchTabReverse => {
                 self.playlist_overlay.visible = false;
                 self.playlist_picker = None;
+                self.close_radio_picker();
                 self.clear_art_on_tab_switch();
                 self.active_tab = self.active_tab.prev();
                 self.clear_browser_search();
-                if self.active_tab == Tab::Home {
-                    self.refresh_home_data();
-                    self.home_art_needs_redraw = true;
-                }
+                self.on_tab_entered();
             }
             Action::GoToHome => {
                 self.playlist_overlay.visible = false;
                 self.playlist_picker = None;
+                self.close_radio_picker();
                 if self.kitty_apc_overlay_active() {
                     let _ = crate::ui::kitty_art::clear_image(self.in_tmux);
                 }
                 self.active_tab = Tab::Home;
                 self.clear_browser_search();
-                self.refresh_home_data();
-                self.home_art_needs_redraw = true;
+                self.on_tab_entered();
             }
             Action::GoToBrowser => {
                 self.playlist_overlay.visible = false;
                 self.playlist_picker = None;
+                self.close_radio_picker();
                 self.clear_art_on_tab_switch();
                 self.active_tab = Tab::Browser;
                 self.clear_browser_search();
@@ -3980,6 +4788,7 @@ impl App {
             Action::ToggleBrowserFolder => {
                 self.playlist_overlay.visible = false;
                 self.playlist_picker = None;
+                self.close_radio_picker();
                 self.clear_art_on_tab_switch();
                 self.pending_gg = false;
                 if !self.config.browse_folder_navigation {
@@ -4020,10 +4829,14 @@ impl App {
             Action::GoToNowPlaying => {
                 self.playlist_overlay.visible = false;
                 self.playlist_picker = None;
+                self.close_radio_picker();
                 self.clear_art_on_tab_switch();
                 self.active_tab = Tab::NowPlaying;
                 self.clear_browser_search();
             }
+            Action::ToggleRadioPicker => self.toggle_radio_picker(),
+            Action::RadioPickerSelect => self.play_radio_from_picker(),
+            Action::RadioPickerCancel => self.close_radio_picker(),
             Action::FocusLeft => self.handle_focus_left(),
             Action::FocusRight => self.handle_focus_right(),
             Action::Navigate(dir) => {
@@ -4063,7 +4876,23 @@ impl App {
             }
             Action::AddAllToQueuePrepend => self.handle_add_all_to_queue(AddAllMode::Prepend),
             Action::PlayPause => {
-                if !self.playback.player_loaded && self.queue.current().is_some() {
+                if self.is_playing_radio()
+                    || self
+                        .playback
+                        .current_song
+                        .as_ref()
+                        .is_some_and(Self::is_radio_song)
+                {
+                    if !self.playback.player_loaded {
+                        self.play_selected_radio_station();
+                    } else if self.playback.paused {
+                        self.playback.paused = false;
+                        let _ = self.player_tx.send(PlayerCommand::Resume);
+                    } else {
+                        self.playback.paused = true;
+                        let _ = self.player_tx.send(PlayerCommand::Pause);
+                    }
+                } else if !self.playback.player_loaded && self.queue.current().is_some() {
                     // Restored queue: engine has no track yet — load and start playing.
                     self.play_current();
                 } else if self.playback.paused {
@@ -4075,12 +4904,16 @@ impl App {
                 }
             }
             Action::NextTrack => {
-                if self.queue.next() {
+                if self.is_playing_radio() {
+                    self.radio_station_step(1);
+                } else if self.queue.next() {
                     self.play_current();
                 }
             }
             Action::PrevTrack => {
-                if self.queue.prev() {
+                if self.is_playing_radio() {
+                    self.radio_station_step(-1);
+                } else if self.queue.prev() {
                     self.play_current();
                 }
             }
@@ -4101,6 +4934,7 @@ impl App {
             Action::Shuffle => self.handle_shuffle(),
             Action::Unshuffle => self.handle_unshuffle(),
             Action::ToggleQueueLoop => self.handle_toggle_queue_loop(),
+            Action::ToggleNpPaneFocus => self.handle_toggle_np_pane_focus(),
             Action::SeekForward => {
                 let new_pos = if let Some(total) = self.playback.total {
                     (self.playback.elapsed + std::time::Duration::from_secs(10)).min(total)
@@ -4239,6 +5073,23 @@ impl App {
                     self.home.active_section = saved_section;
                     self.home_art_needs_redraw = true;
                 }
+            }
+            Action::RadioRefresh => {
+                if self.radio.picker_visible {
+                    self.fetch_radio_stations();
+                }
+            }
+            Action::RadioCreate
+            | Action::RadioEdit
+            | Action::RadioDelete
+            | Action::RadioFieldNext
+            | Action::RadioFieldPrev
+            | Action::RadioInputConfirm
+            | Action::RadioInputCancel
+            | Action::RadioInputChar(_)
+            | Action::RadioConfirmYes
+            | Action::RadioConfirmNo => {
+                self.handle_radio_mutation(action);
             }
             Action::HomeAlbumLeft => {
                 if self.active_tab == Tab::Home {
@@ -4552,11 +5403,47 @@ impl App {
     // ── Navigation ────────────────────────────────────────────────────────────
 
     fn handle_navigate(&mut self, dir: Direction) {
+        if self.radio.picker_visible && self.radio.input_mode.is_normal() {
+            self.handle_navigate_radio(dir);
+            return;
+        }
         match self.active_tab {
             Tab::Home => self.handle_navigate_home(dir),
             Tab::Browser => self.handle_navigate_browser(dir, 1),
-            Tab::NowPlaying => self.handle_navigate_queue(dir),
+            Tab::NowPlaying => {
+                if self.np_radio_pane_available() {
+                    match self.np_pane_focus {
+                        NowPlayingPaneFocus::Radio => self.handle_navigate_radio(dir),
+                        NowPlayingPaneFocus::Queue if !self.queue.songs.is_empty() => {
+                            self.handle_navigate_queue(dir);
+                        }
+                        NowPlayingPaneFocus::Queue => {}
+                    }
+                } else if !self.queue.songs.is_empty() {
+                    self.handle_navigate_queue(dir);
+                }
+            }
         }
+    }
+
+    fn handle_navigate_radio(&mut self, dir: Direction) {
+        if !self.radio.input_mode.is_normal() {
+            return;
+        }
+        let len = match &self.radio.stations {
+            LoadingState::Loaded(stations) if !stations.is_empty() => stations.len(),
+            _ => return,
+        };
+        let page = self.queue_viewport_rows.max(1);
+        self.radio.selected = match dir {
+            Direction::Up => self.radio.selected.saturating_sub(1),
+            Direction::Down => (self.radio.selected + 1).min(len - 1),
+            Direction::Top => 0,
+            Direction::Bottom => len - 1,
+            Direction::PageUp => self.radio.selected.saturating_sub(page),
+            Direction::PageDown => (self.radio.selected + page).min(len - 1),
+        };
+        LibraryState::clamp_vertical_scroll(&mut self.radio.scroll, self.radio.selected, len, page);
     }
 
     fn handle_navigate_home(&mut self, dir: Direction) {
@@ -4934,6 +5821,10 @@ impl App {
     // ── Select ────────────────────────────────────────────────────────────────
 
     fn handle_select(&mut self) {
+        if self.radio.picker_visible && self.radio.input_mode.is_normal() {
+            self.play_radio_from_picker();
+            return;
+        }
         match self.active_tab {
             Tab::Home => self.handle_select_home(),
             Tab::Browser => {
@@ -4952,8 +5843,17 @@ impl App {
                 }
             }
             Tab::NowPlaying => {
-                // Enter: jump playback to the highlighted queue row.
-                if !self.queue.songs.is_empty() {
+                if self.np_radio_pane_available() {
+                    match self.np_pane_focus {
+                        NowPlayingPaneFocus::Queue if !self.queue.songs.is_empty() => {
+                            self.play_queue_from_np();
+                        }
+                        NowPlayingPaneFocus::Radio => {
+                            self.play_selected_radio_station();
+                        }
+                        NowPlayingPaneFocus::Queue => {}
+                    }
+                } else if !self.queue.songs.is_empty() {
                     self.play_current();
                 }
             }

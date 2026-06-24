@@ -24,17 +24,20 @@ pub fn fit_image_to_pixel_budget(img: DynamicImage, max_w: u32, max_h: u32) -> D
     if iw == 0 || ih == 0 {
         return img;
     }
-    let (tw, th) = fit_inside(iw, ih, max_w, max_h);
+    let (tw, th) = fit_inside_scaled(iw, ih, max_w, max_h, false);
     if (tw, th) == (iw, ih) {
         return img;
     }
     img.resize_exact(tw, th, FilterType::Triangle)
 }
 
-fn fit_inside(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+fn fit_inside_scaled(w: u32, h: u32, max_w: u32, max_h: u32, allow_upscale: bool) -> (u32, u32) {
     let wratio = max_w as f64 / w as f64;
     let hratio = max_h as f64 / h as f64;
-    let ratio = f64::min(wratio, hratio);
+    let mut ratio = f64::min(wratio, hratio);
+    if !allow_upscale {
+        ratio = ratio.min(1.0);
+    }
     let nw = ((w as f64 * ratio).round() as u32).max(1);
     let nh = ((h as f64 * ratio).round() as u32).max(1);
     (nw, nh)
@@ -56,7 +59,7 @@ pub fn contain_fit_rect_in_cells(img: &DynamicImage, inner: Rect, font: FontSize
     }
     let max_w_px = inner.width as u32 * fw;
     let max_h_px = inner.height as u32 * fh;
-    let (fit_w_px, fit_h_px) = fit_inside(iw, ih, max_w_px, max_h_px);
+    let (fit_w_px, fit_h_px) = fit_inside_scaled(iw, ih, max_w_px, max_h_px, false);
 
     let w = fit_w_px.div_ceil(fw).max(1).min(inner.width as u32) as u16;
     let h = fit_h_px.div_ceil(fh).max(1).min(inner.height as u32) as u16;
@@ -89,6 +92,12 @@ pub fn art_bytes_fingerprint(bytes: &[u8]) -> u64 {
         h = h.wrapping_mul(PRIME);
     }
     h
+}
+
+/// Decode cover bytes (JPEG, PNG, ICO, …) for display.
+#[must_use]
+pub fn art_bytes_decode(bytes: &[u8]) -> Option<DynamicImage> {
+    image::load_from_memory(bytes).ok()
 }
 
 #[cfg(test)]
@@ -132,5 +141,35 @@ mod tests {
         let font = (10u16, 20u16);
         let fit = contain_fit_rect_in_cells(&img, inner, font);
         assert_eq!(fit, inner);
+    }
+
+    #[test]
+    fn contain_fit_rect_small_icon_not_upscaled() {
+        let inner = Rect::new(0, 0, 20, 10);
+        let img = solid(48, 48);
+        let font = (10u16, 10u16);
+        let fit = contain_fit_rect_in_cells(&img, inner, font);
+        assert_eq!(fit.width, 5);
+        assert_eq!(fit.height, 5);
+        assert_eq!(fit.x, 7);
+        assert_eq!(fit.y, 2);
+    }
+
+    #[test]
+    fn fit_image_does_not_upscale_small_sources() {
+        let img = solid(48, 48);
+        let out = fit_image_to_pixel_budget(img, 400, 400);
+        assert_eq!(out.width(), 48);
+        assert_eq!(out.height(), 48);
+    }
+
+    #[test]
+    fn decode_ico_favicon_file() {
+        let bytes = std::fs::read("/tmp/favicon.ico").unwrap_or_default();
+        if bytes.len() < 6 {
+            return;
+        }
+        let img = art_bytes_decode(&bytes).expect("ico decode");
+        assert!(img.width() > 0 && img.height() > 0);
     }
 }

@@ -3,6 +3,7 @@ mod app;
 mod cache;
 mod color;
 mod config;
+mod debug;
 mod desktop_notify;
 mod favorites_cache;
 mod fzf_picker;
@@ -45,7 +46,9 @@ use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
 use config::{AlbumArtBackend, BrowseMode, Config, HomePanel};
 use keybinds::Keybinds;
-use state::{FavoritesFocus, GlobalConfirm, LoadingState, PlaylistFocus, PlaylistInputMode};
+use state::{
+    FavoritesFocus, GlobalConfirm, LoadingState, PlaylistFocus, PlaylistInputMode, RadioInputMode,
+};
 
 /// Entry point shared by the `ratune` binary and integration tests.
 pub async fn run() -> Result<()> {
@@ -148,6 +151,9 @@ pub async fn run() -> Result<()> {
         // Background metadata index refresh when missing or stale (Milestone 2).
         app.spawn_library_index_refresh(false);
         app.fetch_starred();
+        if app.config.radio_enabled && app.server_reachable {
+            app.fetch_radio_stations();
+        }
     } else {
         app.prepare_offline_browse();
         if app.browser_browse_mode != BrowseMode::Files {
@@ -544,122 +550,128 @@ async fn run_loop(
                         }
                         continue;
                     };
-                    if let (Some(fp), Some(cover_id)) = (
-                        app.art_cache_fingerprint,
-                        app.art_cache.as_ref().map(|(id, _)| id.clone()),
-                    ) {
-                        let show_art = app.config.nowplaying_show_art;
-                        let layout_opts = ui::layout::layout_options_for_app(app);
-                        let center = ui::layout::build_layout(terminal_rect, &layout_opts).center;
+                    if app.np_art_cache_matches() {
+                        if let (Some(fp), Some(cover_id)) = (
+                            app.art_cache_fingerprint,
+                            app.art_cache.as_ref().map(|(id, _)| id.clone()),
+                        ) {
+                            let show_art = app.config.nowplaying_show_art;
+                            let layout_opts = ui::layout::layout_options_for_app(app);
+                            let center =
+                                ui::layout::build_layout(terminal_rect, &layout_opts).center;
 
-                        let boxed = app
-                            .config
-                            .now_playing_layout
-                            .trim()
-                            .eq_ignore_ascii_case("boxed");
+                            let boxed = app
+                                .config
+                                .now_playing_layout
+                                .trim()
+                                .eq_ignore_ascii_case("boxed");
 
-                        let art_position =
-                            ui::layout::placement_from_str(&app.config.nowplaying_art_position)
-                                .unwrap_or(ui::layout::Placement::Left);
-                        let queue_position =
-                            ui::layout::placement_from_str(&app.config.nowplaying_queue_position)
-                                .unwrap_or(ui::layout::Placement::Right);
-                        let visualizer_position =
-                            ui::layout::placement_from_str(&app.config.visualizer_location)
-                                .unwrap_or(ui::layout::Placement::Right);
-                        let now_playing_position =
-                            ui::layout::placement_from_str(&app.config.now_playing_box_location)
-                                .unwrap_or(ui::layout::Placement::Right);
-                        let lyrics_position =
-                            ui::layout::placement_from_str(&app.config.lyrics_location)
-                                .unwrap_or(queue_position);
+                            let art_position =
+                                ui::layout::placement_from_str(&app.config.nowplaying_art_position)
+                                    .unwrap_or(ui::layout::Placement::Left);
+                            let queue_position = ui::layout::placement_from_str(
+                                &app.config.nowplaying_queue_position,
+                            )
+                            .unwrap_or(ui::layout::Placement::Right);
+                            let visualizer_position =
+                                ui::layout::placement_from_str(&app.config.visualizer_location)
+                                    .unwrap_or(ui::layout::Placement::Right);
+                            let now_playing_position = ui::layout::placement_from_str(
+                                &app.config.now_playing_box_location,
+                            )
+                            .unwrap_or(ui::layout::Placement::Right);
+                            let lyrics_position =
+                                ui::layout::placement_from_str(&app.config.lyrics_location)
+                                    .unwrap_or(queue_position);
 
-                        let rects = ui::layout::now_playing_rects(
-                            center,
-                            show_art,
-                            art_position,
-                            queue_position,
-                            app.config.nowplaying_left_width_percent,
-                            app.config.nowplaying_vertical_fill_top_percent,
-                            app.visualizer_visible,
-                            visualizer_position,
-                            app.lyrics_visible,
-                            lyrics_position,
-                            boxed,
-                            now_playing_position,
-                        );
-                        let art_rect_opt = rects.art;
+                            let rects = ui::layout::now_playing_rects(
+                                center,
+                                show_art,
+                                art_position,
+                                queue_position,
+                                app.config.nowplaying_left_width_percent,
+                                app.config.nowplaying_vertical_fill_top_percent,
+                                app.visualizer_visible,
+                                visualizer_position,
+                                app.lyrics_visible,
+                                lyrics_position,
+                                boxed,
+                                now_playing_position,
+                            );
+                            let art_rect_opt = rects.art;
 
-                        if kitty_cover_unrenderable.as_deref() == Some(cover_id.as_str()) {
-                            if art_displayed {
-                                let _ = ui::kitty_art::clear_image(app.in_tmux);
-                                art_displayed = false;
-                            }
-                        } else if let Some(art_rect) = art_rect_opt {
-                            let inner = ui::kitty_art::album_art_placeholder_inner(art_rect);
-                            let font = app
-                                .art_picker
-                                .as_ref()
-                                .map(|p| p.font_size())
-                                .or(app.cell_px)
-                                .unwrap_or((10, 20));
-                            let placement = if app.ensure_art_cache_decoded() {
-                                app.art_cache_decoded.as_ref().map(|(_, img)| {
-                                    ui::art_prepare::contain_fit_rect_in_cells(img, inner, font)
-                                })
-                            } else {
-                                None
-                            }
-                            .unwrap_or(inner);
-                            if placement.width == 0 || placement.height == 0 {
+                            if kitty_cover_unrenderable.as_deref() == Some(cover_id.as_str()) {
                                 if art_displayed {
                                     let _ = ui::kitty_art::clear_image(app.in_tmux);
                                     art_displayed = false;
                                 }
-                                last_rendered_art = None;
-                            } else {
-                                let stored_matches = last_rendered_art
+                            } else if let Some(art_rect) = art_rect_opt {
+                                let inner = ui::kitty_art::album_art_placeholder_inner(art_rect);
+                                let font = app
+                                    .art_picker
                                     .as_ref()
-                                    .map(|(last_fp, r)| *last_fp == fp && r == &placement)
-                                    .unwrap_or(false);
-
-                                if stored_matches && art_displayed {
-                                    // Image is already visible — nothing to do.
+                                    .map(|p| p.font_size())
+                                    .or(app.cell_px)
+                                    .unwrap_or((10, 20));
+                                let placement = if app.ensure_art_cache_decoded() {
+                                    app.art_cache_decoded.as_ref().map(|(_, img)| {
+                                        ui::art_prepare::contain_fit_rect_in_cells(img, inner, font)
+                                    })
                                 } else {
-                                    let prepared =
-                                        app.ensure_np_kitty_prepared(placement, font).cloned();
-                                    let in_tmux = app.in_tmux;
-                                    let tmux_offset = app.tmux_status_offset;
-                                    if let Some(prepared) = prepared {
-                                        match ui::kitty_art::transmit_np_image(
-                                            &prepared,
-                                            placement,
-                                            in_tmux,
-                                            tmux_offset,
-                                        ) {
-                                            Ok(()) => {
-                                                last_rendered_art = Some((fp, placement));
-                                                art_displayed = true;
-                                            }
-                                            Err(e) => {
-                                                eprintln!("kitty render: {e}");
-                                                let _ = ui::kitty_art::clear_image(app.in_tmux);
-                                                kitty_cover_unrenderable = Some(cover_id.clone());
-                                                last_rendered_art = None;
-                                                art_displayed = false;
+                                    None
+                                }
+                                .unwrap_or(inner);
+                                if placement.width == 0 || placement.height == 0 {
+                                    if art_displayed {
+                                        let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                        art_displayed = false;
+                                    }
+                                    last_rendered_art = None;
+                                } else {
+                                    let stored_matches = last_rendered_art
+                                        .as_ref()
+                                        .map(|(last_fp, r)| *last_fp == fp && r == &placement)
+                                        .unwrap_or(false);
+
+                                    if stored_matches && art_displayed {
+                                        // Image is already visible — nothing to do.
+                                    } else {
+                                        let prepared =
+                                            app.ensure_np_kitty_prepared(placement, font).cloned();
+                                        let in_tmux = app.in_tmux;
+                                        let tmux_offset = app.tmux_status_offset;
+                                        if let Some(prepared) = prepared {
+                                            match ui::kitty_art::transmit_np_image(
+                                                &prepared,
+                                                placement,
+                                                in_tmux,
+                                                tmux_offset,
+                                            ) {
+                                                Ok(()) => {
+                                                    last_rendered_art = Some((fp, placement));
+                                                    art_displayed = true;
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("kitty render: {e}");
+                                                    let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                                    kitty_cover_unrenderable =
+                                                        Some(cover_id.clone());
+                                                    last_rendered_art = None;
+                                                    art_displayed = false;
+                                                }
                                             }
                                         }
                                     }
                                 }
+                            } else if art_displayed {
+                                // Art column hidden — clear Kitty overlay.
+                                let _ = ui::kitty_art::clear_image(app.in_tmux);
+                                last_rendered_art = None;
+                                art_displayed = false;
                             }
-                        } else if art_displayed {
-                            // Art column hidden — clear Kitty overlay.
-                            let _ = ui::kitty_art::clear_image(app.in_tmux);
-                            last_rendered_art = None;
-                            art_displayed = false;
                         }
                     } else if art_displayed {
-                        // In NowPlaying tab but no art — clear any stale image.
+                        // Stale cover (e.g. queue album art while radio is playing).
                         let _ = ui::kitty_art::clear_image(app.in_tmux);
                         last_rendered_art = None;
                         art_displayed = false;
@@ -730,6 +742,23 @@ async fn run_loop(
                                     // Picker is open: highest priority — swallow all keys.
                                     let action = map_picker_key(key.code, key.modifiers);
                                     app.dispatch(action);
+                                } else if app.radio.picker_visible
+                                    && !app.radio.input_mode.is_normal()
+                                    && !app.help_visible
+                                {
+                                    let action = map_radio_form_key(
+                                        key.code,
+                                        key.modifiers,
+                                        &app.radio.input_mode,
+                                    );
+                                    app.dispatch(action);
+                                } else if app.radio.picker_visible && !app.help_visible {
+                                    let action = map_radio_picker_key(
+                                        key.code,
+                                        key.modifiers,
+                                        &app.keybinds,
+                                    );
+                                    app.dispatch(action);
                                 } else if app.favorites_overlay.visible
                                     && app.active_tab == Tab::Browser
                                     && !app.help_visible
@@ -738,7 +767,7 @@ async fn run_loop(
                                         key.code,
                                         KeyCode::Tab
                                             | KeyCode::BackTab
-                                            | KeyCode::Char('1')
+                                            |                                         KeyCode::Char('1')
                                             | KeyCode::Char('2')
                                             | KeyCode::Char('3')
                                     );
@@ -774,7 +803,7 @@ async fn run_loop(
                                         key.code,
                                         KeyCode::Tab
                                             | KeyCode::BackTab
-                                            | KeyCode::Char('1')
+                                            |                                         KeyCode::Char('1')
                                             | KeyCode::Char('2')
                                             | KeyCode::Char('3')
                                     );
@@ -986,6 +1015,7 @@ async fn run_loop(
             );
             if app.kitty_apc_overlay_active()
                 && !art_displayed
+                && app.np_art_cache_matches()
                 && app.art_cache.is_some()
                 && app.active_tab == app::Tab::NowPlaying
                 && !app.help_visible
@@ -1293,6 +1323,52 @@ fn map_favorites_key(
     }
 }
 
+fn map_radio_picker_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action {
+    if kb.toggle_radio.matches(code, modifiers) {
+        return Action::ToggleRadioPicker;
+    }
+    if kb.home_refresh.matches(code, modifiers) {
+        return Action::RadioRefresh;
+    }
+    let shift = modifiers.intersects(KeyModifiers::SHIFT);
+    match code {
+        KeyCode::Esc => Action::RadioPickerCancel,
+        KeyCode::Enter => Action::RadioPickerSelect,
+        KeyCode::Char('c') if !shift => Action::RadioCreate,
+        KeyCode::Char('e') if !shift => Action::RadioEdit,
+        KeyCode::Char('X') | KeyCode::Char('x') if code == KeyCode::Char('X') || shift => {
+            Action::RadioDelete
+        }
+        KeyCode::Char('k') | KeyCode::Up => Action::Navigate(Direction::Up),
+        KeyCode::Char('j') | KeyCode::Down => Action::Navigate(Direction::Down),
+        _ => Action::None,
+    }
+}
+
+fn map_radio_form_key(
+    code: KeyCode,
+    _modifiers: KeyModifiers,
+    input_mode: &RadioInputMode,
+) -> Action {
+    match input_mode {
+        RadioInputMode::ConfirmingDelete { .. } => match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Action::RadioConfirmYes,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::RadioConfirmNo,
+            _ => Action::None,
+        },
+        RadioInputMode::Creating { .. } | RadioInputMode::Editing { .. } => match code {
+            KeyCode::Esc => Action::RadioInputCancel,
+            KeyCode::Enter => Action::RadioInputConfirm,
+            KeyCode::Tab => Action::RadioFieldNext,
+            KeyCode::BackTab => Action::RadioFieldPrev,
+            KeyCode::Backspace => Action::RadioInputChar('\x08'),
+            KeyCode::Char(ch) => Action::RadioInputChar(ch),
+            _ => Action::None,
+        },
+        RadioInputMode::Normal => Action::None,
+    }
+}
+
 /// Translate a key event into an `Action` when the playlist overlay is open.
 ///
 /// Called instead of `map_key` whenever `playlist_overlay.visible` is true and
@@ -1528,6 +1604,13 @@ fn map_key(
     if kb.go_to_nowplaying.matches(code, modifiers) {
         return Action::GoToNowPlaying;
     }
+    // Legacy tab jump: `4` used to open Now Playing before Radio became a popup.
+    if code == KeyCode::Char('4') && modifiers.is_empty() {
+        return Action::GoToNowPlaying;
+    }
+    if kb.toggle_radio.matches(code, modifiers) {
+        return Action::ToggleRadioPicker;
+    }
     if let Some(spec) = &kb.toggle_folder_browse {
         if spec.matches(code, modifiers) {
             return Action::ToggleBrowserFolder;
@@ -1603,6 +1686,9 @@ fn map_key(
     }
     if kb.toggle_queue_loop.matches(code, modifiers) {
         return Action::ToggleQueueLoop;
+    }
+    if active_tab == Tab::NowPlaying && kb.np_focus_queue.matches(code, modifiers) {
+        return Action::ToggleNpPaneFocus;
     }
     if kb.clear_queue.matches(code, modifiers) {
         return Action::ClearQueue;
@@ -1811,15 +1897,13 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
     let center = areas.center;
     let now_playing = areas.now_playing;
 
-    // ── Tab bar: dispatch GoToHome / GoToBrowser / GoToNowPlaying ────────────
+    // ── Tab bar: dispatch GoToHome / GoToBrowser / GoToNowPlaying ──
     if y == areas.tab_bar.y {
-        // The labels are:  " Home "  " │ "  " Browse "  " │ "  " Now Playing "
-        // Measure cumulative widths to decide which label was clicked.
         // Label widths (chars): Home=6, sep=3, Browse=8, sep=3, NowPlaying=13
         let home_end: u16 = 6;
-        let browser_start: u16 = 9; // 6+3
-        let browser_end: u16 = 17; // 9+8
-        let np_start: u16 = 20; // 17+3
+        let browser_start: u16 = 9;
+        let browser_end: u16 = 17;
+        let np_start: u16 = 20;
 
         let action = if x < home_end {
             Action::GoToHome
@@ -1828,10 +1912,31 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
         } else if x >= np_start {
             Action::GoToNowPlaying
         } else {
-            Action::None // clicked a separator
+            Action::None
         };
         app.dispatch(action);
         return;
+    }
+
+    if app.radio.picker_visible && app.radio.input_mode.is_normal() {
+        let area = terminal_size;
+        let w = (area.width * 4 / 5).clamp(40, area.width);
+        let h = (area.height * 7 / 10).clamp(8, area.height);
+        let popup = ratatui::layout::Rect {
+            x: area.x + (area.width.saturating_sub(w)) / 2,
+            y: area.y + (area.height.saturating_sub(h)) / 2,
+            width: w,
+            height: h,
+        };
+        if x >= popup.x
+            && x < popup.x + popup.width
+            && y >= popup.y + 1
+            && y < popup.y + popup.height.saturating_sub(1)
+        {
+            let visible_row = (y - popup.y - 1) as usize;
+            app.click_radio_row(visible_row);
+            return;
+        }
     }
 
     // ── Now-playing bar (layout matches `ui::now_playing::render`) ───────────
@@ -2119,6 +2224,18 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                 return;
             }
             let visible_row = (y - queue_area.y - 1) as usize;
+            if app.np_radio_pane_available()
+                && app.np_pane_focus == crate::state::NowPlayingPaneFocus::Radio
+            {
+                let visible_rows = queue_area.height.saturating_sub(2) as usize;
+                let hint_rows = if app.queue.songs.is_empty() { 1 } else { 2 };
+                let list_rows = visible_rows.saturating_sub(hint_rows).max(1);
+                if visible_row >= list_rows {
+                    return;
+                }
+                app.select_radio_visible_row(visible_row);
+                return;
+            }
             let clicked_idx = app.queue.scroll + visible_row;
             app.set_queue_cursor(clicked_idx);
         }
