@@ -1420,8 +1420,7 @@ fn map_playlist_key(
                 KeyCode::Char('c') => Action::PlaylistCreate,
                 // X (Shift+x): delete selected playlist
                 KeyCode::Char('X') | KeyCode::Char('x')
-                    if code == KeyCode::Char('X')
-                        || modifiers.intersects(KeyModifiers::SHIFT) =>
+                    if code == KeyCode::Char('X') || modifiers.intersects(KeyModifiers::SHIFT) =>
                 {
                     Action::PlaylistDelete
                 }
@@ -1455,7 +1454,8 @@ fn map_playlist_key(
                 {
                     Action::PlaylistAppendTrack
                 }
-                _ if kb.add_all.matches(code, modifiers) && matches!(focus, PlaylistFocus::List) =>
+                _ if kb.add_all.matches(code, modifiers)
+                    && matches!(focus, PlaylistFocus::List) =>
                 {
                     Action::PlaylistAppendAll
                 }
