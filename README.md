@@ -361,6 +361,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `h` / `l` | Columns / home album strip |
 | `Enter` | Open / play |
 | `a` / `A` | Add track / add all |
+| `Ctrl+r` | Replace queue |
 | `p` / `Space` | Play / pause |
 | `n` / `N` | Next / previous |
 | `f` / `F` | Toggle favorite / toggle favorites panel (Browse) |
@@ -373,7 +374,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `/` | Search |
 | `L` | Lyrics |
 | `V` | Visualizer |
-| `P` | Playlist overlay (Browse) |
+| `P` | Playlist overlay (Browse): `r` rename, `c` create, `X` delete |
 | `>` | Add to playlist (Browse) |
 | `Ctrl+f` | Library fzf picker (if configured) |
 | `Ctrl+b` | Toggle folder / artist browse (if `[ui.browsetab] folder_navigation = true`) |

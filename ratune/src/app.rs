@@ -2767,6 +2767,7 @@ impl App {
             LibraryUpdate::Playlists(playlists) => {
                 self.playlist_overlay.playlists = crate::state::LoadingState::Loaded(playlists);
                 self.playlist_overlay.selected_playlist_index = 0;
+                self.sync_playlist_tracks_for_selection();
             }
             LibraryUpdate::PlaylistTracks { playlist_id, songs } => {
                 // Ignore stale results if the user navigated to a different playlist
@@ -2788,6 +2789,7 @@ impl App {
                         self.playlist_overlay.selected_playlist_index = 0;
                     }
                 }
+                self.sync_playlist_tracks_for_selection();
             }
             LibraryUpdate::PlaylistDeleted(id) => {
                 if let LoadingState::Loaded(ref mut list) = self.playlist_overlay.playlists {
@@ -2800,6 +2802,7 @@ impl App {
                     self.playlist_overlay.tracks = LoadingState::NotLoaded;
                     self.playlist_overlay.loaded_playlist_id = None;
                 }
+                self.sync_playlist_tracks_for_selection();
             }
             LibraryUpdate::PlaylistRenamed { id, new_name } => {
                 if let LoadingState::Loaded(ref mut list) = self.playlist_overlay.playlists {
@@ -6612,6 +6615,29 @@ impl App {
         });
     }
 
+    /// Load tracks for the highlighted playlist (browse-style preview in the right column).
+    fn sync_playlist_tracks_for_selection(&mut self) {
+        if !self.playlist_overlay.visible {
+            return;
+        }
+        let playlist_id = match &self.playlist_overlay.playlists {
+            LoadingState::Loaded(playlists) => playlists
+                .get(self.playlist_overlay.selected_playlist_index)
+                .map(|p| p.id.clone()),
+            _ => None,
+        };
+        let Some(playlist_id) = playlist_id else {
+            return;
+        };
+        if self.playlist_overlay.loaded_playlist_id.as_deref() == Some(&playlist_id) {
+            return;
+        }
+        self.playlist_overlay.selected_track_index = 0;
+        self.playlist_overlay.tracks = LoadingState::Loading;
+        self.playlist_overlay.loaded_playlist_id = Some(playlist_id.clone());
+        self.fetch_playlist_tracks(playlist_id);
+    }
+
     /// Spawn a background task to fetch the track list for `playlist_id`.
     pub fn fetch_playlist_tracks(&self, playlist_id: String) {
         if !self.remote_available() {
@@ -6654,6 +6680,8 @@ impl App {
                             self.playlist_overlay.playlists =
                                 LoadingState::Error("Server unreachable".into());
                         }
+                    } else if matches!(self.playlist_overlay.playlists, LoadingState::Loaded(_)) {
+                        self.sync_playlist_tracks_for_selection();
                     }
                 }
             }
@@ -6663,6 +6691,8 @@ impl App {
                         .playlist_overlay
                         .selected_playlist_index
                         .saturating_sub(1);
+                    self.playlist_overlay.selected_track_index = 0;
+                    self.sync_playlist_tracks_for_selection();
                 }
                 PlaylistFocus::Tracks => {
                     self.playlist_overlay.selected_track_index =
@@ -6675,6 +6705,8 @@ impl App {
                         let max = playlists.len().saturating_sub(1);
                         self.playlist_overlay.selected_playlist_index =
                             (self.playlist_overlay.selected_playlist_index + 1).min(max);
+                        self.playlist_overlay.selected_track_index = 0;
+                        self.sync_playlist_tracks_for_selection();
                     }
                 }
                 PlaylistFocus::Tracks => {
@@ -6687,19 +6719,7 @@ impl App {
             },
             Action::PlaylistFocusTracks => {
                 self.playlist_overlay.focus = PlaylistFocus::Tracks;
-                // Fetch tracks if not already loaded for the currently selected playlist.
-                if let LoadingState::Loaded(ref playlists) = self.playlist_overlay.playlists {
-                    if let Some(playlist) =
-                        playlists.get(self.playlist_overlay.selected_playlist_index)
-                    {
-                        let id = playlist.id.clone();
-                        if self.playlist_overlay.loaded_playlist_id.as_deref() != Some(&id) {
-                            self.playlist_overlay.tracks = LoadingState::Loading;
-                            self.playlist_overlay.loaded_playlist_id = Some(id.clone());
-                            self.fetch_playlist_tracks(id);
-                        }
-                    }
-                }
+                self.sync_playlist_tracks_for_selection();
             }
             Action::PlaylistFocusList => {
                 self.playlist_overlay.focus = PlaylistFocus::List;
@@ -6734,7 +6754,6 @@ impl App {
                         self.play_current();
                     }
                 }
-                self.playlist_overlay.visible = false;
             }
             Action::PlaylistPlayTrack => {
                 if let LoadingState::Loaded(ref songs) = self.playlist_overlay.tracks {
@@ -6769,7 +6788,6 @@ impl App {
                         }
                     }
                 }
-                self.playlist_overlay.visible = false;
             }
             _ => {}
         }

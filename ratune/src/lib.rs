@@ -1399,20 +1399,29 @@ fn map_playlist_key(
         },
         // ── Normal navigation / mutation ───────────────────────────────────
         PlaylistInputMode::Normal => {
-            let shift = modifiers.intersects(KeyModifiers::SHIFT);
             match code {
                 KeyCode::Esc => Action::TogglePlaylistOverlay,
                 _ if kb.playlist_overlay.matches(code, modifiers) => Action::TogglePlaylistOverlay,
                 KeyCode::Char('k') | KeyCode::Up => Action::PlaylistScrollUp,
                 KeyCode::Char('j') | KeyCode::Down => Action::PlaylistScrollDown,
+                _ if kb.column_left.matches(code, modifiers)
+                    || kb.seek_backward.matches(code, modifiers) =>
+                {
+                    Action::PlaylistFocusList
+                }
+                _ if kb.column_right.matches(code, modifiers)
+                    || kb.seek_forward.matches(code, modifiers) =>
+                {
+                    Action::PlaylistFocusTracks
+                }
                 KeyCode::Char('h') => Action::PlaylistFocusList,
                 KeyCode::Char('l') => Action::PlaylistFocusTracks,
                 // c: create new playlist
                 KeyCode::Char('c') => Action::PlaylistCreate,
-                // r: rename selected playlist (list pane)
-                KeyCode::Char('r') => Action::PlaylistRename,
                 // X (Shift+x): delete selected playlist
-                KeyCode::Char('X') | KeyCode::Char('x') if code == KeyCode::Char('X') || shift => {
+                KeyCode::Char('X') | KeyCode::Char('x')
+                    if code == KeyCode::Char('X') || modifiers.intersects(KeyModifiers::SHIFT) =>
+                {
                     Action::PlaylistDelete
                 }
                 _ if kb.remove_from_playlist.matches(code, modifiers)
@@ -1420,16 +1429,35 @@ fn map_playlist_key(
                 {
                     Action::PlaylistRemoveTrack
                 }
+                _ if kb
+                    .add_all_replace_album
+                    .as_ref()
+                    .is_some_and(|spec| spec.matches(code, modifiers)) =>
+                {
+                    match focus {
+                        PlaylistFocus::List => Action::PlaylistPlayAll,
+                        PlaylistFocus::Tracks => Action::PlaylistPlayTrack,
+                    }
+                }
+                // r: rename selected playlist (list pane)
+                KeyCode::Char('r')
+                    if modifiers.is_empty() && matches!(focus, PlaylistFocus::List) =>
+                {
+                    Action::PlaylistRename
+                }
                 KeyCode::Enter => match focus {
                     PlaylistFocus::List => Action::PlaylistPlayAll,
                     PlaylistFocus::Tracks => Action::PlaylistPlayTrack,
                 },
-                // Shift+A — append all / append track
-                KeyCode::Char('A') | KeyCode::Char('a') if code == KeyCode::Char('A') || shift => {
-                    match focus {
-                        PlaylistFocus::List => Action::PlaylistAppendAll,
-                        PlaylistFocus::Tracks => Action::PlaylistAppendTrack,
-                    }
+                _ if kb.add_track.matches(code, modifiers)
+                    && matches!(focus, PlaylistFocus::Tracks) =>
+                {
+                    Action::PlaylistAppendTrack
+                }
+                _ if kb.add_all.matches(code, modifiers)
+                    && matches!(focus, PlaylistFocus::List) =>
+                {
+                    Action::PlaylistAppendAll
                 }
                 _ => Action::None,
             }
