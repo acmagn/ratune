@@ -111,7 +111,14 @@ pub fn render_playlist_overlay(
     let right_active = !left_active;
 
     render_playlist_list(frame, layout.list_col, overlay, accent, theme, left_active);
-    render_track_list(frame, layout.tracks_col, overlay, accent, theme, right_active);
+    render_track_list(
+        frame,
+        layout.tracks_col,
+        overlay,
+        accent,
+        theme,
+        right_active,
+    );
 
     // Confirm dialog renders on top of both columns when active.
     if let PlaylistInputMode::Confirming { action } = &overlay.input_mode {

@@ -78,8 +78,22 @@ pub fn render_favorites_overlay(
     let left_active = matches!(overlay.focus, FavoritesFocus::Categories);
     let right_active = !left_active;
 
-    render_categories(frame, layout.categories_col, overlay, accent, theme, left_active);
-    render_items(frame, layout.items_col, overlay, accent, theme, right_active);
+    render_categories(
+        frame,
+        layout.categories_col,
+        overlay,
+        accent,
+        theme,
+        left_active,
+    );
+    render_items(
+        frame,
+        layout.items_col,
+        overlay,
+        accent,
+        theme,
+        right_active,
+    );
 }
 
 fn render_categories(

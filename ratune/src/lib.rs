@@ -13,8 +13,8 @@ mod keyring_init;
 mod library_index;
 mod lyrics;
 mod lyrics_cache;
-mod mpris;
 mod mouse_click;
+mod mpris;
 mod persist;
 mod scrobble;
 mod scrobble_queue;
@@ -1243,7 +1243,10 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
             ) else {
                 return;
             };
-            if mouse_click::is_double_click(app, mouse_click::MouseClickTarget::HomeRecentAlbum(album_index)) {
+            if mouse_click::is_double_click(
+                app,
+                mouse_click::MouseClickTarget::HomeRecentAlbum(album_index),
+            ) {
                 app.dispatch(Action::HomeAlbumAddToQueue);
             } else {
                 app.home.active_section = app::HomeSection::RecentAlbums;
@@ -1259,7 +1262,10 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
             }
             let row = (y - inner_y) as usize;
             if row < app.home.recent_tracks.len() {
-                if mouse_click::is_double_click(app, mouse_click::MouseClickTarget::HomeRecentTrack(row)) {
+                if mouse_click::is_double_click(
+                    app,
+                    mouse_click::MouseClickTarget::HomeRecentTrack(row),
+                ) {
                     app.append_home_recent_track(row);
                 } else {
                     app.home.active_section = app::HomeSection::RecentTracks;
@@ -1275,7 +1281,10 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
             }
             let row = (y - inner_y) as usize;
             if row < app.home.rediscover.len() {
-                if mouse_click::is_double_click(app, mouse_click::MouseClickTarget::HomeRediscover(row)) {
+                if mouse_click::is_double_click(
+                    app,
+                    mouse_click::MouseClickTarget::HomeRediscover(row),
+                ) {
                     app.append_home_rediscover_artist(row);
                 } else {
                     app.home.active_section = app::HomeSection::Rediscover;
@@ -1945,8 +1954,7 @@ fn handle_browser_overlay_click(x: u16, y: u16, app: &mut App, center: Rect) -> 
         if rect_contains(popup, x, y) {
             if let Some(ref picker) = app.playlist_picker {
                 let len = picker.playlists.len();
-                if let Some(idx) =
-                    list_scroll::list_index_at_click(popup, x, y, picker.scroll, len)
+                if let Some(idx) = list_scroll::list_index_at_click(popup, x, y, picker.scroll, len)
                 {
                     app.click_playlist_picker_row(idx);
                 }
@@ -2002,7 +2010,13 @@ fn handle_browser_overlay_click(x: u16, y: u16, app: &mut App, center: Rect) -> 
     false
 }
 
-fn handle_browser_overlay_wheel(x: u16, y: u16, dir: Direction, app: &mut App, center: Rect) -> bool {
+fn handle_browser_overlay_wheel(
+    x: u16,
+    y: u16,
+    dir: Direction,
+    app: &mut App,
+    center: Rect,
+) -> bool {
     use crate::state::{FavoritesFocus, PlaylistFocus};
     use crate::ui::{favorites_overlay, playlist_overlay};
 

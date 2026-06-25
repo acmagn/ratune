@@ -29,13 +29,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
                 &theme,
             );
             if let Some(picker) = app.playlist_picker.as_mut() {
-                playlist_overlay::render_playlist_picker(
-                    frame,
-                    area,
-                    picker,
-                    accent,
-                    &theme,
-                );
+                playlist_overlay::render_playlist_picker(frame, area, picker, accent, &theme);
             }
             favorites_overlay::render_favorites_overlay(
                 frame,
@@ -69,13 +63,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
                 &theme,
             );
             if let Some(picker) = app.playlist_picker.as_mut() {
-                playlist_overlay::render_playlist_picker(
-                    frame,
-                    area,
-                    picker,
-                    accent,
-                    &theme,
-                );
+                playlist_overlay::render_playlist_picker(frame, area, picker, accent, &theme);
             }
             favorites_overlay::render_favorites_overlay(
                 frame,

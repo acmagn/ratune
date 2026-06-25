@@ -2797,9 +2797,7 @@ impl App {
                 if self.playlist_overlay.loaded_playlist_id.as_deref() == Some(&playlist_id) {
                     self.playlist_overlay.loaded_playlist_id = None;
                     self.playlist_overlay.tracks = LoadingState::Error(error.clone());
-                    crate::debug::log(format!(
-                        "get_playlist({playlist_id}) failed — {error}"
-                    ));
+                    crate::debug::log(format!("get_playlist({playlist_id}) failed — {error}"));
                     self.flash_status_secs("Could not load playlist tracks", 4);
                 }
             }
@@ -6901,8 +6899,7 @@ impl App {
             );
             return;
         }
-        self.playlist_tracks_fetch_deadline =
-            Some(Instant::now() + Duration::from_millis(250));
+        self.playlist_tracks_fetch_deadline = Some(Instant::now() + Duration::from_millis(250));
         let _ = playlist_id;
     }
 

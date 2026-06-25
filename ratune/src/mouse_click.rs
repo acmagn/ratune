@@ -28,9 +28,9 @@ pub enum MouseClickTarget {
 /// Returns `true` when this click is the second half of a double-click on `target`.
 pub fn is_double_click(app: &mut App, target: MouseClickTarget) -> bool {
     let now = Instant::now();
-    let is_double = app.last_mouse_click.is_some_and(|(t, prev)| {
-        prev == target && now.duration_since(t) <= DOUBLE_CLICK_INTERVAL
-    });
+    let is_double = app
+        .last_mouse_click
+        .is_some_and(|(t, prev)| prev == target && now.duration_since(t) <= DOUBLE_CLICK_INTERVAL);
     if is_double {
         app.last_mouse_click = None;
     } else {
