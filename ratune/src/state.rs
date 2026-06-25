@@ -521,6 +521,10 @@ pub struct PlaylistOverlay {
     pub focus: PlaylistFocus,
     pub loaded_playlist_id: Option<String>,
     pub input_mode: PlaylistInputMode,
+    /// Cached `getPlaylist` results to avoid refetching while scrolling.
+    pub tracks_cache: std::collections::HashMap<String, Vec<ratune_subsonic::Song>>,
+    pub list_scroll: usize,
+    pub tracks_scroll: usize,
 }
 
 impl Default for PlaylistOverlay {
@@ -534,6 +538,9 @@ impl Default for PlaylistOverlay {
             focus: PlaylistFocus::List,
             loaded_playlist_id: None,
             input_mode: PlaylistInputMode::Normal,
+            tracks_cache: std::collections::HashMap::new(),
+            list_scroll: 0,
+            tracks_scroll: 0,
         }
     }
 }
@@ -579,6 +586,8 @@ pub struct FavoritesOverlay {
     pub focus: FavoritesFocus,
     pub selected_category_index: usize,
     pub selected_item_index: usize,
+    pub categories_scroll: usize,
+    pub items_scroll: usize,
     pub songs: Vec<ratune_subsonic::Song>,
     pub albums: Vec<ratune_subsonic::Album>,
     pub artists: Vec<ratune_subsonic::Artist>,
@@ -599,6 +608,7 @@ impl FavoritesOverlay {
         }
         let max = self.item_count().saturating_sub(1);
         self.selected_item_index = self.selected_item_index.min(max);
+        self.items_scroll = 0;
     }
 }
 

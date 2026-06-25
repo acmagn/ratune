@@ -10,20 +10,24 @@ use crate::app::App;
 use crate::state::{LoadingState, RadioField, RadioInputMode};
 use crate::theme::style_with_bg;
 
+pub fn popup_rect(area: Rect) -> Rect {
+    let w = (area.width * 4 / 5).clamp(40, area.width);
+    let h = (area.height * 7 / 10).clamp(8, area.height);
+    Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    }
+}
+
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     if !app.radio.input_mode.is_normal() {
         render_form(app, frame, area);
         return;
     }
 
-    let w = (area.width * 4 / 5).clamp(40, area.width);
-    let h = (area.height * 7 / 10).clamp(8, area.height);
-    let popup = Rect {
-        x: area.x + (area.width.saturating_sub(w)) / 2,
-        y: area.y + (area.height.saturating_sub(h)) / 2,
-        width: w,
-        height: h,
-    };
+    let popup = popup_rect(area);
     frame.render_widget(Clear, popup);
 
     let t = &app.theme;

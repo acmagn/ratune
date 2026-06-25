@@ -347,6 +347,11 @@ pub enum LibraryUpdate {
         playlist_id: String,
         songs: Vec<ratune_subsonic::Song>,
     },
+    /// `getPlaylist` failed for a playlist preview fetch.
+    PlaylistTracksError {
+        playlist_id: String,
+        error: String,
+    },
     /// A new playlist was successfully created.
     PlaylistCreated(ratune_subsonic::Playlist),
     /// A playlist was successfully deleted (carries the deleted ID).
@@ -458,6 +463,7 @@ pub struct PlaylistPicker {
     pub song_id: String,
     /// `true` while a `getPlaylists` fetch is in flight.
     pub loading: bool,
+    pub scroll: usize,
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -634,6 +640,10 @@ pub struct App {
     pub pending_global_confirm: Option<GlobalConfirm>,
     /// First visible line index inside the help popup (scroll).
     pub help_scroll: usize,
+    /// Last list click for timed double-click detection.
+    pub(crate) last_mouse_click: Option<(Instant, crate::mouse_click::MouseClickTarget)>,
+    /// Debounced `getPlaylist` after scrolling the playlist list.
+    playlist_tracks_fetch_deadline: Option<Instant>,
 
     // ── Play history (Phase 6.1) ──────────────────────────────────────────────
     /// Persistent play history (loaded on startup, saved on quit).
@@ -808,6 +818,8 @@ impl App {
             pending_gg: false,
             pending_global_confirm: None,
             help_scroll: 0,
+            last_mouse_click: None,
+            playlist_tracks_fetch_deadline: None,
             history: crate::history::PlayHistory::default(),
             play_recorded: false,
             track_started_at: None,
@@ -2773,8 +2785,20 @@ impl App {
                 // Ignore stale results if the user navigated to a different playlist
                 // while this fetch was in flight.
                 if self.playlist_overlay.loaded_playlist_id.as_deref() == Some(&playlist_id) {
+                    self.playlist_overlay
+                        .tracks_cache
+                        .insert(playlist_id.clone(), songs.clone());
                     self.playlist_overlay.tracks = LoadingState::Loaded(songs);
                     self.playlist_overlay.selected_track_index = 0;
+                    self.playlist_overlay.tracks_scroll = 0;
+                }
+            }
+            LibraryUpdate::PlaylistTracksError { playlist_id, error } => {
+                if self.playlist_overlay.loaded_playlist_id.as_deref() == Some(&playlist_id) {
+                    self.playlist_overlay.loaded_playlist_id = None;
+                    self.playlist_overlay.tracks = LoadingState::Error(error.clone());
+                    crate::debug::log(format!("get_playlist({playlist_id}) failed — {error}"));
+                    self.flash_status_secs("Could not load playlist tracks", 4);
                 }
             }
             LibraryUpdate::PlaylistCreated(p) => {
@@ -3812,6 +3836,77 @@ impl App {
         if idx < len {
             self.radio.selected = idx;
             self.play_radio_from_picker();
+        }
+    }
+
+    /// Mouse click on a playlist row in the playlist overlay left column.
+    pub fn click_playlist_overlay_list(&mut self, index: usize) {
+        if let LoadingState::Loaded(ref playlists) = self.playlist_overlay.playlists {
+            if index < playlists.len() {
+                self.playlist_overlay.focus = PlaylistFocus::List;
+                self.playlist_overlay.selected_playlist_index = index;
+                self.playlist_overlay.selected_track_index = 0;
+                self.schedule_playlist_tracks_for_selection();
+            }
+        }
+    }
+
+    pub fn double_click_playlist_overlay_list(&mut self, index: usize) {
+        self.click_playlist_overlay_list(index);
+        self.sync_playlist_tracks_for_selection();
+        self.handle_playlist_action(Action::PlaylistAppendAll);
+    }
+
+    /// Mouse click on a track row in the playlist overlay right column.
+    pub fn click_playlist_overlay_track(&mut self, index: usize) {
+        if let LoadingState::Loaded(ref songs) = self.playlist_overlay.tracks {
+            if index < songs.len() {
+                self.playlist_overlay.focus = PlaylistFocus::Tracks;
+                self.playlist_overlay.selected_track_index = index;
+            }
+        }
+    }
+
+    pub fn double_click_playlist_overlay_track(&mut self, index: usize) {
+        self.click_playlist_overlay_track(index);
+        self.handle_playlist_action(Action::PlaylistAppendTrack);
+    }
+
+    /// Mouse click on a category row in the favorites overlay.
+    pub fn click_favorites_category(&mut self, index: usize) {
+        if index < FavoritesCategory::ALL.len() {
+            self.favorites_overlay.focus = FavoritesFocus::Categories;
+            self.favorites_overlay.selected_category_index = index;
+            self.favorites_overlay.selected_item_index = 0;
+            self.favorites_overlay.sync_category_from_index();
+        }
+    }
+
+    pub fn double_click_favorites_category(&mut self, index: usize) {
+        self.click_favorites_category(index);
+        self.favorites_queue_action(false);
+    }
+
+    /// Mouse click on an item row in the favorites overlay.
+    pub fn click_favorites_item(&mut self, index: usize) {
+        let count = self.favorites_overlay.item_count();
+        if index < count {
+            self.favorites_overlay.focus = FavoritesFocus::Items;
+            self.favorites_overlay.selected_item_index = index;
+        }
+    }
+
+    pub fn double_click_favorites_item(&mut self, index: usize) {
+        self.click_favorites_item(index);
+        self.favorites_queue_action(false);
+    }
+
+    /// Mouse click on a row in the add-to-playlist picker popup.
+    pub fn click_playlist_picker_row(&mut self, index: usize) {
+        if let Some(ref mut picker) = self.playlist_picker {
+            if index < picker.playlists.len() {
+                picker.selected_index = index;
+            }
         }
     }
 
@@ -5989,6 +6084,47 @@ impl App {
 
     // ── Queue helpers ─────────────────────────────────────────────────────────
 
+    /// Append a Home-tab recent track to the queue (double-click).
+    pub fn append_home_recent_track(&mut self, idx: usize) {
+        let Some(record) = self.home.recent_tracks.get(idx).cloned() else {
+            return;
+        };
+        let song = ratune_subsonic::Song {
+            id: record.song_id.clone(),
+            title: record.track_name.clone(),
+            artist: Some(record.artist_name.clone()),
+            artist_id: Some(record.artist_id.clone()),
+            album: Some(record.album_name.clone()),
+            album_id: Some(record.album_id.clone()),
+            duration: Some(record.duration_secs as u32),
+            track: None,
+            disc_number: None,
+            year: None,
+            genre: None,
+            cover_art: None,
+            path: None,
+            suffix: None,
+            content_type: None,
+            bit_rate: None,
+            size: None,
+            starred: None,
+        };
+        let was_empty = self.queue.songs.is_empty();
+        self.queue.push(song);
+        if was_empty {
+            self.queue.cursor = 0;
+            self.play_current();
+        }
+    }
+
+    /// Append all tracks for a Home-tab rediscover artist (double-click).
+    pub fn append_home_rediscover_artist(&mut self, idx: usize) {
+        let Some((artist_id, _)) = self.home.rediscover.get(idx).cloned() else {
+            return;
+        };
+        self.fetch_all_tracks_for_artist(artist_id, self.queue.songs.is_empty(), false);
+    }
+
     fn handle_add_to_queue(&mut self) {
         if self.browse_files() {
             if let Some(song) = self
@@ -6473,6 +6609,42 @@ impl App {
         self.handle_navigate_browser(dir, steps);
     }
 
+    pub fn navigate_playlist_wheel(&mut self, dir: Direction) {
+        let steps = self.config.browse_mouse_wheel_scroll_lines.max(1);
+        for _ in 0..steps {
+            let action = match dir {
+                Direction::Up => Action::PlaylistScrollUp,
+                Direction::Down => Action::PlaylistScrollDown,
+                _ => break,
+            };
+            self.handle_playlist_action(action);
+        }
+    }
+
+    pub fn navigate_favorites_wheel(&mut self, dir: Direction) {
+        let steps = self.config.browse_mouse_wheel_scroll_lines.max(1);
+        for _ in 0..steps {
+            let action = match dir {
+                Direction::Up => Action::FavoritesScrollUp,
+                Direction::Down => Action::FavoritesScrollDown,
+                _ => break,
+            };
+            self.handle_favorites_action(action);
+        }
+    }
+
+    pub fn navigate_playlist_picker_wheel(&mut self, dir: Direction) {
+        let steps = self.config.browse_mouse_wheel_scroll_lines.max(1);
+        for _ in 0..steps {
+            let action = match dir {
+                Direction::Up => Action::PlaylistPickerScrollUp,
+                Direction::Down => Action::PlaylistPickerScrollDown,
+                _ => break,
+            };
+            self.handle_playlist_mutation(action);
+        }
+    }
+
     pub fn click_browser_artist(&mut self, orig_idx: usize) {
         if let LoadingState::Loaded(artists) = &self.library.artists {
             if orig_idx >= artists.len() {
@@ -6494,6 +6666,15 @@ impl App {
                 .albums
                 .insert(artist_id.clone(), LoadingState::Loading);
             self.fetch_albums(artist_id);
+        }
+    }
+
+    pub fn double_click_browser_artist(&mut self, orig_idx: usize) {
+        self.click_browser_artist(orig_idx);
+        self.browser_focus = BrowserColumn::Artists;
+        if let Some(artist) = self.library.current_artist() {
+            let artist_id = artist.id.clone();
+            self.fetch_all_tracks_for_artist(artist_id, self.queue.songs.is_empty(), false);
         }
     }
 
@@ -6522,34 +6703,82 @@ impl App {
         }
     }
 
+    pub fn double_click_browser_album(&mut self, orig_idx: usize) {
+        let album_id = match self.library.current_artist() {
+            Some(artist) => match self.library.albums.get(&artist.id) {
+                Some(LoadingState::Loaded(albums)) => albums.get(orig_idx).map(|a| a.id.clone()),
+                _ => None,
+            },
+            None => None,
+        };
+        self.click_browser_album(orig_idx);
+        if let Some(album_id) = album_id {
+            self.browser_focus = BrowserColumn::Albums;
+            self.fetch_and_append_album_to_queue(album_id);
+        }
+    }
+
     pub fn click_folder_dir(&mut self, visible_pos: usize) {
         self.folders.folder_default_row_pending = false;
         self.folders.selected_dir = Some(visible_pos);
         self.folder_activate_selected_dir();
     }
 
-    pub fn click_folder_preview_row(&mut self, visible_row: usize) {
-        let Some(ref pid) = self.folders.preview_dir_id.clone() else {
-            return;
-        };
-        let listing = match self.folders.listings.get(pid) {
+    pub fn double_click_folder_dir(&mut self, visible_pos: usize) {
+        self.click_folder_dir(visible_pos);
+        self.browser_focus = BrowserColumn::Tracks;
+        self.handle_add_all_to_queue(AddAllMode::Append);
+    }
+
+    pub fn folder_preview_row_index(&self, visible_row: usize) -> Option<usize> {
+        let pid = self.folders.preview_dir_id.clone()?;
+        let listing = match self.folders.listings.get(&pid) {
             Some(LoadingState::Loaded(l)) => l,
-            _ => return,
+            _ => return None,
         };
         let rows = folder_preview_rows(listing, self.browser_column_filter(BrowserColumn::Tracks));
         if rows.is_empty() {
-            return;
+            return None;
         }
         let vh = self.browser_list_viewport_rows.max(1);
         let sel_pos = self
             .folders
             .preview_selected_row
             .min(rows.len().saturating_sub(1));
-        FolderBrowseState::clamp_scroll(&mut self.folders.tracks_scroll, sel_pos, rows.len(), vh);
-        let scroll = self.folders.tracks_scroll;
+        let mut scroll = self.folders.tracks_scroll;
+        FolderBrowseState::clamp_scroll(&mut scroll, sel_pos, rows.len(), vh);
         let clicked = scroll + visible_row;
-        if clicked < rows.len() {
-            self.folders.preview_selected_row = clicked;
+        (clicked < rows.len()).then_some(clicked)
+    }
+
+    pub fn click_folder_preview_row(&mut self, visible_row: usize) {
+        let Some(clicked) = self.folder_preview_row_index(visible_row) else {
+            return;
+        };
+        self.folders.preview_selected_row = clicked;
+    }
+
+    pub fn double_click_folder_preview_row(&mut self, visible_row: usize) {
+        let Some(clicked) = self.folder_preview_row_index(visible_row) else {
+            return;
+        };
+        let Some(pid) = self.folders.preview_dir_id.clone() else {
+            return;
+        };
+        let listing = match self.folders.listings.get(&pid) {
+            Some(LoadingState::Loaded(l)) => l,
+            _ => return,
+        };
+        let rows = folder_preview_rows(listing, self.browser_column_filter(BrowserColumn::Tracks));
+        self.folders.preview_selected_row = clicked;
+        match rows[clicked] {
+            FolderPreviewRow::Track(_) => {
+                self.browser_focus = BrowserColumn::Tracks;
+                self.handle_add_to_queue();
+            }
+            FolderPreviewRow::Dir(_) => {
+                self.folder_activate_preview_selection();
+            }
         }
     }
 
@@ -6565,6 +6794,22 @@ impl App {
         if valid {
             self.library.selected_track = Some(orig_idx);
         }
+    }
+
+    pub fn double_click_browser_track(&mut self, orig_idx: usize) {
+        self.click_browser_track(orig_idx);
+        self.browser_focus = BrowserColumn::Tracks;
+        self.handle_add_to_queue();
+    }
+
+    /// Mouse click on a visible queue row in the Now Playing tab.
+    pub fn click_queue_row(&mut self, idx: usize) {
+        self.set_queue_cursor(idx);
+    }
+
+    pub fn double_click_queue_row(&mut self, idx: usize) {
+        self.set_queue_cursor(idx);
+        self.play_queue_from_np();
     }
 
     pub fn set_queue_cursor(&mut self, idx: usize) {
@@ -6617,6 +6862,12 @@ impl App {
 
     /// Load tracks for the highlighted playlist (browse-style preview in the right column).
     fn sync_playlist_tracks_for_selection(&mut self) {
+        self.playlist_tracks_fetch_deadline = None;
+        self.sync_playlist_tracks_for_selection_now();
+    }
+
+    /// Debounce track preview fetches while scrolling the playlist list.
+    fn schedule_playlist_tracks_for_selection(&mut self) {
         if !self.playlist_overlay.visible {
             return;
         }
@@ -6632,7 +6883,62 @@ impl App {
         if self.playlist_overlay.loaded_playlist_id.as_deref() == Some(&playlist_id) {
             return;
         }
+        if self
+            .playlist_overlay
+            .tracks_cache
+            .contains_key(&playlist_id)
+        {
+            self.playlist_overlay.loaded_playlist_id = Some(playlist_id.clone());
+            self.playlist_overlay.selected_track_index = 0;
+            self.playlist_overlay.tracks = LoadingState::Loaded(
+                self.playlist_overlay
+                    .tracks_cache
+                    .get(&playlist_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+            return;
+        }
+        self.playlist_tracks_fetch_deadline = Some(Instant::now() + Duration::from_millis(250));
+        let _ = playlist_id;
+    }
+
+    pub fn tick_playlist_tracks_fetch(&mut self) {
+        let Some(deadline) = self.playlist_tracks_fetch_deadline else {
+            return;
+        };
+        if Instant::now() < deadline {
+            return;
+        }
+        self.playlist_tracks_fetch_deadline = None;
+        self.sync_playlist_tracks_for_selection_now();
+    }
+
+    fn sync_playlist_tracks_for_selection_now(&mut self) {
+        if !self.playlist_overlay.visible {
+            return;
+        }
+        let playlist_id = match &self.playlist_overlay.playlists {
+            LoadingState::Loaded(playlists) => playlists
+                .get(self.playlist_overlay.selected_playlist_index)
+                .map(|p| p.id.clone()),
+            _ => None,
+        };
+        let Some(playlist_id) = playlist_id else {
+            return;
+        };
+        if self.playlist_overlay.loaded_playlist_id.as_deref() == Some(&playlist_id) {
+            return;
+        }
+        if let Some(cached) = self.playlist_overlay.tracks_cache.get(&playlist_id) {
+            self.playlist_overlay.loaded_playlist_id = Some(playlist_id);
+            self.playlist_overlay.selected_track_index = 0;
+            self.playlist_overlay.tracks_scroll = 0;
+            self.playlist_overlay.tracks = LoadingState::Loaded(cached.clone());
+            return;
+        }
         self.playlist_overlay.selected_track_index = 0;
+        self.playlist_overlay.tracks_scroll = 0;
         self.playlist_overlay.tracks = LoadingState::Loading;
         self.playlist_overlay.loaded_playlist_id = Some(playlist_id.clone());
         self.fetch_playlist_tracks(playlist_id);
@@ -6655,7 +6961,14 @@ impl App {
                         })
                         .await;
                 }
-                Err(e) => eprintln!("ratune: get_playlist({playlist_id}) failed — {e}"),
+                Err(e) => {
+                    let _ = tx
+                        .send(LibraryUpdate::PlaylistTracksError {
+                            playlist_id,
+                            error: e.to_string(),
+                        })
+                        .await;
+                }
             }
         });
     }
@@ -6692,7 +7005,7 @@ impl App {
                         .selected_playlist_index
                         .saturating_sub(1);
                     self.playlist_overlay.selected_track_index = 0;
-                    self.sync_playlist_tracks_for_selection();
+                    self.schedule_playlist_tracks_for_selection();
                 }
                 PlaylistFocus::Tracks => {
                     self.playlist_overlay.selected_track_index =
@@ -6706,7 +7019,7 @@ impl App {
                         self.playlist_overlay.selected_playlist_index =
                             (self.playlist_overlay.selected_playlist_index + 1).min(max);
                         self.playlist_overlay.selected_track_index = 0;
-                        self.sync_playlist_tracks_for_selection();
+                        self.schedule_playlist_tracks_for_selection();
                     }
                 }
                 PlaylistFocus::Tracks => {
@@ -7082,6 +7395,7 @@ impl App {
                                 selected_index: 0,
                                 song_id,
                                 loading: false,
+                                scroll: 0,
                             });
                         }
                         _ => {
@@ -7090,6 +7404,7 @@ impl App {
                                 selected_index: 0,
                                 song_id,
                                 loading: true,
+                                scroll: 0,
                             });
                             self.spawn_fetch_playlists_for_picker();
                         }

@@ -2,11 +2,29 @@
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem};
 use ratatui::Frame;
 
 use crate::state::{FavoritesCategory, FavoritesFocus, FavoritesOverlay};
 use crate::theme::{style_with_bg, Theme};
+
+pub struct PanelLayout {
+    pub area: Rect,
+    pub categories_col: Rect,
+    pub items_col: Rect,
+}
+
+pub fn panel_layout(parent: Rect) -> PanelLayout {
+    let area =
+        Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).split(parent)[1];
+    let cols =
+        Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)]).split(area);
+    PanelLayout {
+        area,
+        categories_col: cols[0],
+        items_col: cols[1],
+    }
+}
 
 fn overlay_title(overlay: &FavoritesOverlay) -> String {
     if overlay.offline_snapshot {
@@ -46,7 +64,7 @@ fn fmt_duration_ms(secs: u32) -> String {
 pub fn render_favorites_overlay(
     frame: &mut Frame,
     area: Rect,
-    overlay: &FavoritesOverlay,
+    overlay: &mut FavoritesOverlay,
     accent: ratatui::style::Color,
     theme: &Theme,
 ) {
@@ -54,25 +72,34 @@ pub fn render_favorites_overlay(
         return;
     }
 
-    let split =
-        Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).split(area);
-    let overlay_area = split[1];
-    frame.render_widget(Clear, overlay_area);
-
-    let cols = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(overlay_area);
+    let layout = panel_layout(area);
+    frame.render_widget(Clear, layout.area);
 
     let left_active = matches!(overlay.focus, FavoritesFocus::Categories);
     let right_active = !left_active;
 
-    render_categories(frame, cols[0], overlay, accent, theme, left_active);
-    render_items(frame, cols[1], overlay, accent, theme, right_active);
+    render_categories(
+        frame,
+        layout.categories_col,
+        overlay,
+        accent,
+        theme,
+        left_active,
+    );
+    render_items(
+        frame,
+        layout.items_col,
+        overlay,
+        accent,
+        theme,
+        right_active,
+    );
 }
 
 fn render_categories(
     frame: &mut Frame,
     area: Rect,
-    overlay: &FavoritesOverlay,
+    overlay: &mut FavoritesOverlay,
     accent: ratatui::style::Color,
     theme: &Theme,
     is_active: bool,
@@ -124,15 +151,23 @@ fn render_categories(
         .highlight_symbol("▶ ")
         .style(style_with_bg(theme.background));
 
-    let mut state = ListState::default();
-    state.select(Some(overlay.selected_category_index));
-    frame.render_stateful_widget(list, area, &mut state);
+    let len = FavoritesCategory::ALL.len();
+    frame.render_stateful_widget(
+        list,
+        area,
+        &mut super::list_scroll::list_state_for_selection(
+            area,
+            Some(overlay.selected_category_index),
+            len,
+            &mut overlay.categories_scroll,
+        ),
+    );
 }
 
 fn render_items(
     frame: &mut Frame,
     area: Rect,
-    overlay: &FavoritesOverlay,
+    overlay: &mut FavoritesOverlay,
     accent: ratatui::style::Color,
     theme: &Theme,
     is_active: bool,
@@ -246,6 +281,7 @@ fn render_items(
         items
     };
 
+    let len = items.len();
     let list = List::new(items)
         .block(block)
         .highlight_style(
@@ -257,13 +293,24 @@ fn render_items(
         .highlight_symbol("▶ ")
         .style(style_with_bg(theme.background));
 
-    let mut state = ListState::default();
-    if overlay.item_count() > 0 {
-        state.select(Some(
+    let item_count = overlay.item_count();
+    let sel = if item_count > 0 {
+        Some(
             overlay
                 .selected_item_index
-                .min(overlay.item_count().saturating_sub(1)),
-        ));
-    }
-    frame.render_stateful_widget(list, area, &mut state);
+                .min(item_count.saturating_sub(1)),
+        )
+    } else {
+        None
+    };
+    frame.render_stateful_widget(
+        list,
+        area,
+        &mut super::list_scroll::list_state_for_selection(
+            area,
+            sel,
+            len,
+            &mut overlay.items_scroll,
+        ),
+    );
 }

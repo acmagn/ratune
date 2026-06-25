@@ -9,6 +9,8 @@ use crate::app::{App, BrowserColumn};
 use crate::config::BrowseMode;
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
+    let accent = app.accent();
+    let theme = app.theme.clone();
     match app.browser_browse_mode {
         BrowseMode::Genre => {
             frame.render_widget(
@@ -22,25 +24,19 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
             playlist_overlay::render_playlist_overlay(
                 frame,
                 area,
-                &app.playlist_overlay,
-                app.accent(),
-                &app.theme,
+                &mut app.playlist_overlay,
+                accent,
+                &theme,
             );
-            if let Some(picker) = &app.playlist_picker {
-                playlist_overlay::render_playlist_picker(
-                    frame,
-                    area,
-                    picker,
-                    app.accent(),
-                    &app.theme,
-                );
+            if let Some(picker) = app.playlist_picker.as_mut() {
+                playlist_overlay::render_playlist_picker(frame, area, picker, accent, &theme);
             }
             favorites_overlay::render_favorites_overlay(
                 frame,
                 area,
-                &app.favorites_overlay,
-                app.accent(),
-                &app.theme,
+                &mut app.favorites_overlay,
+                accent,
+                &theme,
             );
             return;
         }
@@ -62,25 +58,19 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
             playlist_overlay::render_playlist_overlay(
                 frame,
                 area,
-                &app.playlist_overlay,
-                app.accent(),
-                &app.theme,
+                &mut app.playlist_overlay,
+                accent,
+                &theme,
             );
-            if let Some(picker) = &app.playlist_picker {
-                playlist_overlay::render_playlist_picker(
-                    frame,
-                    area,
-                    picker,
-                    app.accent(),
-                    &app.theme,
-                );
+            if let Some(picker) = app.playlist_picker.as_mut() {
+                playlist_overlay::render_playlist_picker(frame, area, picker, accent, &theme);
             }
             favorites_overlay::render_favorites_overlay(
                 frame,
                 area,
-                &app.favorites_overlay,
-                app.accent(),
-                &app.theme,
+                &mut app.favorites_overlay,
+                accent,
+                &theme,
             );
             return;
         }
@@ -116,20 +106,20 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
     playlist_overlay::render_playlist_overlay(
         frame,
         area,
-        &app.playlist_overlay,
-        app.accent(),
-        &app.theme,
+        &mut app.playlist_overlay,
+        accent,
+        &theme,
     );
 
-    if let Some(picker) = &app.playlist_picker {
-        playlist_overlay::render_playlist_picker(frame, area, picker, app.accent(), &app.theme);
+    if let Some(picker) = app.playlist_picker.as_mut() {
+        playlist_overlay::render_playlist_picker(frame, area, picker, accent, &theme);
     }
 
     favorites_overlay::render_favorites_overlay(
         frame,
         area,
-        &app.favorites_overlay,
-        app.accent(),
-        &app.theme,
+        &mut app.favorites_overlay,
+        accent,
+        &theme,
     );
 }

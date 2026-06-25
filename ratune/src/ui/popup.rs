@@ -211,6 +211,28 @@ fn pack_blocks_into_two_columns(
     (left, right)
 }
 
+/// Popup bounds for the keybind help overlay (matches `render_help` sizing).
+pub fn help_popup_rect(area: Rect, radio_enabled: bool) -> Rect {
+    use ratatui::style::Color;
+
+    // Colors are only used for line content; lengths depend on section text alone.
+    let accent = Color::White;
+    let mut blocks = build_blocks(sections(radio_enabled), accent, accent, accent);
+    blocks.push(vec![Line::from("")]);
+    blocks.extend(build_blocks(playlist_sections(), accent, accent, accent));
+    let (left_all, right_all) = pack_blocks_into_two_columns(blocks);
+
+    let required_inner_h = left_all.len().max(right_all.len()).max(1) as u16;
+    let content_h = required_inner_h + 2;
+    let max_h = (area.height * 80 / 100).max(10);
+    let popup_h = content_h.min(max_h);
+    let popup_w = (area.width * 70 / 100).max(80).min(area.width);
+
+    let x = area.x + area.width.saturating_sub(popup_w) / 2;
+    let y = area.y + area.height.saturating_sub(popup_h) / 2;
+    Rect::new(x, y, popup_w, popup_h)
+}
+
 /// Render the keybind help popup centered over the current frame.
 ///
 /// Call this last in the render pass so it layers on top of all other widgets.
@@ -232,20 +254,7 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
     blocks.extend(build_blocks(playlist_sections(), accent, fg, dim));
     let (left_all, right_all) = pack_blocks_into_two_columns(blocks);
 
-    // ── Sizing & positioning ──────────────────────────────────────────────────
-
-    // Size to fit the taller column, but clamp to a percentage of the terminal.
-    let required_inner_h = left_all.len().max(right_all.len()).max(1) as u16;
-    let content_h = required_inner_h + 2; // +2 for border
-    let max_h = (area.height * 80 / 100).max(10);
-    let popup_h = content_h.min(max_h);
-
-    // Wide enough to comfortably hold two KEY_COL_W + desc columns side by side.
-    let popup_w = (area.width * 70 / 100).max(80).min(area.width);
-
-    let x = area.x + area.width.saturating_sub(popup_w) / 2;
-    let y = area.y + area.height.saturating_sub(popup_h) / 2;
-    let popup_area = Rect::new(x, y, popup_w, popup_h);
+    let popup_area = help_popup_rect(area, app.config.radio_enabled);
 
     // ── Render ────────────────────────────────────────────────────────────────
 
