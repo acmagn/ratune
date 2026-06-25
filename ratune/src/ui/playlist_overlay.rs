@@ -7,7 +7,7 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style}; // Modifier used by highlight_style
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::app::PlaylistPicker;
@@ -16,6 +16,53 @@ use crate::state::{
 };
 use crate::theme::style_with_bg;
 use crate::theme::Theme;
+
+/// Bottom 40% of the browser content area — matches overlay render geometry.
+pub fn overlay_area(parent: Rect) -> Rect {
+    Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).split(parent)[1]
+}
+
+pub struct PanelLayout {
+    pub area: Rect,
+    pub list_col: Rect,
+    pub tracks_col: Rect,
+    /// List rows in the left column (excludes the text-input strip when shown).
+    pub list_rows: Rect,
+}
+
+pub fn panel_layout(parent: Rect, input_mode: &PlaylistInputMode) -> PanelLayout {
+    let area = overlay_area(parent);
+    let cols =
+        Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)]).split(area);
+    let list_rows = match input_mode {
+        PlaylistInputMode::Creating { .. } | PlaylistInputMode::Renaming { .. }
+            if cols[0].height > 3 =>
+        {
+            Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(cols[0])[0]
+        }
+        _ => cols[0],
+    };
+    PanelLayout {
+        area,
+        list_col: cols[0],
+        tracks_col: cols[1],
+        list_rows,
+    }
+}
+
+/// Floating picker popup rect (opened via `BrowserAddToPlaylist`).
+pub fn picker_rect(parent: Rect) -> Rect {
+    let w = (parent.width / 2).max(30).min(parent.width);
+    let h = (parent.height * 6 / 10).max(5).min(parent.height);
+    let x = parent.x + (parent.width.saturating_sub(w)) / 2;
+    let y = parent.y + (parent.height.saturating_sub(h)) / 2;
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
+}
 
 // ── Duration helpers ──────────────────────────────────────────────────────────
 
@@ -46,7 +93,7 @@ fn fmt_duration_ms(secs: u32) -> String {
 pub fn render_playlist_overlay(
     frame: &mut Frame,
     area: Rect,
-    overlay: &PlaylistOverlay,
+    overlay: &mut PlaylistOverlay,
     accent: Color,
     theme: &Theme,
 ) {
@@ -54,27 +101,17 @@ pub fn render_playlist_overlay(
         return;
     }
 
-    // ── Overlay occupies the bottom 40% of the browser content area ──────────
-
-    let split =
-        Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).split(area);
-
-    let overlay_area = split[1];
+    let layout = panel_layout(area, &overlay.input_mode);
 
     // Clear all cells in the overlay region before drawing so browser content
     // beneath does not bleed through the Block widgets.
-    frame.render_widget(Clear, overlay_area);
-
-    // ── Horizontal split: left 35% (playlists), right 65% (tracks) ───────────
-
-    let cols = Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(overlay_area);
+    frame.render_widget(Clear, layout.area);
 
     let left_active = matches!(overlay.focus, PlaylistFocus::List);
     let right_active = !left_active;
 
-    render_playlist_list(frame, cols[0], overlay, accent, theme, left_active);
-    render_track_list(frame, cols[1], overlay, accent, theme, right_active);
+    render_playlist_list(frame, layout.list_col, overlay, accent, theme, left_active);
+    render_track_list(frame, layout.tracks_col, overlay, accent, theme, right_active);
 
     // Confirm dialog renders on top of both columns when active.
     if let PlaylistInputMode::Confirming { action } = &overlay.input_mode {
@@ -83,7 +120,7 @@ pub fn render_playlist_overlay(
                 format!(" Delete \"{}\"? [y/n] ", name)
             }
         };
-        render_confirm_dialog(frame, overlay_area, &msg, accent, theme);
+        render_confirm_dialog(frame, layout.area, &msg, accent, theme);
     }
 }
 
@@ -92,7 +129,7 @@ pub fn render_playlist_overlay(
 fn render_playlist_list(
     frame: &mut Frame,
     area: Rect,
-    overlay: &PlaylistOverlay,
+    overlay: &mut PlaylistOverlay,
     accent: Color,
     theme: &Theme,
     is_active: bool,
@@ -177,9 +214,20 @@ fn render_playlist_list(
         .highlight_symbol("▶ ")
         .style(style_with_bg(theme.background));
 
-    let mut state = ListState::default();
-    state.select(sel);
-    frame.render_stateful_widget(list, list_area, &mut state);
+    let len = match &overlay.playlists {
+        LoadingState::Loaded(playlists) => playlists.len(),
+        _ => 0,
+    };
+    frame.render_stateful_widget(
+        list,
+        list_area,
+        &mut super::list_scroll::list_state_for_selection(
+            list_area,
+            sel,
+            len,
+            &mut overlay.list_scroll,
+        ),
+    );
 
     // Text-input box (create / rename).
     if let Some(input_rect) = input_area {
@@ -208,7 +256,7 @@ fn render_playlist_list(
 fn render_track_list(
     frame: &mut Frame,
     area: Rect,
-    overlay: &PlaylistOverlay,
+    overlay: &mut PlaylistOverlay,
     accent: Color,
     theme: &Theme,
     is_active: bool,
@@ -280,6 +328,7 @@ fn render_track_list(
         }
     };
 
+    let len = items.len();
     let list = List::new(items)
         .block(block)
         .highlight_style(
@@ -291,9 +340,16 @@ fn render_track_list(
         .highlight_symbol("▶ ")
         .style(style_with_bg(theme.background));
 
-    let mut state = ListState::default();
-    state.select(sel);
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(
+        list,
+        area,
+        &mut super::list_scroll::list_state_for_selection(
+            area,
+            sel,
+            len,
+            &mut overlay.tracks_scroll,
+        ),
+    );
 }
 
 // ── Confirm dialog ────────────────────────────────────────────────────────────
@@ -336,20 +392,11 @@ fn render_confirm_dialog(
 pub fn render_playlist_picker(
     frame: &mut Frame,
     area: Rect,
-    picker: &PlaylistPicker,
+    picker: &mut PlaylistPicker,
     accent: Color,
     theme: &Theme,
 ) {
-    let w = (area.width / 2).max(30).min(area.width);
-    let h = (area.height * 6 / 10).max(5).min(area.height);
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let picker_area = Rect {
-        x,
-        y,
-        width: w,
-        height: h,
-    };
+    let picker_area = picker_rect(area);
 
     frame.render_widget(Clear, picker_area);
 
@@ -381,6 +428,7 @@ pub fn render_playlist_picker(
         .border_style(Style::default().fg(accent))
         .style(style_with_bg(theme.background));
 
+    let len = items.len();
     let list = List::new(items)
         .block(block)
         .highlight_style(
@@ -392,7 +440,14 @@ pub fn render_playlist_picker(
         .highlight_symbol("▶ ")
         .style(style_with_bg(theme.background));
 
-    let mut state = ListState::default();
-    state.select(sel);
-    frame.render_stateful_widget(list, picker_area, &mut state);
+    frame.render_stateful_widget(
+        list,
+        picker_area,
+        &mut super::list_scroll::list_state_for_selection(
+            picker_area,
+            sel,
+            len,
+            &mut picker.scroll,
+        ),
+    );
 }

@@ -8,6 +8,7 @@ pub mod folders;
 pub mod home_tab;
 pub mod kitty_art;
 pub mod layout;
+pub mod list_scroll;
 pub mod now_playing;
 pub mod now_playing_format;
 pub mod nowplaying_tab;

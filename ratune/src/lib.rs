@@ -14,6 +14,7 @@ mod library_index;
 mod lyrics;
 mod lyrics_cache;
 mod mpris;
+mod mouse_click;
 mod persist;
 mod scrobble;
 mod scrobble_queue;
@@ -478,6 +479,7 @@ async fn run_loop(
 
         // Expire status flash messages.
         app.tick_status_flash();
+        app.tick_playlist_tracks_fetch();
 
         if connectivity_interval != Duration::MAX
             && last_connectivity_check.elapsed() >= connectivity_interval
@@ -1241,10 +1243,8 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
             ) else {
                 return;
             };
-            if app.home.active_section == app::HomeSection::RecentAlbums
-                && app.home.album_selected_index == album_index
-            {
-                app.dispatch(Action::Select);
+            if mouse_click::is_double_click(app, mouse_click::MouseClickTarget::HomeRecentAlbum(album_index)) {
+                app.dispatch(Action::HomeAlbumAddToQueue);
             } else {
                 app.home.active_section = app::HomeSection::RecentAlbums;
                 app.home.selected_index = 0;
@@ -1259,10 +1259,8 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
             }
             let row = (y - inner_y) as usize;
             if row < app.home.recent_tracks.len() {
-                if app.home.active_section == app::HomeSection::RecentTracks
-                    && app.home.selected_index == row
-                {
-                    app.dispatch(Action::Select);
+                if mouse_click::is_double_click(app, mouse_click::MouseClickTarget::HomeRecentTrack(row)) {
+                    app.append_home_recent_track(row);
                 } else {
                     app.home.active_section = app::HomeSection::RecentTracks;
                     app.home.selected_index = row;
@@ -1277,10 +1275,8 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
             }
             let row = (y - inner_y) as usize;
             if row < app.home.rediscover.len() {
-                if app.home.active_section == app::HomeSection::Rediscover
-                    && app.home.selected_index == row
-                {
-                    app.dispatch(Action::Select);
+                if mouse_click::is_double_click(app, mouse_click::MouseClickTarget::HomeRediscover(row)) {
+                    app.append_home_rediscover_artist(row);
                 } else {
                     app.home.active_section = app::HomeSection::Rediscover;
                     app.home.selected_index = row;
@@ -1875,12 +1871,189 @@ fn browser_column_hit(
     })
 }
 
+fn rect_contains(r: Rect, x: u16, y: u16) -> bool {
+    x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
+}
+
+/// Visible list row inside a bordered column (skips top/bottom border rows).
+fn list_row_at(col: Rect, x: u16, y: u16) -> Option<usize> {
+    if x < col.x || x >= col.x + col.width {
+        return None;
+    }
+    if y <= col.y || y >= col.y + col.height.saturating_sub(1) {
+        return None;
+    }
+    Some((y - col.y - 1) as usize)
+}
+
+fn picker_list_row_at(popup: Rect, x: u16, y: u16) -> Option<usize> {
+    if x < popup.x || x >= popup.x + popup.width {
+        return None;
+    }
+    if y <= popup.y || y >= popup.y + popup.height.saturating_sub(1) {
+        return None;
+    }
+    Some((y - popup.y - 1) as usize)
+}
+
+/// Returns true when the click was consumed by a browser-tab overlay or popup.
+fn handle_browser_overlay_click(x: u16, y: u16, app: &mut App, center: Rect) -> bool {
+    use crate::state::LoadingState;
+    use crate::ui::{favorites_overlay, list_scroll, playlist_overlay};
+
+    // Render order: playlist overlay → picker → favorites (topmost last).
+    if app.favorites_overlay.visible {
+        let layout = favorites_overlay::panel_layout(center);
+        if rect_contains(layout.area, x, y) {
+            let cat_len = crate::state::FavoritesCategory::ALL.len();
+            if let Some(idx) = list_scroll::list_index_at_click(
+                layout.categories_col,
+                x,
+                y,
+                app.favorites_overlay.categories_scroll,
+                cat_len,
+            ) {
+                let target = mouse_click::MouseClickTarget::FavoritesCategory(idx);
+                if mouse_click::is_double_click(app, target) {
+                    app.double_click_favorites_category(idx);
+                } else {
+                    app.click_favorites_category(idx);
+                }
+            } else {
+                let item_len = app.favorites_overlay.item_count();
+                if let Some(idx) = list_scroll::list_index_at_click(
+                    layout.items_col,
+                    x,
+                    y,
+                    app.favorites_overlay.items_scroll,
+                    item_len,
+                ) {
+                    let target = mouse_click::MouseClickTarget::FavoritesItem(idx);
+                    if mouse_click::is_double_click(app, target) {
+                        app.double_click_favorites_item(idx);
+                    } else {
+                        app.click_favorites_item(idx);
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    if app.playlist_picker.is_some() {
+        let popup = playlist_overlay::picker_rect(center);
+        if rect_contains(popup, x, y) {
+            if let Some(ref picker) = app.playlist_picker {
+                let len = picker.playlists.len();
+                if let Some(idx) =
+                    list_scroll::list_index_at_click(popup, x, y, picker.scroll, len)
+                {
+                    app.click_playlist_picker_row(idx);
+                }
+            }
+            return true;
+        }
+    }
+
+    if app.playlist_overlay.visible {
+        let layout = playlist_overlay::panel_layout(center, &app.playlist_overlay.input_mode);
+        if rect_contains(layout.area, x, y) {
+            let list_len = match &app.playlist_overlay.playlists {
+                LoadingState::Loaded(playlists) => playlists.len(),
+                _ => 0,
+            };
+            if let Some(idx) = list_scroll::list_index_at_click(
+                layout.list_rows,
+                x,
+                y,
+                app.playlist_overlay.list_scroll,
+                list_len,
+            ) {
+                let target = mouse_click::MouseClickTarget::PlaylistList(idx);
+                if mouse_click::is_double_click(app, target) {
+                    app.double_click_playlist_overlay_list(idx);
+                } else {
+                    app.click_playlist_overlay_list(idx);
+                }
+            } else {
+                let track_len = match &app.playlist_overlay.tracks {
+                    LoadingState::Loaded(songs) => songs.len(),
+                    _ => 0,
+                };
+                if let Some(idx) = list_scroll::list_index_at_click(
+                    layout.tracks_col,
+                    x,
+                    y,
+                    app.playlist_overlay.tracks_scroll,
+                    track_len,
+                ) {
+                    let target = mouse_click::MouseClickTarget::PlaylistTrack(idx);
+                    if mouse_click::is_double_click(app, target) {
+                        app.double_click_playlist_overlay_track(idx);
+                    } else {
+                        app.click_playlist_overlay_track(idx);
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    false
+}
+
+fn handle_browser_overlay_wheel(x: u16, y: u16, dir: Direction, app: &mut App, center: Rect) -> bool {
+    use crate::state::{FavoritesFocus, PlaylistFocus};
+    use crate::ui::{favorites_overlay, playlist_overlay};
+
+    // Render order: playlist overlay → picker → favorites (topmost last).
+    if app.favorites_overlay.visible {
+        let layout = favorites_overlay::panel_layout(center);
+        if rect_contains(layout.area, x, y) {
+            if list_row_at(layout.categories_col, x, y).is_some() {
+                app.favorites_overlay.focus = FavoritesFocus::Categories;
+            } else if list_row_at(layout.items_col, x, y).is_some() {
+                app.favorites_overlay.focus = FavoritesFocus::Items;
+            }
+            app.navigate_favorites_wheel(dir);
+            return true;
+        }
+    }
+
+    if app.playlist_picker.is_some() {
+        let popup = playlist_overlay::picker_rect(center);
+        if rect_contains(popup, x, y) {
+            app.navigate_playlist_picker_wheel(dir);
+            return true;
+        }
+    }
+
+    if app.playlist_overlay.visible {
+        let layout = playlist_overlay::panel_layout(center, &app.playlist_overlay.input_mode);
+        if rect_contains(layout.area, x, y) {
+            if list_row_at(layout.list_rows, x, y).is_some() {
+                app.playlist_overlay.focus = PlaylistFocus::List;
+            } else if list_row_at(layout.tracks_col, x, y).is_some() {
+                app.playlist_overlay.focus = PlaylistFocus::Tracks;
+            }
+            app.navigate_playlist_wheel(dir);
+            return true;
+        }
+    }
+
+    false
+}
+
 fn handle_mouse_wheel(x: u16, y: u16, dir: Direction, app: &mut App, terminal_size: Rect) {
     if app.active_tab != Tab::Browser {
         return;
     }
 
     let areas = ui::layout::build_layout(terminal_size, &ui::layout::layout_options_for_app(app));
+    if handle_browser_overlay_wheel(x, y, dir, app, areas.center) {
+        return;
+    }
+
     let Some(hit) = browser_column_hit(x, y, areas.center, app.browser_browse_mode) else {
         return;
     };
@@ -1943,26 +2116,25 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             Action::None
         };
         app.dispatch(action);
+        mouse_click::clear_pending_click(app);
         return;
     }
 
+    if app.help_visible {
+        let popup = ui::popup::help_popup_rect(terminal_size, app.config.radio_enabled);
+        if rect_contains(popup, x, y) {
+            mouse_click::clear_pending_click(app);
+            return;
+        }
+    }
+
     if app.radio.picker_visible && app.radio.input_mode.is_normal() {
-        let area = terminal_size;
-        let w = (area.width * 4 / 5).clamp(40, area.width);
-        let h = (area.height * 7 / 10).clamp(8, area.height);
-        let popup = ratatui::layout::Rect {
-            x: area.x + (area.width.saturating_sub(w)) / 2,
-            y: area.y + (area.height.saturating_sub(h)) / 2,
-            width: w,
-            height: h,
-        };
-        if x >= popup.x
-            && x < popup.x + popup.width
-            && y >= popup.y + 1
-            && y < popup.y + popup.height.saturating_sub(1)
-        {
-            let visible_row = (y - popup.y - 1) as usize;
-            app.click_radio_row(visible_row);
+        let popup = ui::radio_popup::popup_rect(terminal_size);
+        if rect_contains(popup, x, y) {
+            if let Some(visible_row) = picker_list_row_at(popup, x, y) {
+                app.click_radio_row(visible_row);
+            }
+            mouse_click::clear_pending_click(app);
             return;
         }
     }
@@ -1975,6 +2147,7 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             let row = ui::now_playing::controls_row_rect(controls_area);
             if y >= row.y && y < row.y + row.height {
                 app.dispatch(action);
+                mouse_click::clear_pending_click(app);
                 return;
             }
         }
@@ -2003,6 +2176,7 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                     app.dispatch(Action::SeekTo(std::time::Duration::from_secs(seek_secs)));
                 }
             }
+            mouse_click::clear_pending_click(app);
             return;
         }
     }
@@ -2017,6 +2191,9 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             handle_home_click(x, y, app, center);
         }
         Tab::Browser => {
+            if handle_browser_overlay_click(x, y, app, center) {
+                return;
+            }
             let Some(hit) = browser_column_hit(x, y, center, app.browser_browse_mode) else {
                 return;
             };
@@ -2032,11 +2209,22 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                             let scroll = app.folders.dirs_scroll;
                             scroll + visible_row
                         };
-                        app.click_folder_dir(visible_pos);
+                        let target = mouse_click::MouseClickTarget::FolderDir(visible_pos);
+                        if mouse_click::is_double_click(app, target) {
+                            app.double_click_folder_dir(visible_pos);
+                        } else {
+                            app.click_folder_dir(visible_pos);
+                        }
                     }
                     _ => {
-                        app.click_folder_preview_row(visible_row);
-                        app.folder_activate_preview_selection();
+                        if let Some(row_ix) = app.folder_preview_row_index(visible_row) {
+                            let target = mouse_click::MouseClickTarget::FolderPreview(row_ix);
+                            if mouse_click::is_double_click(app, target) {
+                                app.double_click_folder_preview_row(visible_row);
+                            } else {
+                                app.click_folder_preview_row(visible_row);
+                            }
+                        }
                     }
                 }
                 return;
@@ -2065,7 +2253,12 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                         }
                     };
                     if let Some(idx) = orig_idx {
-                        app.click_browser_artist(idx);
+                        let target = mouse_click::MouseClickTarget::BrowserArtist(idx);
+                        if mouse_click::is_double_click(app, target) {
+                            app.double_click_browser_artist(idx);
+                        } else {
+                            app.click_browser_artist(idx);
+                        }
                     }
                 }
                 1 => {
@@ -2096,7 +2289,12 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                         }
                     };
                     if let Some(idx) = orig_idx {
-                        app.click_browser_album(idx);
+                        let target = mouse_click::MouseClickTarget::BrowserAlbum(idx);
+                        if mouse_click::is_double_click(app, target) {
+                            app.double_click_browser_album(idx);
+                        } else {
+                            app.click_browser_album(idx);
+                        }
                     }
                 }
                 _ => {
@@ -2126,7 +2324,12 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                         }
                     };
                     if let Some(idx) = orig_idx {
-                        app.click_browser_track(idx);
+                        let target = mouse_click::MouseClickTarget::BrowserTrack(idx);
+                        if mouse_click::is_double_click(app, target) {
+                            app.double_click_browser_track(idx);
+                        } else {
+                            app.click_browser_track(idx);
+                        }
                     }
                 }
             }
@@ -2265,7 +2468,12 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                 return;
             }
             let clicked_idx = app.queue.scroll + visible_row;
-            app.set_queue_cursor(clicked_idx);
+            let target = mouse_click::MouseClickTarget::QueueRow(clicked_idx);
+            if mouse_click::is_double_click(app, target) {
+                app.double_click_queue_row(clicked_idx);
+            } else {
+                app.click_queue_row(clicked_idx);
+            }
         }
     }
 }
