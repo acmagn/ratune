@@ -1,6 +1,6 @@
 [package]
 name = "ratune"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2021"
 description = "A terminal music player for Subsonic-compatible servers"
 license = "MIT"
