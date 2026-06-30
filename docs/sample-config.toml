@@ -407,21 +407,27 @@ colors = ["#00aaff", "#00ff99", "#ffee55", "#ff3355"]
 # enabled — Build/use index for Ctrl+f picker. Default: true.
 # index_path — JSON index file. Empty → ~/.cache/ratune/library_index.json (see code).
 # max_age_secs — Staleness threshold; background refresh when older. 0 = always stale at startup.
-# fzf_binary   — Executable name or path ("fzf", "sk", …). For `sk` (skim), ratune appends
-#                `--bind=ctrl-r:accept(ctrl-r)` so Ctrl+R replaces the queue; skim's default
-#                Ctrl+R is rotate mode, so `--expect=ctrl-r` alone would not fire.
-# fzf_args     — Extra argv merged with app defaults (delimiter/columns). The app may add
-#                its own headers unless you pass a custom --header=…
 # fetch_*_parallelism — Tunables for full index refresh (minimum 1 enforced at runtime).
 # navidrome_skip_unchanged_scan — Navidrome: skip full walk when lastScan unchanged.
 # notify_on_forced_index_refresh — Desktop notification when forced refresh completes.
+#
+# [library.fzf] — fuzzy picker (legacy: fzf_binary / fzf_args under [library])
+# binary — Executable ("fzf", "sk", …). For skim, ratune appends --bind=ctrl-r:accept(ctrl-r).
+# args   — Picker argv (delimiter, columns, …). App adds --header unless you pass --header=…
+# [library.fzf.columns] — max TSV field width (Unicode chars); 0 = no truncation.
 
 [library]
 enabled = true
 index_path = ""
 max_age_secs = 86400
-fzf_binary = "fzf"
-fzf_args = [
+fetch_album_parallelism = 12
+fetch_artist_parallelism = 4
+navidrome_skip_unchanged_scan = false
+notify_on_forced_index_refresh = true
+
+[library.fzf]
+binary = "fzf"
+args = [
   "--delimiter=\t",
   "--with-nth=2,3,4,5",
   "--nth=1,2,3",
@@ -429,10 +435,12 @@ fzf_args = [
   "--expect=ctrl-r",
   "--border=rounded",
 ]
-fetch_album_parallelism = 12
-fetch_artist_parallelism = 4
-navidrome_skip_unchanged_scan = false
-notify_on_forced_index_refresh = true
+
+# [library.fzf.columns]
+# artist = 26
+# album = 28
+# title = 36
+# duration = 6
 
 # -----------------------------------------------------------------------------
 # [cache] — offline streamed audio cache

@@ -265,6 +265,30 @@ impl LyricsSource {
 
 // ── [library] — metadata index + fzf picker ───────────────────────────────────
 
+/// Fuzzy picker settings under `[library.fzf]`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LibraryFzfSection {
+    /// Executable name or path. Default: `fzf` (also works with `sk`).
+    #[serde(default = "default_fzf_binary")]
+    pub binary: String,
+    /// Arguments passed to the picker (delimiter, columns, key bindings, …).
+    #[serde(default = "default_fzf_args")]
+    pub args: Vec<String>,
+    /// Max width per TSV field (Unicode chars). `0` = no truncation.
+    #[serde(default)]
+    pub columns: crate::library_index::FzfColumns,
+}
+
+impl Default for LibraryFzfSection {
+    fn default() -> Self {
+        Self {
+            binary: default_fzf_binary(),
+            args: default_fzf_args(),
+            columns: crate::library_index::FzfColumns::default(),
+        }
+    }
+}
+
 /// Local library metadata index and fuzzy picker (Milestone 2).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LibrarySection {
@@ -278,12 +302,15 @@ pub struct LibrarySection {
     /// Default: 86400 (24 h). Set to 0 to always refresh at startup.
     #[serde(default = "default_library_max_age_secs")]
     pub max_age_secs: u64,
-    /// Executable name or path for the fuzzy finder. Default: `fzf` (also works with `sk`).
-    #[serde(default = "default_fzf_binary")]
-    pub fzf_binary: String,
-    /// Extra arguments passed to fzf after defaults (delimiter, columns).
-    #[serde(default = "default_fzf_args")]
-    pub fzf_args: Vec<String>,
+    /// Fuzzy picker (`[library.fzf]`). Legacy flat keys under `[library]` are still read.
+    #[serde(default)]
+    pub fzf: LibraryFzfSection,
+    /// Legacy: `fzf_binary` under `[library]`. Prefer `[library.fzf].binary`.
+    #[serde(default, rename = "fzf_binary", skip_serializing)]
+    legacy_fzf_binary: Option<String>,
+    /// Legacy: `fzf_args` under `[library]`. Prefer `[library.fzf].args`.
+    #[serde(default, rename = "fzf_args", skip_serializing)]
+    legacy_fzf_args: Option<Vec<String>>,
     /// Concurrent `getAlbum` calls per artist during a full index refresh. Default: 12.
     #[serde(default = "default_library_fetch_album_parallelism")]
     pub fetch_album_parallelism: usize,
@@ -298,6 +325,32 @@ pub struct LibrarySection {
     /// `notify-send` protocol). Default: true.
     #[serde(default = "default_library_notify_on_forced_refresh")]
     pub notify_on_forced_index_refresh: bool,
+}
+
+impl LibrarySection {
+    /// Merge `[library.fzf]` with legacy flat `fzf_*` keys. Non-default nested values win;
+    /// legacy fills fields left at defaults.
+    pub fn resolve_fzf(&self) -> LibraryFzfSection {
+        let nested = &self.fzf;
+        let defaults = LibraryFzfSection::default();
+        LibraryFzfSection {
+            binary: if nested.binary != defaults.binary {
+                nested.binary.clone()
+            } else {
+                self.legacy_fzf_binary
+                    .clone()
+                    .unwrap_or_else(default_fzf_binary)
+            },
+            args: if nested.args != defaults.args {
+                nested.args.clone()
+            } else {
+                self.legacy_fzf_args
+                    .clone()
+                    .unwrap_or_else(default_fzf_args)
+            },
+            columns: nested.columns,
+        }
+    }
 }
 
 fn default_library_enabled() -> bool {
@@ -345,8 +398,9 @@ impl Default for LibrarySection {
             enabled: default_library_enabled(),
             index_path: String::new(),
             max_age_secs: default_library_max_age_secs(),
-            fzf_binary: default_fzf_binary(),
-            fzf_args: default_fzf_args(),
+            fzf: LibraryFzfSection::default(),
+            legacy_fzf_binary: None,
+            legacy_fzf_args: None,
             fetch_album_parallelism: default_library_fetch_album_parallelism(),
             fetch_artist_parallelism: default_library_fetch_artist_parallelism(),
             navidrome_skip_unchanged_scan: false,
@@ -1110,8 +1164,7 @@ pub struct Config {
     pub library_index_enabled: bool,
     pub library_index_path: String,
     pub library_index_max_age_secs: u64,
-    pub fzf_binary: String,
-    pub fzf_args: Vec<String>,
+    pub fzf: LibraryFzfSection,
     pub library_fetch_album_parallelism: usize,
     pub library_fetch_artist_parallelism: usize,
     pub library_navidrome_skip_unchanged_scan: bool,
@@ -1440,6 +1493,9 @@ impl Config {
             .fetch_station_icons
             .unwrap_or_else(default_radio_fetch_station_icons);
 
+        let library = file_cfg.library;
+        let library_fzf = library.resolve_fzf();
+
         Ok(Config {
             subsonic_url: file_cfg.server.url,
             subsonic_user: file_cfg.server.username,
@@ -1495,15 +1551,14 @@ impl Config {
                 .unwrap_or(LyricsSource::LrcLib),
             lyrics_lrclib_url: file_cfg.lyrics.lrclib_url,
             lyrics_cache_enabled: file_cfg.lyrics.cache_enabled,
-            library_index_enabled: file_cfg.library.enabled,
-            library_index_path: file_cfg.library.index_path,
-            library_index_max_age_secs: file_cfg.library.max_age_secs,
-            fzf_binary: file_cfg.library.fzf_binary,
-            fzf_args: file_cfg.library.fzf_args,
-            library_fetch_album_parallelism: file_cfg.library.fetch_album_parallelism.max(1),
-            library_fetch_artist_parallelism: file_cfg.library.fetch_artist_parallelism.max(1),
-            library_navidrome_skip_unchanged_scan: file_cfg.library.navidrome_skip_unchanged_scan,
-            library_notify_on_forced_index_refresh: file_cfg.library.notify_on_forced_index_refresh,
+            library_index_enabled: library.enabled,
+            library_index_path: library.index_path,
+            library_index_max_age_secs: library.max_age_secs,
+            fzf: library_fzf,
+            library_fetch_album_parallelism: library.fetch_album_parallelism.max(1),
+            library_fetch_artist_parallelism: library.fetch_artist_parallelism.max(1),
+            library_navidrome_skip_unchanged_scan: library.navidrome_skip_unchanged_scan,
+            library_notify_on_forced_index_refresh: library.notify_on_forced_index_refresh,
             home_recent_albums_show_art,
             home_cover_fetch_max_px,
             home_top_height_percent,
@@ -1715,9 +1770,15 @@ location = "right"
 # enabled = true
 # index_path = ""          # empty = ~/.cache/ratune/library_index.json
 # max_age_secs = 86400     # refresh in background when older (0 = always stale)
-# fzf_binary = "fzf"       # or "sk" (skim gets --bind=ctrl-r:accept(ctrl-r) for replace-queue)
-# fzf_args = ["--delimiter=\\t", "--with-nth=2,3,4,5", "--nth=1,2,3", "--multi", "--expect=ctrl-r", "--border=rounded"]
+# [library.fzf]            # fuzzy picker (legacy: fzf_binary / fzf_args under [library])
+# binary = "fzf"           # or "sk" (skim gets --bind=ctrl-r:accept(ctrl-r) for replace-queue)
+# args = ["--delimiter=\\t", "--with-nth=2,3,4,5", "--nth=1,2,3", "--multi", "--expect=ctrl-r", "--border=rounded"]
 # aligned --header is added automatically unless you pass your own --header=…
+# [library.fzf.columns]    # max TSV field width (Unicode chars); 0 = no truncation
+# artist = 26
+# album = 28
+# title = 36               # set to 0 to search long track names
+# duration = 6
 # fetch_album_parallelism = 12    # concurrent getAlbum per artist during index refresh
 # fetch_artist_parallelism = 4    # concurrent artists during index refresh
 # navidrome_skip_unchanged_scan = false   # Navidrome: skip full walk when lastScan unchanged
@@ -2387,5 +2448,44 @@ cache_enabled = false
     fn parses_radio_enabled() {
         let fc: FileConfig = toml::from_str("[radio]\nenabled = false\n").expect("toml");
         assert_eq!(fc.radio.enabled, Some(false));
+    }
+
+    #[test]
+    fn parses_library_fzf_nested() {
+        let text = r#"
+[library.fzf]
+binary = "sk"
+
+[library.fzf.columns]
+title = 0
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        let fzf = fc.library.resolve_fzf();
+        assert_eq!(fzf.binary, "sk");
+        assert_eq!(fzf.columns.title, 0);
+        assert_eq!(fzf.args, default_fzf_args());
+    }
+
+    #[test]
+    fn library_fzf_nested_overrides_legacy() {
+        let text = r#"
+[library]
+fzf_binary = "legacy-sk"
+
+[library.fzf]
+binary = "sk"
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        assert_eq!(fc.library.resolve_fzf().binary, "sk");
+    }
+
+    #[test]
+    fn library_fzf_legacy_flat_keys() {
+        let text = r#"
+[library]
+fzf_binary = "sk"
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        assert_eq!(fc.library.resolve_fzf().binary, "sk");
     }
 }
