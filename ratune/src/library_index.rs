@@ -12,6 +12,43 @@ use anyhow::{Context, Result};
 use ratune_subsonic::Song;
 use serde::{Deserialize, Serialize};
 
+/// Display width per TSV column fed to fzf (Unicode scalars). `0` = no truncation or padding.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FzfColumns {
+    #[serde(default = "default_fzf_col_artist")]
+    pub artist: usize,
+    #[serde(default = "default_fzf_col_album")]
+    pub album: usize,
+    #[serde(default = "default_fzf_col_title")]
+    pub title: usize,
+    #[serde(default = "default_fzf_col_duration")]
+    pub duration: usize,
+}
+
+impl Default for FzfColumns {
+    fn default() -> Self {
+        Self {
+            artist: default_fzf_col_artist(),
+            album: default_fzf_col_album(),
+            title: default_fzf_col_title(),
+            duration: default_fzf_col_duration(),
+        }
+    }
+}
+
+fn default_fzf_col_artist() -> usize {
+    26
+}
+fn default_fzf_col_album() -> usize {
+    28
+}
+fn default_fzf_col_title() -> usize {
+    36
+}
+fn default_fzf_col_duration() -> usize {
+    6
+}
+
 const FORMAT_VERSION: u32 = 1;
 
 /// Serialized snapshot written to disk.
@@ -91,13 +128,6 @@ pub fn save(
     Ok(())
 }
 
-/// Max display width (Unicode scalars) per column after truncation. Keeps fzf rows
-/// readable; full metadata stays in the index for enqueue.
-const FZF_COL_ARTIST: usize = 26;
-const FZF_COL_ALBUM: usize = 28;
-const FZF_COL_TITLE: usize = 36;
-const FZF_COL_DUR: usize = 6;
-
 fn sanitize_field(s: &str) -> String {
     s.replace(['\t', '\n'], " ")
 }
@@ -119,7 +149,11 @@ fn truncate_display(s: &str, max_chars: usize) -> String {
 }
 
 /// Truncate then pad with spaces so columns line up in a monospace terminal.
+/// When `width` is 0, pass through unchanged (full text for fzf search and display).
 fn format_fzf_column(s: &str, width: usize) -> String {
+    if width == 0 {
+        return s.to_string();
+    }
     let t = truncate_display(s, width);
     let n = t.chars().count();
     if n < width {
@@ -131,19 +165,20 @@ fn format_fzf_column(s: &str, width: usize) -> String {
 
 /// Tab-separated header labels padded to match [`fzf_input_lines`] columns (artist–time;
 /// song id is not shown). Pass as `fzf --header=…` so labels line up with data.
-pub fn fzf_header_line() -> String {
-    let artist = format_fzf_column("Artist", FZF_COL_ARTIST);
-    let album = format_fzf_column("Album", FZF_COL_ALBUM);
-    let title = format_fzf_column("Title", FZF_COL_TITLE);
-    let time = format_fzf_column("Time", FZF_COL_DUR);
+pub fn fzf_header_line(cols: FzfColumns) -> String {
+    let artist = format_fzf_column("Artist", cols.artist);
+    let album = format_fzf_column("Album", cols.album);
+    let title = format_fzf_column("Title", cols.title);
+    let time = format_fzf_column("Time", cols.duration);
     format!("{artist}\t{album}\t{title}\t{time}")
 }
 
 /// One TSV line per track for fzf: id, artist, album, title, duration.
 /// Field 1 is the song id (hidden in the fzf *list* via `--with-nth=2,3,4,5`).
-/// Default `[library] fzf_args` uses `--nth=1,2,3` (artist, album, title; duration is
-/// shown but excluded from fuzzy search). Long strings are truncated for display only.
-pub fn fzf_input_lines(tracks: &[Song]) -> String {
+/// Default `[library.fzf].args` uses `--nth=1,2,3` (artist, album, title; duration is
+/// shown but excluded from fuzzy search). Column widths come from [`FzfColumns`]; set a
+/// width to `0` to send the full field (needed for searching long titles).
+pub fn fzf_input_lines(tracks: &[Song], cols: FzfColumns) -> String {
     let mut out = String::new();
     for s in tracks {
         let artist = s.artist.as_deref().unwrap_or("—");
@@ -154,10 +189,10 @@ pub fn fzf_input_lines(tracks: &[Song]) -> String {
             .map(fmt_duration_ms)
             .unwrap_or_else(|| "—".to_string());
         let id = sanitize_field(&s.id);
-        let artist = format_fzf_column(&sanitize_field(artist), FZF_COL_ARTIST);
-        let album = format_fzf_column(&sanitize_field(album), FZF_COL_ALBUM);
-        let title = format_fzf_column(&sanitize_field(title), FZF_COL_TITLE);
-        let dur = format_fzf_column(&sanitize_field(&dur), FZF_COL_DUR);
+        let artist = format_fzf_column(&sanitize_field(artist), cols.artist);
+        let album = format_fzf_column(&sanitize_field(album), cols.album);
+        let title = format_fzf_column(&sanitize_field(title), cols.title);
+        let dur = format_fzf_column(&sanitize_field(&dur), cols.duration);
         out.push_str(&format!("{id}\t{artist}\t{album}\t{title}\t{dur}\n"));
     }
     out
@@ -392,18 +427,50 @@ mod tests {
 
     #[test]
     fn fzf_header_matches_column_widths() {
-        let h = fzf_header_line();
+        let cols = FzfColumns::default();
+        let h = fzf_header_line(cols);
         assert_eq!(
             h.matches('\t').count(),
             3,
             "four columns: Artist | Album | Title | Time"
         );
-        let cols: Vec<&str> = h.split('\t').collect();
-        assert_eq!(cols.len(), 4);
-        assert_eq!(cols[0].chars().count(), 26);
-        assert_eq!(cols[1].chars().count(), 28);
-        assert_eq!(cols[2].chars().count(), 36);
-        assert_eq!(cols[3].chars().count(), 6);
+        let parts: Vec<&str> = h.split('\t').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0].chars().count(), cols.artist);
+        assert_eq!(parts[1].chars().count(), cols.album);
+        assert_eq!(parts[2].chars().count(), cols.title);
+        assert_eq!(parts[3].chars().count(), cols.duration);
+    }
+
+    #[test]
+    fn fzf_column_width_zero_passes_full_title() {
+        let s = Song {
+            id: "id".into(),
+            title: "a".repeat(50),
+            album: None,
+            artist: None,
+            album_id: None,
+            artist_id: None,
+            track: None,
+            disc_number: None,
+            year: None,
+            genre: None,
+            cover_art: None,
+            duration: None,
+            bit_rate: None,
+            content_type: None,
+            suffix: None,
+            size: None,
+            path: None,
+            starred: None,
+        };
+        let cols = FzfColumns {
+            title: 0,
+            ..FzfColumns::default()
+        };
+        let line = fzf_input_lines(std::slice::from_ref(&s), cols);
+        let title_field = line.split('\t').nth(3).unwrap();
+        assert_eq!(title_field, "a".repeat(50));
     }
 
     #[test]
@@ -428,7 +495,7 @@ mod tests {
             path: None,
             starred: None,
         };
-        let line = fzf_input_lines(std::slice::from_ref(&s));
+        let line = fzf_input_lines(std::slice::from_ref(&s), FzfColumns::default());
         assert_eq!(
             line.matches('\t').count(),
             4,
