@@ -138,6 +138,12 @@ cargo build --release
 
 The binary is `target/release/ratune`. Check the build with `ratune --version` (or `-V`).
 
+**Git hooks (optional):** [Lefthook](https://lefthook.dev/install/) runs `cargo fmt` before each commit when Rust files are staged. Install lefthook once (e.g. Arch: `pacman -S lefthook`, Homebrew: `brew install lefthook`, or a [standalone binary](https://github.com/evilmartians/lefthook/releases)), then from the repo root:
+
+```sh
+lefthook install
+```
+
 **Album art in the terminal:** from a source checkout you can run a small [ratatui-image](https://github.com/ratatui/ratatui-image) harness (same capability query as the real UI) to verify your terminal or tmux passthrough. Use any JPEG/PNG (etc.) on disk:
 
 ```sh
