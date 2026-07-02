@@ -413,8 +413,9 @@ colors = ["#00aaff", "#00ff99", "#ffee55", "#ff3355"]
 #
 # [library.fzf] — fuzzy picker (legacy: fzf_binary / fzf_args under [library])
 # binary — Executable ("fzf", "sk", …). For skim, ratune appends --bind=ctrl-r:accept(ctrl-r).
-# args   — Picker argv (delimiter, columns, …). App adds --header unless you pass --header=…
-# [library.fzf.columns] — max TSV field width (Unicode chars); 0 = no truncation.
+# args   — Picker argv (delimiter, columns, …). Auto --header follows --with-nth unless
+#          you pass your own --header=…
+# [library.fzf.columns] — max TSV field width (terminal columns); 0 = no truncation.
 
 [library]
 enabled = true

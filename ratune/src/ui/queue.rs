@@ -4,6 +4,7 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::text_width;
 use crate::theme::style_with_bg;
 
 const DEFAULT_QUEUE_TEMPLATE: &str = "{n}{title:<40}  {artist:<25}  {duration:>5}";
@@ -180,11 +181,11 @@ where
 
     let (align, width) = parse_spec(spec);
     if let Some(w) = width {
-        let truncated = trunc(&raw, w);
-        match align {
-            Align::Right => format!("{:>width$}", truncated, width = w),
-            Align::Left => format!("{:<width$}", truncated, width = w),
-        }
+        let align = match align {
+            Align::Right => text_width::Align::Right,
+            Align::Left => text_width::Align::Left,
+        };
+        text_width::fit_to_width(&raw, w, align)
     } else {
         raw
     }
@@ -212,26 +213,4 @@ fn parse_spec(spec: Option<&str>) -> (Align, Option<usize>) {
     };
     let width = rest.trim().parse::<usize>().ok().filter(|w| *w > 0);
     (align, width)
-}
-
-/// Truncate `s` to at most `max` Unicode characters, appending `…` if cut.
-fn trunc(s: &str, max: usize) -> String {
-    if max == 0 {
-        return String::new();
-    }
-    let mut chars = s.chars();
-    let mut result = String::with_capacity(max);
-    for (count, ch) in chars.by_ref().enumerate() {
-        if count >= max - 1 {
-            // Check if there are more characters coming.
-            if chars.next().is_some() {
-                result.push('…');
-            } else {
-                result.push(ch);
-            }
-            return result;
-        }
-        result.push(ch);
-    }
-    result
 }

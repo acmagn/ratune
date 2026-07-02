@@ -42,6 +42,7 @@ ratatui-image = { version = "9.0", default-features = false, features = ["image-
 inquire = "0.7"
 keyring-core = "1"
 libc = "0.2"
+unicode-width = "0.2"
 
 # Platform credential stores for keyring-core — see https://crates.io/crates/keyring-core
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -12,7 +12,9 @@ use anyhow::{Context, Result};
 use ratune_subsonic::Song;
 use serde::{Deserialize, Serialize};
 
-/// Display width per TSV column fed to fzf (Unicode scalars). `0` = no truncation or padding.
+use crate::text_width::{self, Align};
+
+/// Display width per TSV column fed to fzf (terminal columns). `0` = no truncation or padding.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FzfColumns {
     #[serde(default = "default_fzf_col_artist")]
@@ -132,45 +134,68 @@ fn sanitize_field(s: &str) -> String {
     s.replace(['\t', '\n'], " ")
 }
 
-/// Truncate with ellipsis; never wider than `max_chars` scalars.
-fn truncate_display(s: &str, max_chars: usize) -> String {
-    let t = s.trim();
-    let count = t.chars().count();
-    if count <= max_chars {
-        return t.to_string();
-    }
-    if max_chars <= 1 {
-        return "…".to_string();
-    }
-    t.chars()
-        .take(max_chars.saturating_sub(1))
-        .chain(Some('…'))
-        .collect()
-}
-
 /// Truncate then pad with spaces so columns line up in a monospace terminal.
 /// When `width` is 0, pass through unchanged (full text for fzf search and display).
 fn format_fzf_column(s: &str, width: usize) -> String {
     if width == 0 {
         return s.to_string();
     }
-    let t = truncate_display(s, width);
-    let n = t.chars().count();
-    if n < width {
-        format!("{t}{}", " ".repeat(width - n))
-    } else {
-        t
-    }
+    text_width::fit_to_width(s, width, Align::Left)
 }
 
-/// Tab-separated header labels padded to match [`fzf_input_lines`] columns (artist–time;
-/// song id is not shown). Pass as `fzf --header=…` so labels line up with data.
-pub fn fzf_header_line(cols: FzfColumns) -> String {
-    let artist = format_fzf_column("Artist", cols.artist);
-    let album = format_fzf_column("Album", cols.album);
-    let title = format_fzf_column("Title", cols.title);
-    let time = format_fzf_column("Time", cols.duration);
-    format!("{artist}\t{album}\t{title}\t{time}")
+/// Default `--with-nth` when omitted from fzf argv (hide song id, show artist–duration).
+pub const FZF_DEFAULT_WITH_NTH: &[usize] = &[2, 3, 4, 5];
+
+/// Parse `--with-nth=2,3,4,5` (or `--with-nth 2,3,4,5`) from fzf argv.
+pub fn parse_fzf_with_nth(args: &[String]) -> Vec<usize> {
+    parse_fzf_flag_value(args, "--with-nth")
+        .map(|s| parse_fzf_field_indices(&s))
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| FZF_DEFAULT_WITH_NTH.to_vec())
+}
+
+fn parse_fzf_flag_value(args: &[String], flag: &str) -> Option<String> {
+    let eq = format!("{flag}=");
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if let Some(v) = a.strip_prefix(&eq) {
+            return Some(v.to_string());
+        }
+        if a == flag {
+            return args.get(i + 1).cloned();
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_fzf_field_indices(s: &str) -> Vec<usize> {
+    s.split(',')
+        .filter_map(|part| part.trim().parse::<usize>().ok().filter(|&n| n > 0))
+        .collect()
+}
+
+fn fzf_field_header(field: usize, cols: FzfColumns) -> Option<String> {
+    let (label, width) = match field {
+        2 => ("Artist", cols.artist),
+        3 => ("Album", cols.album),
+        4 => ("Title", cols.title),
+        5 => ("Time", cols.duration),
+        _ => return None,
+    };
+    Some(format_fzf_column(label, width))
+}
+
+/// Tab-separated header labels padded to match [`fzf_input_lines`] columns in the order
+/// given by fzf's `--with-nth` (defaults to artist, album, title, time). Pass as
+/// `fzf --header=…` so labels line up with data rows.
+pub fn fzf_header_line(cols: FzfColumns, with_nth: &[usize]) -> String {
+    with_nth
+        .iter()
+        .filter_map(|&field| fzf_field_header(field, cols))
+        .collect::<Vec<_>>()
+        .join("\t")
 }
 
 /// One TSV line per track for fzf: id, artist, album, title, duration.
@@ -428,7 +453,7 @@ mod tests {
     #[test]
     fn fzf_header_matches_column_widths() {
         let cols = FzfColumns::default();
-        let h = fzf_header_line(cols);
+        let h = fzf_header_line(cols, FZF_DEFAULT_WITH_NTH);
         assert_eq!(
             h.matches('\t').count(),
             3,
@@ -436,10 +461,35 @@ mod tests {
         );
         let parts: Vec<&str> = h.split('\t').collect();
         assert_eq!(parts.len(), 4);
-        assert_eq!(parts[0].chars().count(), cols.artist);
-        assert_eq!(parts[1].chars().count(), cols.album);
-        assert_eq!(parts[2].chars().count(), cols.title);
-        assert_eq!(parts[3].chars().count(), cols.duration);
+        assert_eq!(text_width::str_width(parts[0]), cols.artist);
+        assert_eq!(text_width::str_width(parts[1]), cols.album);
+        assert_eq!(text_width::str_width(parts[2]), cols.title);
+        assert_eq!(text_width::str_width(parts[3]), cols.duration);
+    }
+
+    #[test]
+    fn fzf_header_follows_with_nth_order() {
+        let cols = FzfColumns::default();
+        let h = fzf_header_line(cols, &[2, 3, 5, 4]);
+        let parts: Vec<&str> = h.split('\t').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0].trim(), "Artist");
+        assert_eq!(parts[1].trim(), "Album");
+        assert_eq!(parts[2].trim(), "Time");
+        assert_eq!(parts[3].trim(), "Title");
+    }
+
+    #[test]
+    fn parse_fzf_with_nth_from_args() {
+        let args = vec![
+            "--delimiter=\t".into(),
+            "--with-nth=2,3,5,4".into(),
+            "--nth=1,2,3".into(),
+        ];
+        assert_eq!(parse_fzf_with_nth(&args), vec![2, 3, 5, 4]);
+        assert_eq!(parse_fzf_with_nth(&[]), vec![2, 3, 4, 5]);
+        let spaced = vec!["--with-nth".into(), "2,3,5,4".into()];
+        assert_eq!(parse_fzf_with_nth(&spaced), vec![2, 3, 5, 4]);
     }
 
     #[test]
@@ -501,5 +551,15 @@ mod tests {
             4,
             "exactly 4 tabs as delimiters"
         );
+    }
+
+    #[test]
+    fn fzf_column_cjk_uses_display_width() {
+        let cols = FzfColumns {
+            title: 6,
+            ..FzfColumns::default()
+        };
+        let field = format_fzf_column("日本語", cols.title);
+        assert_eq!(text_width::str_width(&field), cols.title);
     }
 }

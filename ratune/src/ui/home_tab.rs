@@ -11,6 +11,7 @@ use ratatui_image::StatefulImage;
 
 use crate::app::{App, HomeSection, HomeState, RecentAlbum};
 use crate::config::{Config, HomePanel};
+use crate::text_width::{self, Align};
 use crate::theme::{style_with_bg, Theme};
 use crate::ui::kitty_art::{
     art_strip_layout, art_strip_slot_thumb_rect, art_strip_thumb_hit, KITTY_STRIP_MAX_SLOTS,
@@ -473,8 +474,9 @@ fn render_art_strip_labels(
             let is_selected = is_active && album_index == home.album_selected_index;
 
             let label_width = thumb_cols as usize;
-            let name_label = pad_or_truncate(&album.album_name, label_width);
-            let artist_label = pad_or_truncate(&album.artist_name, label_width);
+            let name_label = text_width::fit_to_width(&album.album_name, label_width, Align::Left);
+            let artist_label =
+                text_width::fit_to_width(&album.artist_name, label_width, Align::Left);
 
             let (name_style, artist_style) = if is_selected {
                 (
@@ -624,13 +626,11 @@ fn render_recent_tracks_block(
             let track_w = ((inner.width as usize).saturating_sub(8) * 40 / 100).max(10);
             let artist_w = ((inner.width as usize).saturating_sub(8) * 30 / 100).max(8);
             let text = format!(
-                " {:>2}. {:<track_w$} {:<artist_w$} {}",
+                " {:>2}. {} {} {}",
                 i + 1,
-                truncate(&record.track_name, track_w),
-                truncate(&record.artist_name, artist_w),
+                text_width::fit_to_width(&record.track_name, track_w, Align::Left),
+                text_width::fit_to_width(&record.artist_name, artist_w, Align::Left),
                 rel,
-                track_w = track_w,
-                artist_w = artist_w,
             );
             let selected = is_active && home.selected_index == i;
             let style = if selected {
@@ -676,7 +676,7 @@ fn render_rediscover_block(
             let text = format!(
                 " {:>2}. {}",
                 i + 1,
-                truncate(name, inner.width as usize - 6)
+                text_width::truncate_to_width(name, inner.width as usize - 6)
             );
             let selected = is_active && home.selected_index == i;
             let style = if selected {
@@ -705,35 +705,7 @@ fn render_rediscover_block(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Truncate `s` to at most `max` characters, adding `…` if truncated.
+/// Truncate `s` to at most `max` terminal columns, adding `…` if truncated.
 fn truncate(s: &str, max: usize) -> String {
-    if max == 0 {
-        return String::new();
-    }
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('\u{2026}'); // …
-        out
-    }
-}
-
-/// Pad `s` to exactly `width` chars, or truncate with `…` if longer.
-fn pad_or_truncate(s: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    let count = s.chars().count();
-    if count == width {
-        s.to_string()
-    } else if count < width {
-        let mut out = s.to_string();
-        for _ in 0..(width - count) {
-            out.push(' ');
-        }
-        out
-    } else {
-        truncate(s, width)
-    }
+    text_width::truncate_to_width(s, max)
 }
