@@ -274,7 +274,7 @@ pub struct LibraryFzfSection {
     /// Arguments passed to the picker (delimiter, columns, key bindings, …).
     #[serde(default = "default_fzf_args")]
     pub args: Vec<String>,
-    /// Max width per TSV field (Unicode chars). `0` = no truncation.
+    /// Max width per TSV field (terminal columns). `0` = no truncation.
     #[serde(default)]
     pub columns: crate::library_index::FzfColumns,
 }
@@ -1773,8 +1773,8 @@ location = "right"
 # [library.fzf]            # fuzzy picker (legacy: fzf_binary / fzf_args under [library])
 # binary = "fzf"           # or "sk" (skim gets --bind=ctrl-r:accept(ctrl-r) for replace-queue)
 # args = ["--delimiter=\\t", "--with-nth=2,3,4,5", "--nth=1,2,3", "--multi", "--expect=ctrl-r", "--border=rounded"]
-# aligned --header is added automatically unless you pass your own --header=…
-# [library.fzf.columns]    # max TSV field width (Unicode chars); 0 = no truncation
+# aligned --header follows --with-nth unless you pass your own --header=…
+# [library.fzf.columns]    # max TSV field width (terminal columns); 0 = no truncation
 # artist = 26
 # album = 28
 # title = 36               # set to 0 to search long track names

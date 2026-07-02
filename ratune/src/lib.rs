@@ -19,6 +19,7 @@ mod persist;
 mod scrobble;
 mod scrobble_queue;
 mod state;
+mod text_width;
 mod theme;
 mod tty;
 mod ui;
@@ -331,9 +332,13 @@ fn run_library_fzf_picker(
     let input = library_index::fzf_input_lines(&tracks, cols);
     let mut fzf_args = app.config.fzf.args.clone();
     if !fzf_args.iter().any(|a| a.starts_with("--header")) {
+        let with_nth = library_index::parse_fzf_with_nth(&fzf_args);
         fzf_args.insert(
             0,
-            format!("--header={}", library_index::fzf_header_line(cols)),
+            format!(
+                "--header={}",
+                library_index::fzf_header_line(cols, &with_nth)
+            ),
         );
     }
     let fzf_args = fzf_picker::prepare_library_fuzzy_picker_args(&app.config.fzf.binary, fzf_args);

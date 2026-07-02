@@ -2673,6 +2673,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
+ "unicode-width 0.2.0",
  "url",
  "windows-native-keyring-store",
 ]
