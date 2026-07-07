@@ -553,14 +553,18 @@ fn split_row_columns(area: Rect, show_c: bool, show_p: bool) -> RowColumns {
     }
 }
 
-fn builtin_lines() -> Vec<String> {
-    vec!["$b%t$/b".into(), "%a".into(), "%b".into()]
+fn builtin_lines(ratings_enabled: bool) -> Vec<String> {
+    if ratings_enabled {
+        vec!["$b%t$/b  %R".into(), "%a".into(), "%b".into()]
+    } else {
+        vec!["$b%t$/b".into(), "%a".into(), "%b".into()]
+    }
 }
 
 fn template_lines_row(app: &App) -> Vec<String> {
     let v = &app.config.now_playing_lines_row;
     if v.is_empty() {
-        builtin_lines()
+        builtin_lines(app.config.ratings_enabled)
     } else {
         v.clone()
     }
@@ -569,7 +573,7 @@ fn template_lines_row(app: &App) -> Vec<String> {
 fn template_lines_boxed(app: &App) -> Vec<String> {
     let v = &app.config.now_playing_lines_boxed;
     if v.is_empty() {
-        builtin_lines()
+        builtin_lines(app.config.ratings_enabled)
     } else {
         v.clone()
     }
@@ -628,6 +632,8 @@ fn np_context(app: &App) -> NowPlayingContext<'_> {
         } else {
             queue_position_now_playing(app)
         },
+        ratings_enabled: app.config.ratings_enabled,
+        rating_stars: &app.config.rating_stars,
     }
 }
 

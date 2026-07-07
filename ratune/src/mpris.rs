@@ -85,6 +85,9 @@ mod linux {
         if let Some(ref u) = s.art_url {
             b = b.art_url(u.as_str());
         }
+        if let Some(r) = s.user_rating_mpris {
+            b = b.user_rating(r);
+        }
         b.build()
     }
 
@@ -387,6 +390,8 @@ pub struct MprisSnapshot {
     pub can_pause: bool,
     pub can_seek: bool,
     pub has_track: bool,
+    /// MPRIS `xesam:userRating` (0.0–1.0); unset when the track is unrated.
+    pub user_rating_mpris: Option<f64>,
 }
 
 impl Default for MprisSnapshot {
@@ -410,6 +415,7 @@ impl Default for MprisSnapshot {
             can_pause: false,
             can_seek: false,
             has_track: false,
+            user_rating_mpris: None,
         }
     }
 }
@@ -589,6 +595,11 @@ pub fn write_snapshot(app: &crate::app::App, snap: &RwLock<MprisSnapshot>) {
             .duration
             .map(|d| i64::from(d) * 1_000_000)
             .unwrap_or(0);
+        s.user_rating_mpris = if app.config.ratings_enabled {
+            ratune_subsonic::user_rating_mpris(track.user_rating)
+        } else {
+            None
+        };
     }
     s.position_micros = app.playback.elapsed.as_micros() as i64;
     s.volume = app.config.default_volume as f64 / 100.0;

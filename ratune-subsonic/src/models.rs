@@ -49,6 +49,9 @@ pub struct Artist {
     pub album_count: Option<u32>,
     pub cover_art: Option<String>,
     pub starred: Option<String>,
+    /// User rating 1–5 from Subsonic `userRating`.
+    #[serde(default)]
+    pub user_rating: Option<u8>,
     /// Album stubs — populated only by `getArtist`, empty from `getArtists`.
     #[serde(default)]
     pub album: Vec<Album>,
@@ -123,6 +126,76 @@ pub struct Song {
     pub size: Option<u64>,
     pub path: Option<String>,
     pub starred: Option<String>,
+    /// User rating 1–5 from Subsonic `userRating` (absent or 0 = unrated).
+    #[serde(default)]
+    pub user_rating: Option<u8>,
+}
+
+/// Glyphs for ratings: small stars sit closer to the text centerline than `★`/`☆`.
+pub const DEFAULT_RATING_STAR_FILLED: &str = "⭑";
+pub const DEFAULT_RATING_STAR_EMPTY: &str = "⭒";
+pub const DEFAULT_RATING_BRACKET_OPEN: &str = "[";
+pub const DEFAULT_RATING_BRACKET_CLOSE: &str = "]";
+
+/// Display a 1–5 user rating as bracketed stars (empty when unrated).
+#[must_use]
+pub fn format_user_rating(rating: Option<u8>) -> String {
+    format_user_rating_with_options(
+        rating,
+        DEFAULT_RATING_STAR_FILLED,
+        DEFAULT_RATING_STAR_EMPTY,
+        DEFAULT_RATING_BRACKET_OPEN,
+        DEFAULT_RATING_BRACKET_CLOSE,
+    )
+}
+
+/// Like [`format_user_rating`] but with custom filled/empty glyphs (one repeat = one star).
+#[must_use]
+pub fn format_user_rating_with_glyphs(rating: Option<u8>, filled: &str, empty: &str) -> String {
+    format_user_rating_with_options(
+        rating,
+        filled,
+        empty,
+        DEFAULT_RATING_BRACKET_OPEN,
+        DEFAULT_RATING_BRACKET_CLOSE,
+    )
+}
+
+/// Full control over rating display glyphs and optional brackets (`""` = no brackets).
+#[must_use]
+pub fn format_user_rating_with_options(
+    rating: Option<u8>,
+    filled: &str,
+    empty: &str,
+    bracket_open: &str,
+    bracket_close: &str,
+) -> String {
+    let filled = if filled.is_empty() {
+        DEFAULT_RATING_STAR_FILLED
+    } else {
+        filled
+    };
+    let empty = if empty.is_empty() {
+        DEFAULT_RATING_STAR_EMPTY
+    } else {
+        empty
+    };
+    match rating.filter(|&r| (1..=5).contains(&r)) {
+        Some(r) => {
+            let on = filled.repeat(r as usize);
+            let off = empty.repeat((5 - r) as usize);
+            format!("{bracket_open}{on}{off}{bracket_close}")
+        }
+        None => String::new(),
+    }
+}
+
+/// MPRIS `xesam:userRating` is 0.0–1.0; Subsonic uses 1–5.
+#[must_use]
+pub fn user_rating_mpris(rating: Option<u8>) -> Option<f64> {
+    rating
+        .filter(|&r| (1..=5).contains(&r))
+        .map(|r| f64::from(r) / 5.0)
 }
 
 /// An album as returned by `getAlbum` or `search3`.
@@ -143,6 +216,9 @@ pub struct Album {
     pub year: Option<u32>,
     pub genre: Option<String>,
     pub starred: Option<String>,
+    /// User rating 1–5 from Subsonic `userRating`.
+    #[serde(default)]
+    pub user_rating: Option<u8>,
     /// Tracks — populated only by `getAlbum`, empty for search results.
     #[serde(default)]
     pub song: Vec<Song>,
@@ -298,6 +374,9 @@ pub struct DirectoryChild {
     pub path: Option<String>,
     pub suffix: Option<String>,
     pub content_type: Option<String>,
+    /// User rating 1–5 when the server includes it on directory entries.
+    #[serde(default)]
+    pub user_rating: Option<u8>,
 }
 
 impl DirectoryChild {
@@ -322,6 +401,7 @@ impl DirectoryChild {
             size: None,
             path: self.path.clone(),
             starred: None,
+            user_rating: self.user_rating,
         }
     }
 }
@@ -1051,6 +1131,7 @@ mod tests {
                 album_count: None,
                 cover_art: None,
                 starred: None,
+                user_rating: None,
                 album: vec![],
             }],
         };
@@ -1104,5 +1185,30 @@ mod tests {
         let lines = structured_lyrics_to_lines(&entries);
         assert_eq!(lines.len(), 2);
         assert!(lines.iter().all(|l| l.time.is_none()));
+    }
+
+    #[test]
+    fn deserialize_song_user_rating() {
+        let j = r#"{"id":"1","title":"T","userRating":4}"#;
+        let song: Song = serde_json::from_str(j).unwrap();
+        assert_eq!(song.user_rating, Some(4));
+    }
+
+    #[test]
+    fn format_user_rating_and_mpris_scale() {
+        assert_eq!(format_user_rating(Some(3)), "[⭑⭑⭑⭒⭒]");
+        assert_eq!(format_user_rating(None), "");
+        assert_eq!(format_user_rating_with_glyphs(Some(4), "★", "☆"), "[★★★★☆]");
+        assert_eq!(
+            format_user_rating_with_options(Some(3), "★", "☆", "", ""),
+            "★★★☆☆"
+        );
+        assert_eq!(
+            format_user_rating_with_options(Some(2), "⭑", "⭒", "(", ")"),
+            "(⭑⭑⭒⭒⭒)"
+        );
+        assert_eq!(user_rating_mpris(Some(5)), Some(1.0));
+        assert_eq!(user_rating_mpris(Some(3)), Some(0.6));
+        assert_eq!(user_rating_mpris(None), None);
     }
 }

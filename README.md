@@ -262,6 +262,30 @@ Ratune syncs favorites with your server through the Subsonic **star** / **unstar
 - **Offline:** the favorites list is cached at `~/.cache/ratune/favorites.json`; open `F` without a connection to browse the last sync and play tracks already in the audio cache
 - **`[cache].cache_starred = true`:** while online, prefetch favorite **songs** into the offline cache (same `max_size_gb` pool as play-time caching)
 
+### Ratings
+
+Ratune can sync per-user song ratings with your server through the Subsonic **`setRating`** API (1–5 stars, or 0 to clear). **Ratings are off by default**, enable them in config if you want the UI, keybinds, and MPRIS export.
+
+```toml
+[ratings]
+enabled = true
+# star_filled = "★"
+# star_empty = "☆"
+# Optional: change or remove brackets around the rating ("" = none)
+# bracket_open = "["
+# bracket_close = "]"
+```
+
+When enabled, press **Shift+1** … **Shift+5** to rate (most US terminals deliver these as `!` `@` `#` `$` `%`; Shift+0 / `)` clears).
+
+- **Display:** rated items show `[⭑⭑⭑⭒⭒]` via `{rating}` in the queue template (after duration by default). Browse lists append the rating after the title.
+- **Rate:** `Shift+1` … `Shift+5` on the focused song, album, or artist (`rate_song_1` … in `[keybinds]`)
+- **Clear rating:** `Shift+0` / `)` (`rate_song_clear`)
+- **MPRIS (Linux):** current track rating as `xesam:userRating` (0.0–1.0)
+- Requires an online server connection (like favorites)
+
+Unrated tracks show nothing until you rate them.
+
 ### Internet radio
 
 Ratune plays internet radio stations configured on your Subsonic-compatible server — no separate stream proxy; the client connects directly to each station URL.

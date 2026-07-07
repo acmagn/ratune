@@ -650,6 +650,7 @@ mod queue_tests {
             size: None,
             path: None,
             starred: None,
+            user_rating: None,
         }
     }
 

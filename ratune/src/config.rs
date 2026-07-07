@@ -40,6 +40,8 @@ struct FileConfig {
     pub scrobble: ScrobbleSection,
     #[serde(default)]
     pub radio: RadioSection,
+    #[serde(default)]
+    ratings: RatingsSection,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -141,6 +143,14 @@ pub struct KeybindsSection {
     pub toggle_favorite: Option<String>,
     /// Browse: open favorites overlay. Default: Shift+f (`F`)
     pub favorites_overlay: Option<String>,
+    /// Rate focused/playing song 1–5 (Subsonic setRating). Defaults: Shift+1 … Shift+5
+    pub rate_song_1: Option<String>,
+    pub rate_song_2: Option<String>,
+    pub rate_song_3: Option<String>,
+    pub rate_song_4: Option<String>,
+    pub rate_song_5: Option<String>,
+    /// Clear song rating. Default: Shift+0
+    pub rate_song_clear: Option<String>,
 }
 
 // ── [theme] ───────────────────────────────────────────────────────────────────
@@ -1042,6 +1052,37 @@ impl Default for PlayerSection {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct RatingsSection {
+    /// Show ratings in the UI, allow rating keybinds, and export MPRIS UserRating.
+    #[serde(default)]
+    enabled: bool,
+    /// Glyph repeated for each filled star in rating display. Default: ⭑
+    #[serde(default = "default_rating_star_filled")]
+    star_filled: String,
+    /// Glyph repeated for each empty star in rating display. Default: ⭒
+    #[serde(default = "default_rating_star_empty")]
+    star_empty: String,
+    /// Opening bracket around the rating star run. Default: `[` (`""` = none).
+    #[serde(default = "default_rating_bracket_open")]
+    bracket_open: String,
+    /// Closing bracket around the rating star run. Default: `]` (`""` = none).
+    #[serde(default = "default_rating_bracket_close")]
+    bracket_close: String,
+}
+
+impl Default for RatingsSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            star_filled: default_rating_star_filled(),
+            star_empty: default_rating_star_empty(),
+            bracket_open: default_rating_bracket_open(),
+            bracket_close: default_rating_bracket_close(),
+        }
+    }
+}
+
 fn default_volume() -> u8 {
     70
 }
@@ -1054,11 +1095,60 @@ fn default_queue_loop() -> bool {
     true
 }
 
+fn default_rating_star_filled() -> String {
+    ratune_subsonic::DEFAULT_RATING_STAR_FILLED.to_string()
+}
+
+fn default_rating_star_empty() -> String {
+    ratune_subsonic::DEFAULT_RATING_STAR_EMPTY.to_string()
+}
+
+fn default_rating_bracket_open() -> String {
+    ratune_subsonic::DEFAULT_RATING_BRACKET_OPEN.to_string()
+}
+
+fn default_rating_bracket_close() -> String {
+    ratune_subsonic::DEFAULT_RATING_BRACKET_CLOSE.to_string()
+}
+
 fn default_password_keyring() -> String {
     "keyutils".into()
 }
 
 // ── Runtime config ────────────────────────────────────────────────────────────
+
+/// Glyphs used when rendering a 1–5 user rating in the UI.
+#[derive(Debug, Clone)]
+pub struct RatingStarGlyphs {
+    pub filled: String,
+    pub empty: String,
+    pub bracket_open: String,
+    pub bracket_close: String,
+}
+
+impl Default for RatingStarGlyphs {
+    fn default() -> Self {
+        Self {
+            filled: default_rating_star_filled(),
+            empty: default_rating_star_empty(),
+            bracket_open: default_rating_bracket_open(),
+            bracket_close: default_rating_bracket_close(),
+        }
+    }
+}
+
+impl RatingStarGlyphs {
+    #[must_use]
+    pub fn format(&self, rating: Option<u8>) -> String {
+        ratune_subsonic::format_user_rating_with_options(
+            rating,
+            &self.filled,
+            &self.empty,
+            &self.bracket_open,
+            &self.bracket_close,
+        )
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -1075,6 +1165,10 @@ pub struct Config {
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     pub queue_loop: bool,
+    /// When true, show ratings in the UI and allow rating keybinds / MPRIS UserRating (`[ratings].enabled`).
+    pub ratings_enabled: bool,
+    /// Star glyphs for rating display (`[ratings].star_filled` / `star_empty`).
+    pub rating_stars: RatingStarGlyphs,
     /// Internet Radio (picker, Now Playing pane, station management).
     pub radio_enabled: bool,
     /// When false, skip HTTP fetches to station homepages for Now Playing art.
@@ -1506,6 +1600,13 @@ impl Config {
             max_bit_rate: file_cfg.player.max_bit_rate,
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
+            ratings_enabled: file_cfg.ratings.enabled,
+            rating_stars: RatingStarGlyphs {
+                filled: file_cfg.ratings.star_filled,
+                empty: file_cfg.ratings.star_empty,
+                bracket_open: file_cfg.ratings.bracket_open,
+                bracket_close: file_cfg.ratings.bracket_close,
+            },
             radio_enabled,
             radio_fetch_station_icons,
             keybinds: file_cfg.keybinds,
@@ -1646,6 +1747,13 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # mpris = true     # Linux: register on session D-Bus for media keys / playerctl (default: true)
 # queue_loop = true   # wrap to first track after the last queue item (default: true)
 
+[ratings]
+# enabled = false     # show ratings in UI, enable Shift+1…5 keybinds, export MPRIS UserRating
+# star_filled = "⭑"   # glyph per filled star in [⭑⭑⭒⭒⭒] display
+# star_empty = "⭒"    # glyph per empty star (try "★" / "☆" for larger stars)
+# bracket_open = "["  # bracket before stars ("" = none)
+# bracket_close = "]" # bracket after stars ("" = none)
+
 [keybinds]
 # Shift+letter: use "Shift+n" or "N" (same). Helps Ghostty/kitty vs. classic terminals.
 # scroll_up     = "k"
@@ -1691,6 +1799,14 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # home_section_next = "Shift+j"
 # home_section_prev = "Shift+k"
 # home_refresh = "r"
+
+# toggle_favorite = "f"
+# rate_song_1 = "Shift+1"   # rate focused/playing song 1–5 (Subsonic setRating)
+# rate_song_2 = "Shift+2"
+# rate_song_3 = "Shift+3"
+# rate_song_4 = "Shift+4"
+# rate_song_5 = "Shift+5"
+# rate_song_clear = "Shift+0"
 
 [theme]
 # accent        = "#ff8c00"   # highlighted items, active borders, progress fill
@@ -2448,6 +2564,34 @@ cache_enabled = false
     fn parses_radio_enabled() {
         let fc: FileConfig = toml::from_str("[radio]\nenabled = false\n").expect("toml");
         assert_eq!(fc.radio.enabled, Some(false));
+    }
+
+    #[test]
+    fn ratings_defaults_disabled() {
+        let fc: FileConfig = toml::from_str("").expect("toml");
+        assert!(!fc.ratings.enabled);
+        assert_eq!(fc.ratings.star_filled, "⭑");
+        assert_eq!(fc.ratings.bracket_open, "[");
+    }
+
+    #[test]
+    fn parses_ratings_section() {
+        let fc: FileConfig = toml::from_str(
+            r#"
+[ratings]
+enabled = true
+star_filled = "★"
+star_empty = "☆"
+bracket_open = ""
+bracket_close = ""
+"#,
+        )
+        .expect("toml");
+        assert!(fc.ratings.enabled);
+        assert_eq!(fc.ratings.star_filled, "★");
+        assert_eq!(fc.ratings.star_empty, "☆");
+        assert_eq!(fc.ratings.bracket_open, "");
+        assert_eq!(fc.ratings.bracket_close, "");
     }
 
     #[test]

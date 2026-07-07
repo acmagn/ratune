@@ -74,7 +74,17 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                     .map(|(i, _)| {
                         let a = &artists[*i];
                         let star = if a.starred.is_some() { "★ " } else { "" };
-                        let label = format!("{}{}", star, a.name);
+                        let rating_suffix = if app.config.ratings_enabled {
+                            let rating = app.config.rating_stars.format(a.user_rating);
+                            if rating.is_empty() {
+                                String::new()
+                            } else {
+                                format!("  {rating}")
+                            }
+                        } else {
+                            String::new()
+                        };
+                        let label = format!("{}{}{}", star, a.name, rating_suffix);
                         ListItem::new(label).style(Style::default().fg(t.foreground))
                     })
                     .collect()

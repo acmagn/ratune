@@ -131,6 +131,7 @@ fn music_directory_from_library_indexes(music_folder_id: &str, data: &Artists) -
             path: None,
             suffix: None,
             content_type: None,
+            user_rating: None,
         })
         .collect();
     directories.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
@@ -777,6 +778,25 @@ impl SubsonicClient {
         self.set_starred(StarItemType::Song, id, false).await
     }
 
+    /// Set or clear the user rating for a song, album, or artist (`setRating`).
+    ///
+    /// `rating` must be 1–5 to set, or 0 to remove the rating. The server resolves
+    /// entity type from `id` (same as the star API).
+    pub async fn set_rating(&self, id: &str, rating: u8) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("id", id.to_string()));
+        params.push(("rating", rating.to_string()));
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("setRating"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
     /// Mark a song as played (scrobble).
     pub async fn scrobble(&self, id: &str) -> Result<()> {
         let mut params = self.auth_params();
@@ -1046,6 +1066,7 @@ mod tests {
             size: None,
             path: None,
             starred: None,
+            user_rating: None,
         }
     }
 

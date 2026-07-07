@@ -90,6 +90,27 @@ mpris = true
 queue_loop = true
 
 # -----------------------------------------------------------------------------
+# [ratings] — per-user song ratings (Subsonic setRating)
+# -----------------------------------------------------------------------------
+#
+# This section turns on ratings everywhere:
+# browse lists, Now Playing queue/bar, Shift+1…5 keybinds, and MPRIS UserRating.
+#
+# enabled      — Master switch. Default: false.
+# star_filled  — Glyph repeated for each filled star. Default: ⭑ (BLACK SMALL STAR).
+# star_empty   — Glyph repeated for each empty star. Default: ⭒ (WHITE SMALL STAR).
+#                Example for classic larger stars: star_filled = "★", star_empty = "☆".
+# bracket_open — Bracket before the star run. Default: `[` (`""` = none).
+# bracket_close — Bracket after the star run. Default: `]` (`""` = none).
+
+[ratings]
+# enabled = false
+# star_filled = "⭑"
+# star_empty = "⭒"
+# bracket_open = "["
+# bracket_close = "]"
+
+# -----------------------------------------------------------------------------
 # [keybinds] — optional overrides
 # -----------------------------------------------------------------------------
 #
@@ -104,7 +125,7 @@ queue_loop = true
 # column_right       = "l"
 # play_pause         = "p"
 # next_track          = "n"
-# prev_track          = "Shift+n"     # or "N" — same meaning
+# prev_track          = "Shift+n"     # or "N", same meaning
 # seek_forward        = "Right"
 # seek_backward       = "Left"
 # add_track           = "a"           # browser + playlist overlay (tracks pane): append to queue
@@ -145,6 +166,12 @@ queue_loop = true
 # home_refresh        = "r"          # home: refresh / re-roll where applicable
 # toggle_folder_browse = "Ctrl+b"   # browse: toggle folder view (needs [ui.browsetab] folder_navigation); "" disables
 # toggle_favorite     = "f"         # toggle favorite on focused song, album, or artist (Subsonic star)
+# rate_song_1         = "Shift+1"   # rate focused/playing song 1–5 stars (Subsonic setRating)
+# rate_song_2         = "Shift+2"
+# rate_song_3         = "Shift+3"
+# rate_song_4         = "Shift+4"
+# rate_song_5         = "Shift+5"
+# rate_song_clear     = "Shift+0"   # clear song rating
 # favorites_overlay   = "Shift+f"   # favorites panel on Browse tab (`F`)
 
 # -----------------------------------------------------------------------------
@@ -162,7 +189,7 @@ queue_loop = true
 # Each colour value may be:
 #   • Hex: `#rrggbb` or `rrggbb`
 #   • Terminal index (256-colour): `idx:0` … `idx:255` — also `indexed:`, `ansi:`, `color:`, or `i:`
-#     (e.g. list selection uses accent as background — `accent = "idx:2"` maps “primary” to ANSI green)
+#     (e.g. list selection uses accent as background: `accent = "idx:2"` maps “primary” to ANSI green)
 #   • `reset` / `inherit` / `default` / `unset` / `none` / `transparent` — do not paint a
 #     background (keeps terminal transparency; unlike `idx:0`, which paints ANSI black).
 #
@@ -226,7 +253,8 @@ tab_bar_position = "bottom"
 # lines — ncmpcpp-inspired `%` / `$` strings (one per strip row). Examples:
 #   %t title  %a artist  %b album  %y year  %n track#  %l track length
 #   %e elapsed  %E / %T total  %g genre  %f file  %D parent dir  %q quality
-#   %P queue total duration  %i %j queue index & length  %v volume  %K bitrate  %% literal %
+#   %P queue total duration  %i %j queue index & length  %v volume  %K bitrate
+#   %R user rating ([⭑⭑⭒⭒⭒], needs [ratings].enabled)  %% literal %
 #   $1–$8 colors, $9 reset, $b$/b bold, $u$/u underline, $r$/r reverse.
 
 [ui.row_now_playing]
@@ -296,9 +324,12 @@ mode = "artists"
 # Lyrics — `[ui.nptab.lyrics_pane]` (enabled / visible / location), same idea as visualizer_pane.
 #   Lyrics and visualizer can both be visible; set each pane's `location` to split them (e.g. left/right).
 # queue_template — Per-row queue format; prefer `[ui.nptab.queue].queue_template`.
-#   Placeholders: {n} track # (` 3. `, plus `★ ` when favorited), {title},
-#   {album}, {duration}, {suffix}, {favorite} (legacy prefix; prefer {n}).
-# show_fzf_hint  — Empty-queue hint mentioning library picker when enabled.
+#   Placeholders: {n} track # (` 3. `), {title} (prepends `★ ` when favorited, inside
+#   `{title:<N}` width so columns stay aligned), {artist}, {album}, {duration},
+#   {rating} ([⭑⭑⭒⭒⭒] when rated), {suffix}, {favorite} (standalone star prefix).
+#   Spacing is reflected in output e.g. add space before {rating}:
+#   `{n}{title:<40}  {artist:<25}  {duration:>5}    {rating}`
+# show_fzf_hint — Empty-queue hint mentioning library picker when enabled.
 
 [ui.nptab]
 queue_template = ""
@@ -327,7 +358,7 @@ left_width_percent = 50
 
 [ui.nptab.queue]
 position = "right"
-# queue_template = "{n}{title:<40}  {artist:<25}  {duration:>5}"
+# queue_template = "{n}{title:<40}  {artist:<25}  {duration:>5}    {rating}"
 
 # [ui.nptab.lyrics_pane]
 # enabled — If false, lyrics cannot be opened. Default: true.

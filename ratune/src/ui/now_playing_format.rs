@@ -21,6 +21,9 @@ pub struct NowPlayingContext<'a> {
     pub queue_total_duration_secs: Option<u64>,
     /// 1-based index of the current track in the queue, and total track count.
     pub queue_position: Option<(usize, usize)>,
+    /// When false, `%R` and other rating placeholders render empty.
+    pub ratings_enabled: bool,
+    pub rating_stars: &'a crate::config::RatingStarGlyphs,
 }
 
 fn palette(theme: &Theme, accent: Color) -> [Color; 8] {
@@ -121,6 +124,13 @@ fn placeholder_value(key: char, ctx: &NowPlayingContext<'_>) -> String {
             .and_then(|x| x.bit_rate)
             .map(|br| format!("{br}"))
             .unwrap_or_default(),
+        'R' => {
+            if !ctx.ratings_enabled {
+                String::new()
+            } else {
+                ctx.rating_stars.format(s.and_then(|x| x.user_rating))
+            }
+        }
         _ => String::new(),
     }
 }
@@ -255,7 +265,9 @@ mod tests {
             size: None,
             path: None,
             starred: None,
+            user_rating: None,
         };
+        let stars = crate::config::RatingStarGlyphs::default();
         let ctx = NowPlayingContext {
             song: Some(&song),
             elapsed: Duration::ZERO,
@@ -264,6 +276,8 @@ mod tests {
             volume_percent: 70,
             queue_total_duration_secs: None,
             queue_position: None,
+            ratings_enabled: false,
+            rating_stars: &stars,
         };
         let line = format_now_playing_line("%t", &ctx, &theme, theme.accent);
         let s: String = line.iter().map(|s| s.content.as_ref()).collect();
@@ -292,7 +306,9 @@ mod tests {
             size: None,
             path: None,
             starred: None,
+            user_rating: None,
         };
+        let stars = crate::config::RatingStarGlyphs::default();
         let ctx = NowPlayingContext {
             song: Some(&song),
             elapsed: Duration::ZERO,
@@ -301,6 +317,8 @@ mod tests {
             volume_percent: 42,
             queue_total_duration_secs: Some(125),
             queue_position: Some((2, 5)),
+            ratings_enabled: false,
+            rating_stars: &stars,
         };
         let line = format_now_playing_line("%K vol %v %P %i/%j", &ctx, &theme, theme.accent);
         let s: String = line.iter().map(|s| s.content.as_ref()).collect();
@@ -332,7 +350,9 @@ mod tests {
             size: None,
             path: None,
             starred: None,
+            user_rating: None,
         };
+        let stars = crate::config::RatingStarGlyphs::default();
         let ctx = NowPlayingContext {
             song: Some(&song),
             elapsed: Duration::ZERO,
@@ -341,6 +361,8 @@ mod tests {
             volume_percent: 0,
             queue_total_duration_secs: None,
             queue_position: None,
+            ratings_enabled: false,
+            rating_stars: &stars,
         };
         let line = format_now_playing_line("%K", &ctx, &theme, theme.accent);
         let s: String = line.iter().map(|s| s.content.as_ref()).collect();

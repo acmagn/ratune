@@ -792,6 +792,7 @@ async fn run_loop(
                                             app.active_tab,
                                             &app.keybinds,
                                             &mut app.pending_gg,
+                                            app.config.ratings_enabled,
                                         );
                                         app.dispatch(action);
                                     } else if is_quit_in_normal {
@@ -802,6 +803,7 @@ async fn run_loop(
                                             key.modifiers,
                                             &app.favorites_overlay.focus,
                                             &app.keybinds,
+                                            app.config.ratings_enabled,
                                         );
                                         app.dispatch(action);
                                     }
@@ -835,6 +837,7 @@ async fn run_loop(
                                             app.active_tab,
                                             &app.keybinds,
                                             &mut app.pending_gg,
+                                            app.config.ratings_enabled,
                                         );
                                         app.dispatch(action);
                                     } else if is_quit_in_normal {
@@ -847,6 +850,7 @@ async fn run_loop(
                                             &app.playlist_overlay.focus,
                                             &app.playlist_overlay.input_mode,
                                             &app.keybinds,
+                                            app.config.ratings_enabled,
                                         );
                                         app.dispatch(action);
                                     }
@@ -902,6 +906,7 @@ async fn run_loop(
                                             app.active_tab,
                                             &app.keybinds,
                                             &mut app.pending_gg,
+                                            app.config.ratings_enabled,
                                         )
                                     };
                                     match action {
@@ -1310,7 +1315,11 @@ fn map_favorites_key(
     modifiers: KeyModifiers,
     _focus: &FavoritesFocus,
     kb: &Keybinds,
+    ratings_enabled: bool,
 ) -> Action {
+    if let Some(action) = map_rate_key(code, modifiers, kb, ratings_enabled) {
+        return action;
+    }
     let shift = modifiers.intersects(KeyModifiers::SHIFT);
     match code {
         KeyCode::Esc => Action::ToggleFavoritesOverlay,
@@ -1395,6 +1404,7 @@ fn map_playlist_key(
     focus: &PlaylistFocus,
     input_mode: &PlaylistInputMode,
     kb: &Keybinds,
+    ratings_enabled: bool,
 ) -> Action {
     match input_mode {
         // ── Text-input modes: feed characters into the buffer ──────────────
@@ -1473,7 +1483,7 @@ fn map_playlist_key(
                 {
                     Action::PlaylistAppendAll
                 }
-                _ => Action::None,
+                _ => map_rate_key(code, modifiers, kb, ratings_enabled).unwrap_or(Action::None),
             }
         }
     }
@@ -1490,12 +1500,43 @@ fn map_picker_key(code: KeyCode, _modifiers: KeyModifiers) -> Action {
     }
 }
 
+fn map_rate_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    kb: &Keybinds,
+    ratings_enabled: bool,
+) -> Option<Action> {
+    if !ratings_enabled {
+        return None;
+    }
+    if kb.rate_song_1.matches(code, modifiers) {
+        return Some(Action::RateSong(1));
+    }
+    if kb.rate_song_2.matches(code, modifiers) {
+        return Some(Action::RateSong(2));
+    }
+    if kb.rate_song_3.matches(code, modifiers) {
+        return Some(Action::RateSong(3));
+    }
+    if kb.rate_song_4.matches(code, modifiers) {
+        return Some(Action::RateSong(4));
+    }
+    if kb.rate_song_5.matches(code, modifiers) {
+        return Some(Action::RateSong(5));
+    }
+    if kb.rate_song_clear.matches(code, modifiers) {
+        return Some(Action::RateSong(0));
+    }
+    None
+}
+
 fn map_key(
     code: KeyCode,
     modifiers: KeyModifiers,
     active_tab: Tab,
     kb: &Keybinds,
     pending_gg: &mut bool,
+    ratings_enabled: bool,
 ) -> Action {
     // Second `g` after a lone `g`: vim-style `gg` → top.
     if *pending_gg {
@@ -1587,6 +1628,9 @@ fn map_key(
     }
     if kb.toggle_favorite.matches(code, modifiers) {
         return Action::ToggleFavorite;
+    }
+    if let Some(action) = map_rate_key(code, modifiers, kb, ratings_enabled) {
+        return action;
     }
     if kb.toggle_dynamic_theme.matches(code, modifiers) {
         return Action::ToggleDynamicTheme;
@@ -2144,7 +2188,11 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
     }
 
     if app.help_visible {
-        let popup = ui::popup::help_popup_rect(terminal_size, app.config.radio_enabled);
+        let popup = ui::popup::help_popup_rect(
+            terminal_size,
+            app.config.radio_enabled,
+            app.config.ratings_enabled,
+        );
         if rect_contains(popup, x, y) {
             mouse_click::clear_pending_click(app);
             return;

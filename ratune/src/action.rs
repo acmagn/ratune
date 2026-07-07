@@ -76,6 +76,8 @@ pub enum Action {
     ToggleHelp,
     /// Toggle favorite (star) status for the focused or playing track.
     ToggleFavorite,
+    /// Set user rating (1–5) on the focused or playing song; 0 clears.
+    RateSong(u8),
     /// Toggle the favorites (starred) browser overlay.
     ToggleFavoritesOverlay,
     /// Favorites overlay: scroll up.
