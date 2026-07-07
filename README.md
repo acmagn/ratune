@@ -264,12 +264,11 @@ Ratune syncs favorites with your server through the Subsonic **star** / **unstar
 
 ### Ratings
 
-Ratune can sync per-user song ratings with your server through the Subsonic **`setRating`** API (1–5 stars, or 0 to clear). **Ratings are off by default** — enable them in config if you want the UI, keybinds, and MPRIS export.
+Ratune can sync per-user song ratings with your server through the Subsonic **`setRating`** API (1–5 stars, or 0 to clear). **Ratings are off by default**, enable them in config if you want the UI, keybinds, and MPRIS export.
 
 ```toml
 [ratings]
 enabled = true
-# Optional: use classic stars instead of the default small glyphs
 # star_filled = "★"
 # star_empty = "☆"
 # Optional: change or remove brackets around the rating ("" = none)
@@ -277,9 +276,9 @@ enabled = true
 # bracket_close = "]"
 ```
 
-When enabled, press **Shift+1** … **Shift+5** to rate (most US terminals deliver these as `!` `@` `#` `$` `%`; Shift+0 / `)` clears). You must be on a library song (Now Playing queue, Browse tracks, etc.) — not radio.
+When enabled, press **Shift+1** … **Shift+5** to rate (most US terminals deliver these as `!` `@` `#` `$` `%`; Shift+0 / `)` clears).
 
-- **Display:** rated items show `[⭑⭑⭑⭒⭒]` via `{rating}` in the queue template (after duration by default). Browse lists append the rating after the title. Favorites show **★** before the title in the queue (inside the title column width) and in browse lists.
+- **Display:** rated items show `[⭑⭑⭑⭒⭒]` via `{rating}` in the queue template (after duration by default). Browse lists append the rating after the title.
 - **Rate:** `Shift+1` … `Shift+5` on the focused song, album, or artist (`rate_song_1` … in `[keybinds]`)
 - **Clear rating:** `Shift+0` / `)` (`rate_song_clear`)
 - **MPRIS (Linux):** current track rating as `xesam:userRating` (0.0–1.0)
