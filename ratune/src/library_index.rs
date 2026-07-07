@@ -345,6 +345,7 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
                 .flat_map(|a| a.songs.first())
                 .find_map(|s| s.cover_art.clone()),
             starred: None,
+            user_rating: None,
             album: Vec::new(),
         })
         .collect();
@@ -380,6 +381,7 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
                     year,
                     genre,
                     starred: None,
+                    user_rating: None,
                     song: Vec::new(),
                 }
             })
@@ -422,6 +424,7 @@ mod tests {
                 size: None,
                 path: None,
                 starred: None,
+                user_rating: None,
             }
         }
 
@@ -513,6 +516,7 @@ mod tests {
             size: None,
             path: None,
             starred: None,
+            user_rating: None,
         };
         let cols = FzfColumns {
             title: 0,
@@ -544,6 +548,7 @@ mod tests {
             size: None,
             path: None,
             starred: None,
+            user_rating: None,
         };
         let line = fzf_input_lines(std::slice::from_ref(&s), FzfColumns::default());
         assert_eq!(

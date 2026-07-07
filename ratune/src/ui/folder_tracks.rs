@@ -82,6 +82,16 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         Some(LoadingState::Loaded(listing)) => {
             let make_track_label = |s: &ratune_subsonic::Song| {
                 let star = if s.starred.is_some() { "★ " } else { "" };
+                let rating_suffix = if app.config.ratings_enabled {
+                    let rating = app.config.rating_stars.format(s.user_rating);
+                    if rating.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {rating}")
+                    }
+                } else {
+                    String::new()
+                };
                 let dur = s
                     .duration
                     .map(|d| {
@@ -90,7 +100,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                         format!("  {m}:{sec:02}")
                     })
                     .unwrap_or_default();
-                format!("{}{}{}", star, s.title, dur)
+                format!("{}{}{}{}", star, s.title, dur, rating_suffix)
             };
 
             let rows =

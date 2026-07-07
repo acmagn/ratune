@@ -7,7 +7,7 @@ use crate::app::App;
 use crate::text_width;
 use crate::theme::style_with_bg;
 
-const DEFAULT_QUEUE_TEMPLATE: &str = "{n}{title:<40}  {artist:<25}  {duration:>5}";
+const DEFAULT_QUEUE_TEMPLATE: &str = "{n}{title:<40}  {artist:<25}  {duration:>5}  {rating}";
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
     let visible = area.height.saturating_sub(2) as usize;
@@ -77,7 +77,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         .enumerate()
         .map(|(offset, s)| {
             let idx = start + offset;
-            let label = format_queue_line(template, s);
+            let label = format_queue_line(
+                template,
+                s,
+                app.config.ratings_enabled,
+                &app.config.rating_stars,
+            );
 
             let style = if idx == app.queue.cursor {
                 Style::default()
@@ -106,11 +111,21 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn format_queue_line(template: &str, s: &ratune_subsonic::Song) -> String {
+fn format_queue_line(
+    template: &str,
+    s: &ratune_subsonic::Song,
+    ratings_enabled: bool,
+    stars: &crate::config::RatingStarGlyphs,
+) -> String {
     let num = s.track.map(|n| format!("{n:>2}. ")).unwrap_or_default();
-    let star = if s.starred.is_some() { "★ " } else { "" };
-    let n = format!("{num}{star}");
-    let title = s.title.as_str();
+    let title = {
+        let mut t = String::new();
+        if s.starred.is_some() {
+            t.push_str("★ ");
+        }
+        t.push_str(&s.title);
+        t
+    };
     let artist = s.artist.as_deref().unwrap_or("");
     let album = s.album.as_deref().unwrap_or("");
     let duration = s
@@ -119,13 +134,18 @@ fn format_queue_line(template: &str, s: &ratune_subsonic::Song) -> String {
         .unwrap_or_default();
 
     render_template(template, |name| match name {
-        "n" => Some(n.clone()),
-        "title" => Some(title.to_string()),
+        "n" => Some(num.clone()),
+        "title" => Some(title.clone()),
         "artist" => Some(artist.to_string()),
         "album" => Some(album.to_string()),
         "duration" => Some(duration.clone()),
         "favorite" => Some(if s.starred.is_some() {
             "★ ".to_string()
+        } else {
+            String::new()
+        }),
+        "rating" => Some(if ratings_enabled {
+            stars.format(s.user_rating)
         } else {
             String::new()
         }),

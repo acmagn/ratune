@@ -12,7 +12,10 @@ use crate::theme::style_with_bg;
 /// Width reserved for the key column (padded with spaces to align descriptions).
 const KEY_COL_W: usize = 12;
 
-fn sections(radio_enabled: bool) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+fn sections(
+    radio_enabled: bool,
+    ratings_enabled: bool,
+) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     let mut playback = vec![
         ("p / Space", "Play / pause"),
         ("n / N", "Next / previous track"),
@@ -21,6 +24,12 @@ fn sections(radio_enabled: bool) -> Vec<(&'static str, Vec<(&'static str, &'stat
         ("x / Z", "Shuffle / unshuffle"),
         ("Q", "Toggle queue loop"),
     ];
+    if ratings_enabled {
+        playback.insert(
+            3,
+            ("Shift+1 … Shift+5", "Rate song 1–5 stars (Shift+0 clears)"),
+        );
+    }
     if radio_enabled {
         playback.push(("Shift+R", "Open / close internet radio picker"));
     }
@@ -123,20 +132,24 @@ fn sections(radio_enabled: bool) -> Vec<(&'static str, Vec<(&'static str, &'stat
     out
 }
 
-fn playlist_sections() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+fn playlist_sections(
+    ratings_enabled: bool,
+) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
+    let mut favorites = vec![
+        ("F", "Open / close favorites panel (Browse)"),
+        ("j / k", "Scroll category / item list"),
+        ("h / l", "Switch between lists"),
+        ("Enter / Ctrl+r", "Replace queue and play"),
+        ("Shift+A", "Append to queue"),
+        ("f", "Toggle favorite"),
+    ];
+    if ratings_enabled {
+        favorites.push(("Shift+1 … Shift+5", "Rate song (Shift+0 clears)"));
+    }
+    favorites.push(("Escape / q", "Close panel"));
+
     vec![
-        (
-            "Favorites",
-            vec![
-                ("F", "Open / close favorites panel (Browse)"),
-                ("j / k", "Scroll category / item list"),
-                ("h / l", "Switch between lists"),
-                ("Enter / Ctrl+r", "Replace queue and play"),
-                ("Shift+A", "Append to queue"),
-                ("f", "Toggle favorite"),
-                ("Escape / q", "Close panel"),
-            ],
-        ),
+        ("Favorites", favorites),
         (
             "Playlists",
             vec![
@@ -212,14 +225,24 @@ fn pack_blocks_into_two_columns(
 }
 
 /// Popup bounds for the keybind help overlay (matches `render_help` sizing).
-pub fn help_popup_rect(area: Rect, radio_enabled: bool) -> Rect {
+pub fn help_popup_rect(area: Rect, radio_enabled: bool, ratings_enabled: bool) -> Rect {
     use ratatui::style::Color;
 
     // Colors are only used for line content; lengths depend on section text alone.
     let accent = Color::White;
-    let mut blocks = build_blocks(sections(radio_enabled), accent, accent, accent);
+    let mut blocks = build_blocks(
+        sections(radio_enabled, ratings_enabled),
+        accent,
+        accent,
+        accent,
+    );
     blocks.push(vec![Line::from("")]);
-    blocks.extend(build_blocks(playlist_sections(), accent, accent, accent));
+    blocks.extend(build_blocks(
+        playlist_sections(ratings_enabled),
+        accent,
+        accent,
+        accent,
+    ));
     let (left_all, right_all) = pack_blocks_into_two_columns(blocks);
 
     let required_inner_h = left_all.len().max(right_all.len()).max(1) as u16;
@@ -249,12 +272,22 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
     // Keep each category within one column where possible, while aiming for
     // roughly equal column heights.
 
-    let mut blocks = build_blocks(sections(app.config.radio_enabled), accent, fg, dim);
+    let mut blocks = build_blocks(
+        sections(app.config.radio_enabled, app.config.ratings_enabled),
+        accent,
+        fg,
+        dim,
+    );
     blocks.push(vec![Line::from("")]);
-    blocks.extend(build_blocks(playlist_sections(), accent, fg, dim));
+    blocks.extend(build_blocks(
+        playlist_sections(app.config.ratings_enabled),
+        accent,
+        fg,
+        dim,
+    ));
     let (left_all, right_all) = pack_blocks_into_two_columns(blocks);
 
-    let popup_area = help_popup_rect(area, app.config.radio_enabled);
+    let popup_area = help_popup_rect(area, app.config.radio_enabled, app.config.ratings_enabled);
 
     // ── Render ────────────────────────────────────────────────────────────────
 

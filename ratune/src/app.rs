@@ -407,6 +407,13 @@ pub enum LibraryUpdate {
         was_starred: bool,
         error: Option<String>,
     },
+    /// Song, album, or artist rating update completed or failed (`setRating`).
+    RatingSet {
+        id: String,
+        kind: FavoriteKind,
+        rating: u8,
+        error: Option<String>,
+    },
     /// Starred tracks to prefetch into the offline cache (`song_id`, `album_id`).
     PrefetchStarredCache(Vec<(String, String)>),
     /// Starred library from `getStarred2` for the favorites overlay.
@@ -435,6 +442,11 @@ fn favorite_kind_to_star_item_type(kind: FavoriteKind) -> StarItemType {
         FavoriteKind::Album => StarItemType::Album,
         FavoriteKind::Artist => StarItemType::Artist,
     }
+}
+
+struct RatingTarget {
+    id: String,
+    kind: FavoriteKind,
 }
 
 struct FavoriteTarget {
@@ -3059,6 +3071,27 @@ impl App {
                     self.fetch_starred();
                 }
             }
+            LibraryUpdate::RatingSet {
+                id,
+                kind,
+                rating,
+                error,
+            } => {
+                if let Some(e) = error {
+                    self.flash_status_secs(format!("Rating failed: {e}"), 5);
+                } else {
+                    let stored = if rating == 0 { None } else { Some(rating) };
+                    self.set_item_rating(kind, &id, stored);
+                    self.flash_status(if rating == 0 {
+                        "Rating cleared"
+                    } else {
+                        "Rating updated"
+                    });
+                    if kind == FavoriteKind::Song {
+                        self.mpris_emit_props();
+                    }
+                }
+            }
             LibraryUpdate::PrefetchStarredCache(tracks) => {
                 let uncached: Vec<_> = tracks
                     .into_iter()
@@ -3681,7 +3714,12 @@ impl App {
 
     #[must_use]
     pub fn is_radio_song(song: &ratune_subsonic::Song) -> bool {
-        song.id.starts_with(RADIO_SONG_ID_PREFIX)
+        Self::is_radio_song_id(&song.id)
+    }
+
+    #[must_use]
+    fn is_radio_song_id(song_id: &str) -> bool {
+        song_id.starts_with(RADIO_SONG_ID_PREFIX)
     }
 
     fn song_from_radio_station(station: &InternetRadioStation) -> ratune_subsonic::Song {
@@ -3704,6 +3742,7 @@ impl App {
             size: None,
             path: None,
             starred: None,
+            user_rating: None,
         }
     }
 
@@ -4370,6 +4409,97 @@ impl App {
             })
     }
 
+    /// Item targeted by rating keys (1–5 / clear): song, album, or artist.
+    fn rating_target(&self) -> Option<RatingTarget> {
+        if self.favorites_overlay.visible {
+            let idx = self.favorites_overlay.selected_item_index;
+            return match self.favorites_overlay.category {
+                FavoritesCategory::Songs => {
+                    self.favorites_overlay.songs.get(idx).map(|s| RatingTarget {
+                        id: s.id.clone(),
+                        kind: FavoriteKind::Song,
+                    })
+                }
+                FavoritesCategory::Albums => {
+                    self.favorites_overlay
+                        .albums
+                        .get(idx)
+                        .map(|a| RatingTarget {
+                            id: a.id.clone(),
+                            kind: FavoriteKind::Album,
+                        })
+                }
+                FavoritesCategory::Artists => {
+                    self.favorites_overlay
+                        .artists
+                        .get(idx)
+                        .map(|a| RatingTarget {
+                            id: a.id.clone(),
+                            kind: FavoriteKind::Artist,
+                        })
+                }
+            };
+        }
+        if self.active_tab == Tab::Browser && !self.browse_files() {
+            match self.browser_focus {
+                BrowserColumn::Artists => {
+                    return self.library.current_artist().map(|a| RatingTarget {
+                        id: a.id.clone(),
+                        kind: FavoriteKind::Artist,
+                    });
+                }
+                BrowserColumn::Albums => {
+                    return self.library.current_album().map(|a| RatingTarget {
+                        id: a.id.clone(),
+                        kind: FavoriteKind::Album,
+                    });
+                }
+                BrowserColumn::Tracks => {}
+            }
+            if let Some(song) = self.library.current_track() {
+                return Some(RatingTarget {
+                    id: song.id.clone(),
+                    kind: FavoriteKind::Song,
+                });
+            }
+            return None;
+        }
+        if self.active_tab == Tab::Browser && self.browse_files() {
+            if let Some(song) = self
+                .folders
+                .current_preview_track(self.browser_column_filter(BrowserColumn::Tracks))
+            {
+                return Some(RatingTarget {
+                    id: song.id.clone(),
+                    kind: FavoriteKind::Song,
+                });
+            }
+            return None;
+        }
+        if self.active_tab == Tab::NowPlaying {
+            if let Some(song) = self.queue.songs.get(self.queue.cursor) {
+                return Some(RatingTarget {
+                    id: song.id.clone(),
+                    kind: FavoriteKind::Song,
+                });
+            }
+            if let Some(song) = self.playback.current_song.as_ref() {
+                return Some(RatingTarget {
+                    id: song.id.clone(),
+                    kind: FavoriteKind::Song,
+                });
+            }
+            return None;
+        }
+        self.playback
+            .current_song
+            .as_ref()
+            .map(|song| RatingTarget {
+                id: song.id.clone(),
+                kind: FavoriteKind::Song,
+            })
+    }
+
     fn set_item_starred(&mut self, kind: FavoriteKind, item_id: &str, starred: Option<String>) {
         match kind {
             FavoriteKind::Song => self.set_song_starred(item_id, starred),
@@ -4464,6 +4594,93 @@ impl App {
             let max = self.favorites_overlay.item_count().saturating_sub(1);
             self.favorites_overlay.selected_item_index =
                 self.favorites_overlay.selected_item_index.min(max);
+        }
+    }
+
+    fn set_item_rating(&mut self, kind: FavoriteKind, item_id: &str, rating: Option<u8>) {
+        match kind {
+            FavoriteKind::Song => self.set_song_rating(item_id, rating),
+            FavoriteKind::Album => {
+                for state in self.library.albums.values_mut() {
+                    if let LoadingState::Loaded(albums) = state {
+                        for a in albums.iter_mut().filter(|a| a.id == item_id) {
+                            a.user_rating = rating;
+                        }
+                    }
+                }
+                for a in self
+                    .favorites_overlay
+                    .albums
+                    .iter_mut()
+                    .filter(|a| a.id == item_id)
+                {
+                    a.user_rating = rating;
+                }
+            }
+            FavoriteKind::Artist => {
+                if let LoadingState::Loaded(artists) = &mut self.library.artists {
+                    for a in artists.iter_mut().filter(|a| a.id == item_id) {
+                        a.user_rating = rating;
+                    }
+                }
+                for a in self
+                    .favorites_overlay
+                    .artists
+                    .iter_mut()
+                    .filter(|a| a.id == item_id)
+                {
+                    a.user_rating = rating;
+                }
+            }
+        }
+    }
+
+    /// Update `user_rating` everywhere a song appears in local state.
+    fn set_song_rating(&mut self, song_id: &str, rating: Option<u8>) {
+        for state in self.library.tracks.values_mut() {
+            if let LoadingState::Loaded(songs) = state {
+                for s in songs.iter_mut().filter(|s| s.id == song_id) {
+                    s.user_rating = rating;
+                }
+            }
+        }
+        for s in self.queue.songs.iter_mut().filter(|s| s.id == song_id) {
+            s.user_rating = rating;
+        }
+        if let Some(s) = self.playback.current_song.as_mut() {
+            if s.id == song_id {
+                s.user_rating = rating;
+            }
+        }
+        for state in self.folders.listings.values_mut() {
+            if let LoadingState::Loaded(li) = state {
+                for s in li.tracks.iter_mut().filter(|s| s.id == song_id) {
+                    s.user_rating = rating;
+                }
+            }
+        }
+        if let LoadingState::Loaded(tracks) = &mut self.playlist_overlay.tracks {
+            for s in tracks.iter_mut().filter(|s| s.id == song_id) {
+                s.user_rating = rating;
+            }
+        }
+        if let Some(s) = self.library_index_by_id.get_mut(song_id) {
+            s.user_rating = rating;
+        }
+        for s in self
+            .library_index_tracks
+            .iter_mut()
+            .filter(|s| s.id == song_id)
+        {
+            s.user_rating = rating;
+        }
+        for s in self
+            .favorites_overlay
+            .songs
+            .iter_mut()
+            .filter(|s| s.id == song_id)
+        {
+            s.user_rating = rating;
         }
     }
 
@@ -4597,6 +4814,26 @@ impl App {
                     id,
                     kind,
                     was_starred,
+                    error,
+                })
+                .await;
+        });
+    }
+
+    fn spawn_set_rating(&self, id: String, kind: FavoriteKind, rating: u8) {
+        if !self.remote_available() {
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let result = client.set_rating(&id, rating).await;
+            let error = result.err().map(|e| e.to_string());
+            let _ = tx
+                .send(LibraryUpdate::RatingSet {
+                    id,
+                    kind,
+                    rating,
                     error,
                 })
                 .await;
@@ -4776,6 +5013,34 @@ impl App {
                 } else if let Some(target) = self.favorite_target() {
                     self.spawn_toggle_star(target.id.clone(), target.kind, target.was_starred);
                     self.flash_status("Updating favorite…");
+                } else {
+                    self.flash_status("No item selected");
+                }
+            }
+            Action::RateSong(rating) => {
+                if rating > 5 {
+                    return;
+                }
+                if !self.config.ratings_enabled {
+                    self.flash_status_secs("Ratings disabled — set [ratings].enabled = true", 5);
+                } else if !self.remote_available() {
+                    self.flash_status_secs("Server offline — cannot change rating", 4);
+                } else if let Some(target) = self.rating_target() {
+                    if target.kind == FavoriteKind::Song && Self::is_radio_song_id(&target.id) {
+                        self.flash_status("Ratings are not available for radio");
+                    } else {
+                        let stored = if rating == 0 { None } else { Some(rating) };
+                        self.set_item_rating(target.kind, &target.id, stored);
+                        if target.kind == FavoriteKind::Song {
+                            self.mpris_emit_props();
+                        }
+                        self.spawn_set_rating(target.id.clone(), target.kind, rating);
+                        self.flash_status(if rating == 0 {
+                            "Clearing rating…".to_string()
+                        } else {
+                            format!("Rated {rating} star(s)")
+                        });
+                    }
                 } else {
                     self.flash_status("No item selected");
                 }
@@ -6006,6 +6271,7 @@ impl App {
                         bit_rate: None,
                         size: None,
                         starred: None,
+                        user_rating: None,
                     };
                     let was_empty = self.queue.songs.is_empty();
                     self.queue.push(song);
@@ -6108,6 +6374,7 @@ impl App {
             bit_rate: None,
             size: None,
             starred: None,
+            user_rating: None,
         };
         let was_empty = self.queue.songs.is_empty();
         self.queue.push(song);

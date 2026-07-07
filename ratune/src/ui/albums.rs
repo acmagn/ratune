@@ -59,9 +59,19 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         Some(LoadingState::Loaded(albums)) => {
             let make_label = |a: &Album| {
                 let star = if a.starred.is_some() { "★ " } else { "" };
+                let rating_suffix = if app.config.ratings_enabled {
+                    let rating = app.config.rating_stars.format(a.user_rating);
+                    if rating.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {rating}")
+                    }
+                } else {
+                    String::new()
+                };
                 match a.year {
-                    Some(y) => format!("{}{} ({})", star, a.name, y),
-                    None => format!("{}{}", star, a.name),
+                    Some(y) => format!("{}{} ({}){}", star, a.name, y, rating_suffix),
+                    None => format!("{}{}{}", star, a.name, rating_suffix),
                 }
             };
 

@@ -27,6 +27,9 @@ impl KeySpec {
     ///
     /// Shift+letter chords are stored as lowercase `char` + [`SHIFT`]. Many terminals
     /// send an uppercase letter plus SHIFT instead; those are normalized here.
+    ///
+    /// Shift+digit defaults bind the shifted symbol (`!` for Shift+1 on US layouts) because
+    /// most terminals never deliver `Char('1')` + SHIFT.
     pub fn matches(&self, code: KeyCode, mods: KeyModifiers) -> bool {
         if self.code == KeyCode::BackTab {
             return code == KeyCode::BackTab;
@@ -40,6 +43,17 @@ impl KeySpec {
                 && kc.to_ascii_lowercase() == sc
             {
                 return true;
+            }
+            // Shift+digit configured as `Shift+1`: accept digit+SHIFT or US shifted symbol.
+            if self.modifiers == KeyModifiers::SHIFT && sc.is_ascii_digit() {
+                if kc == sc && mods.contains(KeyModifiers::SHIFT) {
+                    return true;
+                }
+                if let Some(ch) = shift_digit_symbol(sc) {
+                    if kc == ch && !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+                        return true;
+                    }
+                }
             }
         }
         let (code, mods) = match code {
@@ -66,6 +80,25 @@ impl KeySpec {
         }
         mods.contains(self.modifiers)
     }
+}
+
+/// US-keyboard shifted symbol for a digit (Shift+1 → `!`, etc.).
+fn shift_digit_symbol(digit: char) -> Option<char> {
+    Some(match digit {
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '0' => ')',
+        _ => return None,
+    })
+}
+
+/// Default rating key: the character most terminals emit for Shift+digit (US layout).
+fn rate_default(digit: char) -> KeySpec {
+    let ch = shift_digit_symbol(digit).unwrap_or(digit);
+    KeySpec::new(KeyCode::Char(ch))
 }
 
 /// Human-readable key chord (e.g. `Ctrl+Shift+r`, `N`, `` ` ``).
@@ -192,6 +225,14 @@ pub struct Keybinds {
     pub toggle_favorite: KeySpec,
     /// Browser: favorites overlay. Default: Shift+f (`F`)
     pub favorites_overlay: KeySpec,
+    /// Rate focused/playing song 1–5 via Subsonic `setRating`.
+    pub rate_song_1: KeySpec,
+    pub rate_song_2: KeySpec,
+    pub rate_song_3: KeySpec,
+    pub rate_song_4: KeySpec,
+    pub rate_song_5: KeySpec,
+    /// Clear song rating (`setRating` with 0).
+    pub rate_song_clear: KeySpec,
 }
 
 impl Keybinds {
@@ -289,7 +330,6 @@ impl Keybinds {
                 modifiers: KeyModifiers::CONTROL,
             }),
         );
-
         Self {
             scroll_up: resolve(sec.scroll_up.as_deref(), KeySpec::new(KeyCode::Char('k'))),
             scroll_down: resolve(sec.scroll_down.as_deref(), KeySpec::new(KeyCode::Char('j'))),
@@ -440,6 +480,12 @@ impl Keybinds {
                     modifiers: KeyModifiers::SHIFT,
                 },
             ),
+            rate_song_1: resolve(sec.rate_song_1.as_deref(), rate_default('1')),
+            rate_song_2: resolve(sec.rate_song_2.as_deref(), rate_default('2')),
+            rate_song_3: resolve(sec.rate_song_3.as_deref(), rate_default('3')),
+            rate_song_4: resolve(sec.rate_song_4.as_deref(), rate_default('4')),
+            rate_song_5: resolve(sec.rate_song_5.as_deref(), rate_default('5')),
+            rate_song_clear: resolve(sec.rate_song_clear.as_deref(), rate_default('0')),
         }
     }
 }
@@ -536,6 +582,35 @@ mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     use crate::config::KeybindsSection;
+
+    #[test]
+    fn rate_defaults_match_us_shift_digit_symbols() {
+        let kb = Keybinds::from_section(&KeybindsSection::default());
+        assert!(kb
+            .rate_song_1
+            .matches(KeyCode::Char('!'), KeyModifiers::empty()));
+        assert!(kb
+            .rate_song_3
+            .matches(KeyCode::Char('#'), KeyModifiers::empty()));
+        assert!(kb
+            .rate_song_clear
+            .matches(KeyCode::Char(')'), KeyModifiers::empty()));
+    }
+
+    #[test]
+    fn shift_digit_config_matches_digit_with_shift_or_symbol() {
+        let sec = KeybindsSection {
+            rate_song_1: Some("Shift+1".into()),
+            ..Default::default()
+        };
+        let kb = Keybinds::from_section(&sec);
+        assert!(kb
+            .rate_song_1
+            .matches(KeyCode::Char('1'), KeyModifiers::SHIFT));
+        assert!(kb
+            .rate_song_1
+            .matches(KeyCode::Char('!'), KeyModifiers::empty()));
+    }
 
     #[test]
     fn single_uppercase_letter_in_config_is_shift_plus_lowercase() {

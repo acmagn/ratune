@@ -103,6 +103,7 @@ mod tests {
             size: None,
             path: None,
             starred: Some("2024-01-01T00:00:00Z".into()),
+            user_rating: None,
         });
 
         let ts = save(&path, &starred).unwrap();
