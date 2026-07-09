@@ -3088,6 +3088,7 @@ impl App {
                         "Rating updated"
                     });
                     if kind == FavoriteKind::Song {
+                        #[cfg(target_os = "linux")]
                         self.mpris_emit_props();
                     }
                 }
@@ -5032,6 +5033,7 @@ impl App {
                         let stored = if rating == 0 { None } else { Some(rating) };
                         self.set_item_rating(target.kind, &target.id, stored);
                         if target.kind == FavoriteKind::Song {
+                            #[cfg(target_os = "linux")]
                             self.mpris_emit_props();
                         }
                         self.spawn_set_rating(target.id.clone(), target.kind, rating);
