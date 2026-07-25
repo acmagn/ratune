@@ -525,6 +525,10 @@ pub struct PlaylistOverlay {
     pub tracks_cache: std::collections::HashMap<String, Vec<ratune_subsonic::Song>>,
     pub list_scroll: usize,
     pub tracks_scroll: usize,
+    /// Visible rows in the playlist list column (excluding borders); updated on render.
+    pub list_viewport_rows: usize,
+    /// Visible rows in the tracks column (excluding borders); updated on render.
+    pub tracks_viewport_rows: usize,
 }
 
 impl Default for PlaylistOverlay {
@@ -541,6 +545,8 @@ impl Default for PlaylistOverlay {
             tracks_cache: std::collections::HashMap::new(),
             list_scroll: 0,
             tracks_scroll: 0,
+            list_viewport_rows: 8,
+            tracks_viewport_rows: 8,
         }
     }
 }
@@ -573,7 +579,7 @@ pub enum FavoritesFocus {
     Items,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FavoritesOverlay {
     pub visible: bool,
     pub loading: bool,
@@ -588,9 +594,36 @@ pub struct FavoritesOverlay {
     pub selected_item_index: usize,
     pub categories_scroll: usize,
     pub items_scroll: usize,
+    /// Visible rows in the category column (excluding borders); updated on render.
+    pub categories_viewport_rows: usize,
+    /// Visible rows in the items column (excluding borders); updated on render.
+    pub items_viewport_rows: usize,
     pub songs: Vec<ratune_subsonic::Song>,
     pub albums: Vec<ratune_subsonic::Album>,
     pub artists: Vec<ratune_subsonic::Artist>,
+}
+
+impl Default for FavoritesOverlay {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            loading: false,
+            error: None,
+            offline_snapshot: false,
+            snapshot_refreshed_at: None,
+            category: FavoritesCategory::default(),
+            focus: FavoritesFocus::default(),
+            selected_category_index: 0,
+            selected_item_index: 0,
+            categories_scroll: 0,
+            items_scroll: 0,
+            categories_viewport_rows: 8,
+            items_viewport_rows: 8,
+            songs: Vec::new(),
+            albums: Vec::new(),
+            artists: Vec::new(),
+        }
+    }
 }
 
 impl FavoritesOverlay {

@@ -138,7 +138,9 @@ fn playlist_sections(
     let mut favorites = vec![
         ("F", "Open / close favorites panel (Browse)"),
         ("j / k", "Scroll category / item list"),
-        ("h / l", "Switch between lists"),
+        ("PgUp / PgDn · Ctrl+u / Ctrl+d", "Page scroll"),
+        ("gg / G", "Jump to top / bottom"),
+        ("h / l · ← / →", "Switch between lists"),
         ("Enter / Ctrl+r", "Replace queue and play"),
         ("Shift+A", "Append to queue"),
         ("f", "Toggle favorite"),
@@ -155,7 +157,9 @@ fn playlist_sections(
             vec![
                 ("Shift+P", "Open / close playlist panel"),
                 ("j / k", "Scroll playlist / track list"),
-                ("h / l", "Switch between lists"),
+                ("PgUp / PgDn · Ctrl+u / Ctrl+d", "Page scroll"),
+                ("gg / G", "Jump to top / bottom"),
+                ("h / l · ← / →", "Switch between lists"),
                 ("Enter / Ctrl+r", "Replace queue and play"),
                 ("a", "Append track to queue"),
                 ("A", "Append playlist to queue"),

@@ -157,6 +157,7 @@ fn render_categories(
         .style(style_with_bg(theme.background));
 
     let len = FavoritesCategory::ALL.len();
+    overlay.categories_viewport_rows = area.height.saturating_sub(2).max(1) as usize;
     frame.render_stateful_widget(
         list,
         area,
@@ -308,6 +309,7 @@ fn render_items(
     } else {
         None
     };
+    overlay.items_viewport_rows = area.height.saturating_sub(2).max(1) as usize;
     frame.render_stateful_widget(
         list,
         area,
