@@ -96,19 +96,19 @@ queue_loop = true
 # This section turns on ratings everywhere:
 # browse lists, Now Playing queue/bar, Shift+1…5 keybinds, and MPRIS UserRating.
 #
-# enabled      — Master switch. Default: false.
-# star_filled  — Glyph repeated for each filled star. Default: ⭑ (BLACK SMALL STAR).
-# star_empty   — Glyph repeated for each empty star. Default: ⭒ (WHITE SMALL STAR).
-#                Example for classic larger stars: star_filled = "★", star_empty = "☆".
-# bracket_open — Bracket before the star run. Default: `[` (`""` = none).
-# bracket_close — Bracket after the star run. Default: `]` (`""` = none).
+# enabled — Master switch. Default: false.
+#
+# Rating display glyphs live under `[theme.icon]` (`rating_filled`, `rating_empty`,
+# `rating_bracket_open`, `rating_bracket_close`). Legacy keys below still work if
+# the theme.icon equivalents are unset:
+#   star_filled / star_empty / bracket_open / bracket_close
 
 [ratings]
 # enabled = false
-# star_filled = "⭑"
-# star_empty = "⭒"
-# bracket_open = "["
-# bracket_close = "]"
+# star_filled = "⭑"      # legacy — prefer [theme.icon].rating_filled
+# star_empty = "⭒"       # legacy — prefer [theme.icon].rating_empty
+# bracket_open = "["     # legacy — prefer [theme.icon].rating_bracket_open
+# bracket_close = "]"    # legacy — prefer [theme.icon].rating_bracket_close
 
 # -----------------------------------------------------------------------------
 # [keybinds] — optional overrides
@@ -203,6 +203,13 @@ queue_loop = true
 #   dimmed        — Secondary / muted text.
 #   border        — Inactive borders (some panes still use accent when focused).
 #   border_active — Reserved for themes; many panes now use accent for active frames.
+#
+# Pane outlines: optional `[theme.border_lines]` (`type` = plain|rounded|double|thick|ascii,
+# plus optional edge glyphs). Does not clash with the `border` colour key.
+#
+# Glyphs (optional `[theme.icon]`): transport, favorite marker, rating stars/brackets,
+# tab separator, status online/offline / radio live.
+# Progress bar: `[ui.row_now_playing].progress_style` (not under theme.icon).
 
 [theme]
 preset = "dynamic"
@@ -218,6 +225,60 @@ preset = "dynamic"
 # dimmed = "#5a5858"
 # border = "#252525"
 # border_active = "#3a3a3a"
+
+# -----------------------------------------------------------------------------
+# [theme.border_lines] — pane box-drawing (style + optional edge glyphs)
+# -----------------------------------------------------------------------------
+#
+# type — "plain" (default), "rounded", "double", "thick", or "ascii" (+ - |).
+# Edge overrides (any set builds a custom border): top_left, top_right,
+# bottom_left, bottom_right, vertical, horizontal.
+#
+# Legacy still accepted: flat `[theme].border_type` / `border_top_left` / … and the
+# same keys under `[theme.icon]`.
+
+# [theme.border_lines]
+# type = "ascii"
+# top_left = "+"
+# top_right = "+"
+# bottom_left = "+"
+# bottom_right = "+"
+# vertical = "|"
+# horizontal = "-"
+
+# -----------------------------------------------------------------------------
+# [theme.icon] — optional glyph overrides (fonts without media / specialty chars)
+# -----------------------------------------------------------------------------
+#
+# Omit any key to keep the built-in default. Transport labels are full strings as
+# shown in the controls row (including parentheses when you want them).
+#
+# playing / paused / stopped — shown for those playback states (defaults match the
+#   prior Unicode controls: pause while playing, play while paused, bare play idle).
+# favorite — starred marker in lists / queue (default ★).
+# rating_* — 1–5 user-rating display (defaults ⭑ / ⭒ with [ ]). Legacy: [ratings].star_*.
+# Progress bar glyphs are not here — use `[ui.row_now_playing].progress_style`
+#   (or `[ui.nptab.now_playing].progress_style`), e.g. progress_style = "=>-".
+#
+# Box outlines: prefer `[theme.border_lines]` (legacy: flat theme / theme.icon border_*).
+
+# [theme.icon]
+# playing = "( || )"
+# paused = "( > )"
+# stopped = ">"
+# next_song = ">>"
+# previous_song = "<<"
+# mode_shuffle = "><"
+# mode_loop = "o"
+# favorite = "*"
+# rating_filled = "*"
+# rating_empty = "-"
+# rating_bracket_open = "["
+# rating_bracket_close = "]"
+# tab_separator = " | "
+# online = "*"
+# offline = "o"
+# live = "*"
 
 # Example: mostly terminal colours, but a fixed hex for selection/highlight accent:
 # preset = "terminal"
@@ -254,7 +315,7 @@ tab_bar_position = "bottom"
 #   %t title  %a artist  %b album  %y year  %n track#  %l track length
 #   %e elapsed  %E / %T total  %g genre  %f file  %D parent dir  %q quality
 #   %P queue total duration  %i %j queue index & length  %v volume  %K bitrate
-#   %R user rating ([⭑⭑⭒⭒⭒], needs [ratings].enabled)  %% literal %
+#   %R user rating ([⭑⭑⭒⭒⭒], needs [ratings].enabled; glyphs: [theme.icon].rating_*)  %% literal %
 #   $1–$8 colors, $9 reset, $b$/b bold, $u$/u underline, $r$/r reverse.
 
 [ui.row_now_playing]

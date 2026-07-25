@@ -1,6 +1,6 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::app::{App, BrowserColumn};
@@ -28,7 +28,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(t.border_set)
         .border_style(border_style)
         .style(style_with_bg(t.surface));
 
@@ -73,7 +73,11 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                     .iter()
                     .map(|(i, _)| {
                         let a = &artists[*i];
-                        let star = if a.starred.is_some() { "★ " } else { "" };
+                        let star = if a.starred.is_some() {
+                            app.theme.icons.favorite_prefix()
+                        } else {
+                            String::new()
+                        };
                         let rating_suffix = if app.config.ratings_enabled {
                             let rating = app.config.rating_stars.format(a.user_rating);
                             if rating.is_empty() {

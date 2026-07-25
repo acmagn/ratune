@@ -992,8 +992,169 @@ pub struct ThemeSection {
     pub surface: Option<String>,
     pub foreground: Option<String>,
     pub dimmed: Option<String>,
+    /// Inactive border colour.
     pub border: Option<String>,
     pub border_active: Option<String>,
+    /// Pane outline style + optional edge glyphs. See [`ThemeBorderLinesSection`].
+    #[serde(default)]
+    pub border_lines: ThemeBorderLinesSection,
+    /// Legacy — prefer `[theme.border_lines].type`.
+    pub border_type: Option<String>,
+    /// Legacy — prefer `[theme.border_lines].top_left` (etc.).
+    pub border_top_left: Option<String>,
+    pub border_top_right: Option<String>,
+    pub border_bottom_left: Option<String>,
+    pub border_bottom_right: Option<String>,
+    pub border_vertical: Option<String>,
+    pub border_horizontal: Option<String>,
+    /// Optional glyph overrides (transport, favorite, ratings stars, tab/status chrome).
+    /// See [`ThemeIconSection`]. Progress bar glyphs stay under `[ui.*.progress_style]`.
+    #[serde(default)]
+    pub icon: ThemeIconSection,
+}
+
+/// Pane box-drawing under `[theme.border_lines]` (avoids clashing with the `border` colour key).
+///
+/// ```toml
+/// [theme.border_lines]
+/// type = "ascii"          # plain | rounded | double | thick | ascii
+/// top_left = "+"
+/// top_right = "+"
+/// bottom_left = "+"
+/// bottom_right = "+"
+/// vertical = "|"
+/// horizontal = "-"
+/// ```
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct ThemeBorderLinesSection {
+    /// Outline style: `plain`, `rounded`, `double`, `thick`, or `ascii`.
+    /// TOML key: `type` (also accepts `border_type`).
+    #[serde(default, rename = "type", alias = "border_type")]
+    pub style: Option<String>,
+    #[serde(default, alias = "border_top_left")]
+    pub top_left: Option<String>,
+    #[serde(default, alias = "border_top_right")]
+    pub top_right: Option<String>,
+    #[serde(default, alias = "border_bottom_left")]
+    pub bottom_left: Option<String>,
+    #[serde(default, alias = "border_bottom_right")]
+    pub bottom_right: Option<String>,
+    #[serde(default, alias = "border_vertical")]
+    pub vertical: Option<String>,
+    #[serde(default, alias = "border_horizontal")]
+    pub horizontal: Option<String>,
+}
+
+/// Optional UI glyph overrides under `[theme.icon]`.
+///
+/// Omit any field to keep the built-in default. Useful when the terminal font lacks
+/// media-control or specialty characters.
+///
+/// Box outlines live under `[theme.border_lines]`. Flat `[theme].border_type` / edge keys
+/// and the same keys under `[theme.icon]` are still accepted as legacy fallbacks.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct ThemeIconSection {
+    /// Label while a track is playing (default: `( ⏸ )`).
+    pub playing: Option<String>,
+    /// Label while paused (default: `( ▶ )`).
+    pub paused: Option<String>,
+    /// Label when nothing is loaded (default: `▶`).
+    pub stopped: Option<String>,
+    /// Next-track control (default: `⏭`).
+    pub next_song: Option<String>,
+    /// Previous-track control (default: `⏮`).
+    pub previous_song: Option<String>,
+    /// Shuffle control (default: `⇄`).
+    pub mode_shuffle: Option<String>,
+    /// Queue-loop control (default: `↻`).
+    pub mode_loop: Option<String>,
+    /// Starred / favorite marker (default: `★`).
+    pub favorite: Option<String>,
+    /// Glyph repeated for each filled rating star (default: `⭑`).
+    /// Legacy fallback: `[ratings].star_filled`.
+    pub rating_filled: Option<String>,
+    /// Glyph repeated for each empty rating star (default: `⭒`).
+    /// Legacy fallback: `[ratings].star_empty`.
+    pub rating_empty: Option<String>,
+    /// Opening bracket around the rating star run (default: `[`).
+    /// Legacy fallback: `[ratings].bracket_open`.
+    pub rating_bracket_open: Option<String>,
+    /// Closing bracket around the rating star run (default: `]`).
+    /// Legacy fallback: `[ratings].bracket_close`.
+    pub rating_bracket_close: Option<String>,
+    /// Tab bar separator including surrounding spaces (default: ` │ `).
+    pub tab_separator: Option<String>,
+    /// Status-bar online indicator (default: `●`).
+    pub online: Option<String>,
+    /// Status-bar offline indicator (default: `○`).
+    pub offline: Option<String>,
+    /// Radio live prefix glyph (default: `●`).
+    pub live: Option<String>,
+    /// Legacy — prefer `[theme.border_lines].type`.
+    pub border_type: Option<String>,
+    /// Legacy — prefer `[theme.border_lines]` edge keys.
+    pub border_top_left: Option<String>,
+    pub border_top_right: Option<String>,
+    pub border_bottom_left: Option<String>,
+    pub border_bottom_right: Option<String>,
+    pub border_vertical: Option<String>,
+    pub border_horizontal: Option<String>,
+}
+
+/// Resolved border glyph sources (canonical → flat theme → icon legacy).
+#[derive(Debug, Default, Clone)]
+pub struct ThemeBorderSource<'a> {
+    pub border_type: Option<&'a str>,
+    pub top_left: Option<&'a str>,
+    pub top_right: Option<&'a str>,
+    pub bottom_left: Option<&'a str>,
+    pub bottom_right: Option<&'a str>,
+    pub vertical: Option<&'a str>,
+    pub horizontal: Option<&'a str>,
+}
+
+impl ThemeSection {
+    /// Border style/glyphs: `[theme.border_lines]` → flat `[theme].border_*` → `[theme.icon]`.
+    pub fn border_source(&self) -> ThemeBorderSource<'_> {
+        let lines = &self.border_lines;
+        ThemeBorderSource {
+            border_type: lines
+                .style
+                .as_deref()
+                .or(self.border_type.as_deref())
+                .or(self.icon.border_type.as_deref()),
+            top_left: lines
+                .top_left
+                .as_deref()
+                .or(self.border_top_left.as_deref())
+                .or(self.icon.border_top_left.as_deref()),
+            top_right: lines
+                .top_right
+                .as_deref()
+                .or(self.border_top_right.as_deref())
+                .or(self.icon.border_top_right.as_deref()),
+            bottom_left: lines
+                .bottom_left
+                .as_deref()
+                .or(self.border_bottom_left.as_deref())
+                .or(self.icon.border_bottom_left.as_deref()),
+            bottom_right: lines
+                .bottom_right
+                .as_deref()
+                .or(self.border_bottom_right.as_deref())
+                .or(self.icon.border_bottom_right.as_deref()),
+            vertical: lines
+                .vertical
+                .as_deref()
+                .or(self.border_vertical.as_deref())
+                .or(self.icon.border_vertical.as_deref()),
+            horizontal: lines
+                .horizontal
+                .as_deref()
+                .or(self.border_horizontal.as_deref())
+                .or(self.icon.border_horizontal.as_deref()),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -1053,20 +1214,20 @@ impl Default for PlayerSection {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct RatingsSection {
+pub(crate) struct RatingsSection {
     /// Show ratings in the UI, allow rating keybinds, and export MPRIS UserRating.
     #[serde(default)]
     enabled: bool,
-    /// Glyph repeated for each filled star in rating display. Default: ⭑
+    /// Legacy glyph — prefer `[theme.icon].rating_filled`. Default: ⭑
     #[serde(default = "default_rating_star_filled")]
     star_filled: String,
-    /// Glyph repeated for each empty star in rating display. Default: ⭒
+    /// Legacy glyph — prefer `[theme.icon].rating_empty`. Default: ⭒
     #[serde(default = "default_rating_star_empty")]
     star_empty: String,
-    /// Opening bracket around the rating star run. Default: `[` (`""` = none).
+    /// Legacy — prefer `[theme.icon].rating_bracket_open`. Default: `[`
     #[serde(default = "default_rating_bracket_open")]
     bracket_open: String,
-    /// Closing bracket around the rating star run. Default: `]` (`""` = none).
+    /// Legacy — prefer `[theme.icon].rating_bracket_close`. Default: `]`
     #[serde(default = "default_rating_bracket_close")]
     bracket_close: String,
 }
@@ -1137,6 +1298,31 @@ impl Default for RatingStarGlyphs {
     }
 }
 
+/// Resolve rating display glyphs: `[theme.icon]` wins over legacy `[ratings]` keys.
+pub(crate) fn resolve_rating_stars(
+    icon: &ThemeIconSection,
+    ratings: &RatingsSection,
+) -> RatingStarGlyphs {
+    RatingStarGlyphs {
+        filled: icon
+            .rating_filled
+            .clone()
+            .unwrap_or_else(|| ratings.star_filled.clone()),
+        empty: icon
+            .rating_empty
+            .clone()
+            .unwrap_or_else(|| ratings.star_empty.clone()),
+        bracket_open: icon
+            .rating_bracket_open
+            .clone()
+            .unwrap_or_else(|| ratings.bracket_open.clone()),
+        bracket_close: icon
+            .rating_bracket_close
+            .clone()
+            .unwrap_or_else(|| ratings.bracket_close.clone()),
+    }
+}
+
 impl RatingStarGlyphs {
     #[must_use]
     pub fn format(&self, rating: Option<u8>) -> String {
@@ -1167,7 +1353,7 @@ pub struct Config {
     pub queue_loop: bool,
     /// When true, show ratings in the UI and allow rating keybinds / MPRIS UserRating (`[ratings].enabled`).
     pub ratings_enabled: bool,
-    /// Star glyphs for rating display (`[ratings].star_filled` / `star_empty`).
+    /// Star glyphs for rating display (`[theme.icon].rating_*`, legacy `[ratings].star_*`).
     pub rating_stars: RatingStarGlyphs,
     /// Internet Radio (picker, Now Playing pane, station management).
     pub radio_enabled: bool,
@@ -1601,12 +1787,7 @@ impl Config {
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
             ratings_enabled: file_cfg.ratings.enabled,
-            rating_stars: RatingStarGlyphs {
-                filled: file_cfg.ratings.star_filled,
-                empty: file_cfg.ratings.star_empty,
-                bracket_open: file_cfg.ratings.bracket_open,
-                bracket_close: file_cfg.ratings.bracket_close,
-            },
+            rating_stars: resolve_rating_stars(&file_cfg.theme.icon, &file_cfg.ratings),
             radio_enabled,
             radio_fetch_station_icons,
             keybinds: file_cfg.keybinds,
@@ -1749,10 +1930,8 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 
 [ratings]
 # enabled = false     # show ratings in UI, enable Shift+1…5 keybinds, export MPRIS UserRating
-# star_filled = "⭑"   # glyph per filled star in [⭑⭑⭒⭒⭒] display
-# star_empty = "⭒"    # glyph per empty star (try "★" / "☆" for larger stars)
-# bracket_open = "["  # bracket before stars ("" = none)
-# bracket_close = "]" # bracket after stars ("" = none)
+# Glyphs moved to [theme.icon] (rating_filled / rating_empty / …).
+# Legacy still works: star_filled, star_empty, bracket_open, bracket_close.
 
 [keybinds]
 # Shift+letter: use "Shift+n" or "N" (same). Helps Ghostty/kitty vs. classic terminals.
@@ -1820,6 +1999,8 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # border        = "#252525"   # inactive pane borders
 # border_active = "#3a3a3a"   # active pane borders
 # preset = "dynamic"          # static | dynamic (default) | terminal | os
+# Glyphs: [theme.icon] — see docs/sample-config.toml (transport, favorite, rating_*)
+# Outlines: [theme.border_lines] type = "ascii" | plain | rounded | …
 
 [ui]
 # album_art_backend = "kitty-apc"   # default: ratatui-image
@@ -2592,6 +2773,123 @@ bracket_close = ""
         assert_eq!(fc.ratings.star_empty, "☆");
         assert_eq!(fc.ratings.bracket_open, "");
         assert_eq!(fc.ratings.bracket_close, "");
+    }
+
+    #[test]
+    fn parses_theme_icon_section() {
+        let fc: FileConfig = toml::from_str(
+            r#"
+[theme.border_lines]
+type = "ascii"
+
+[theme.icon]
+playing = "||"
+paused = "( > )"
+stopped = ">"
+next_song = ">>"
+previous_song = "<<"
+mode_shuffle = "><"
+mode_loop = "o"
+favorite = "*"
+rating_filled = "+"
+rating_empty = "-"
+tab_separator = " | "
+"#,
+        )
+        .expect("toml");
+        assert_eq!(fc.theme.border_lines.style.as_deref(), Some("ascii"));
+        assert_eq!(fc.theme.icon.playing.as_deref(), Some("||"));
+        assert_eq!(fc.theme.icon.paused.as_deref(), Some("( > )"));
+        assert_eq!(fc.theme.icon.stopped.as_deref(), Some(">"));
+        assert_eq!(fc.theme.icon.next_song.as_deref(), Some(">>"));
+        assert_eq!(fc.theme.icon.previous_song.as_deref(), Some("<<"));
+        assert_eq!(fc.theme.icon.mode_shuffle.as_deref(), Some("><"));
+        assert_eq!(fc.theme.icon.mode_loop.as_deref(), Some("o"));
+        assert_eq!(fc.theme.icon.favorite.as_deref(), Some("*"));
+        assert_eq!(fc.theme.icon.rating_filled.as_deref(), Some("+"));
+        assert_eq!(fc.theme.icon.rating_empty.as_deref(), Some("-"));
+        assert_eq!(fc.theme.icon.tab_separator.as_deref(), Some(" | "));
+    }
+
+    #[test]
+    fn rating_glyphs_prefer_theme_icon_over_legacy_ratings() {
+        let fc: FileConfig = toml::from_str(
+            r#"
+[ratings]
+star_filled = "★"
+star_empty = "☆"
+
+[theme.icon]
+rating_filled = "*"
+rating_empty = "-"
+rating_bracket_open = "<"
+rating_bracket_close = ">"
+"#,
+        )
+        .expect("toml");
+        let stars = resolve_rating_stars(&fc.theme.icon, &fc.ratings);
+        assert_eq!(stars.filled, "*");
+        assert_eq!(stars.empty, "-");
+        assert_eq!(stars.bracket_open, "<");
+        assert_eq!(stars.bracket_close, ">");
+    }
+
+    #[test]
+    fn rating_glyphs_legacy_ratings_section_still_works() {
+        let fc: FileConfig = toml::from_str(
+            r#"
+[ratings]
+star_filled = "★"
+star_empty = "☆"
+bracket_open = ""
+bracket_close = ""
+"#,
+        )
+        .expect("toml");
+        let stars = resolve_rating_stars(&fc.theme.icon, &fc.ratings);
+        assert_eq!(stars.filled, "★");
+        assert_eq!(stars.empty, "☆");
+        assert_eq!(stars.bracket_open, "");
+        assert_eq!(stars.bracket_close, "");
+    }
+
+    #[test]
+    fn theme_border_prefers_border_lines_over_legacy() {
+        let fc: FileConfig = toml::from_str(
+            r#"
+[theme]
+border_type = "double"
+
+[theme.border_lines]
+type = "ascii"
+
+[theme.icon]
+border_type = "thick"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(fc.theme.border_source().border_type, Some("ascii"));
+    }
+
+    #[test]
+    fn theme_border_legacy_flat_and_icon_keys_still_work() {
+        let flat: FileConfig = toml::from_str(
+            r#"
+[theme]
+border_type = "ascii"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(flat.theme.border_source().border_type, Some("ascii"));
+
+        let icon: FileConfig = toml::from_str(
+            r#"
+[theme.icon]
+border_type = "ascii"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(icon.theme.border_source().border_type, Some("ascii"));
     }
 
     #[test]

@@ -168,7 +168,13 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             right_w += sep.len() + scrobble_w;
         }
 
-        let host_w = 2 + host_label.len();
+        let conn_icon = if app.server_reachable {
+            t.icons.online.as_str()
+        } else {
+            t.icons.offline.as_str()
+        };
+        let conn_label = format!("{conn_icon} ");
+        let host_w = conn_label.chars().count() + host_label.chars().count();
         let gap = (area.width as usize).saturating_sub(host_w + right_w);
 
         let conn_style = if app.server_reachable {
@@ -177,7 +183,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Style::default().fg(t.dimmed)
         };
         let mut spans = vec![
-            Span::styled(if app.server_reachable { "● " } else { "○ " }, conn_style),
+            Span::styled(conn_label, conn_style),
             Span::styled(host_label, Style::default().fg(t.dimmed)),
             Span::raw(" ".repeat(gap)),
         ];

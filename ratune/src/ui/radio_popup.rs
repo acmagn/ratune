@@ -36,7 +36,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
         .title(" Internet Radio ")
         .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(t.border_set)
         .border_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
         .style(style_with_bg(t.surface));
 

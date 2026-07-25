@@ -2,7 +2,7 @@
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
 use ratatui::Frame;
 
 use crate::state::{FavoritesCategory, FavoritesFocus, FavoritesOverlay};
@@ -122,7 +122,7 @@ fn render_categories(
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(theme.border_set)
         .border_style(list_border)
         .style(style_with_bg(theme.background));
 
@@ -135,7 +135,12 @@ fn render_categories(
         .iter()
         .enumerate()
         .map(|(i, cat)| {
-            let label = format!("★ {} ({})", cat.label(), counts[i]);
+            let label = format!(
+                "{}{} ({})",
+                theme.icons.favorite_prefix(),
+                cat.label(),
+                counts[i]
+            );
             ListItem::new(label).style(Style::default().fg(theme.foreground))
         })
         .collect();
@@ -191,7 +196,7 @@ fn render_items(
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(theme.border_set)
         .border_style(list_border)
         .style(style_with_bg(theme.background));
 

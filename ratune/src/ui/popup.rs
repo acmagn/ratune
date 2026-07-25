@@ -322,6 +322,7 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(app.theme.border_set)
         .border_style(Style::default().fg(accent))
         .title_top(
             Line::from(Span::styled(" Keybinds ", Style::default().fg(accent))).left_aligned(),

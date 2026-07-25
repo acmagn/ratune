@@ -7,7 +7,7 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style}; // Modifier used by highlight_style
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::app::PlaylistPicker;
@@ -170,7 +170,7 @@ fn render_playlist_list(
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(theme.border_set)
         .border_style(list_border)
         .style(style_with_bg(theme.background));
 
@@ -247,7 +247,7 @@ fn render_playlist_list(
             .title(label)
             .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
-            .border_type(BorderType::Plain)
+            .border_set(theme.border_set)
             .border_style(Style::default().fg(accent))
             .style(style_with_bg(theme.background));
         let input_line = Line::from(vec![
@@ -295,7 +295,7 @@ fn render_track_list(
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(theme.border_set)
         .border_style(list_border)
         .style(style_with_bg(theme.background));
 
@@ -382,7 +382,7 @@ fn render_confirm_dialog(
     frame.render_widget(Clear, dialog_area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(theme.border_set)
         .border_style(Style::default().fg(accent))
         .style(style_with_bg(theme.background));
     let para = Paragraph::new(Line::from(Span::styled(
@@ -431,7 +431,7 @@ pub fn render_playlist_picker(
         .title(" Add to playlist  Enter: add  Esc: cancel ")
         .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(theme.border_set)
         .border_style(Style::default().fg(accent))
         .style(style_with_bg(theme.background));
 

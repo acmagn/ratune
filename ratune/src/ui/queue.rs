@@ -1,6 +1,6 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -34,7 +34,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(t.border_set)
         .border_style(Style::default().fg(border_color))
         .style(style_with_bg(t.surface));
 
@@ -72,6 +72,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
     let total = app.queue.songs.len();
     let start = app.queue.scroll.min(total.saturating_sub(1));
     let end = (start + visible).min(total);
+    let favorite_prefix = app.theme.icons.favorite_prefix();
     let items: Vec<ListItem> = app.queue.songs[start..end]
         .iter()
         .enumerate()
@@ -82,6 +83,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 s,
                 app.config.ratings_enabled,
                 &app.config.rating_stars,
+                &favorite_prefix,
             );
 
             let style = if idx == app.queue.cursor {
@@ -116,12 +118,13 @@ fn format_queue_line(
     s: &ratune_subsonic::Song,
     ratings_enabled: bool,
     stars: &crate::config::RatingStarGlyphs,
+    favorite_prefix: &str,
 ) -> String {
     let num = s.track.map(|n| format!("{n:>2}. ")).unwrap_or_default();
     let title = {
         let mut t = String::new();
         if s.starred.is_some() {
-            t.push_str("★ ");
+            t.push_str(favorite_prefix);
         }
         t.push_str(&s.title);
         t
@@ -140,7 +143,7 @@ fn format_queue_line(
         "album" => Some(album.to_string()),
         "duration" => Some(duration.clone()),
         "favorite" => Some(if s.starred.is_some() {
-            "★ ".to_string()
+            favorite_prefix.to_string()
         } else {
             String::new()
         }),
