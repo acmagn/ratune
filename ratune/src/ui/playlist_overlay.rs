@@ -225,6 +225,7 @@ fn render_playlist_list(
         LoadingState::Loaded(playlists) => playlists.len(),
         _ => 0,
     };
+    overlay.list_viewport_rows = list_area.height.saturating_sub(2).max(1) as usize;
     frame.render_stateful_widget(
         list,
         list_area,
@@ -347,6 +348,7 @@ fn render_track_list(
         .highlight_symbol("▶ ")
         .style(style_with_bg(theme.background));
 
+    overlay.tracks_viewport_rows = area.height.saturating_sub(2).max(1) as usize;
     frame.render_stateful_widget(
         list,
         area,
@@ -447,6 +449,7 @@ pub fn render_playlist_picker(
         .highlight_symbol("▶ ")
         .style(style_with_bg(theme.background));
 
+    picker.viewport_rows = picker_area.height.saturating_sub(2).max(1) as usize;
     frame.render_stateful_widget(
         list,
         picker_area,

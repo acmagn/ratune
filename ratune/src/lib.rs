@@ -751,7 +751,12 @@ async fn run_loop(
                             if key.kind == KeyEventKind::Press => {
                                 if app.playlist_picker.is_some() && !app.help_visible {
                                     // Picker is open: highest priority — swallow all keys.
-                                    let action = map_picker_key(key.code, key.modifiers);
+                                    let action = map_picker_key(
+                                        key.code,
+                                        key.modifiers,
+                                        &app.keybinds,
+                                        &mut app.pending_gg,
+                                    );
                                     app.dispatch(action);
                                 } else if app.radio.picker_visible
                                     && !app.radio.input_mode.is_normal()
@@ -804,6 +809,7 @@ async fn run_loop(
                                             &app.favorites_overlay.focus,
                                             &app.keybinds,
                                             app.config.ratings_enabled,
+                                            &mut app.pending_gg,
                                         );
                                         app.dispatch(action);
                                     }
@@ -851,6 +857,7 @@ async fn run_loop(
                                             &app.playlist_overlay.input_mode,
                                             &app.keybinds,
                                             app.config.ratings_enabled,
+                                            &mut app.pending_gg,
                                         );
                                         app.dispatch(action);
                                     }
@@ -1316,19 +1323,31 @@ fn map_favorites_key(
     _focus: &FavoritesFocus,
     kb: &Keybinds,
     ratings_enabled: bool,
+    pending_gg: &mut bool,
 ) -> Action {
     if let Some(action) = map_rate_key(code, modifiers, kb, ratings_enabled) {
         return action;
+    }
+    if let Some(dir) = overlay_list_nav_direction(code, modifiers, kb, pending_gg) {
+        return Action::FavoritesNavigate(dir);
     }
     let shift = modifiers.intersects(KeyModifiers::SHIFT);
     match code {
         KeyCode::Esc => Action::ToggleFavoritesOverlay,
         _ if kb.favorites_overlay.matches(code, modifiers) => Action::ToggleFavoritesOverlay,
         _ if kb.toggle_favorite.matches(code, modifiers) => Action::ToggleFavorite,
-        KeyCode::Char('k') | KeyCode::Up => Action::FavoritesScrollUp,
-        KeyCode::Char('j') | KeyCode::Down => Action::FavoritesScrollDown,
-        KeyCode::Char('h') => Action::FavoritesFocusCategories,
-        KeyCode::Char('l') => Action::FavoritesFocusItems,
+        KeyCode::Left | KeyCode::Char('h') => Action::FavoritesFocusCategories,
+        KeyCode::Right | KeyCode::Char('l') => Action::FavoritesFocusItems,
+        _ if kb.column_left.matches(code, modifiers)
+            || kb.seek_backward.matches(code, modifiers) =>
+        {
+            Action::FavoritesFocusCategories
+        }
+        _ if kb.column_right.matches(code, modifiers)
+            || kb.seek_forward.matches(code, modifiers) =>
+        {
+            Action::FavoritesFocusItems
+        }
         KeyCode::Enter => Action::FavoritesPlay,
         _ => {
             if kb
@@ -1344,6 +1363,69 @@ fn map_favorites_key(
             Action::None
         }
     }
+}
+
+/// Shared list navigation for overlays / pickers: j/k, arrows, PageUp/Down,
+/// Ctrl+u/d, gg (top), G (bottom), and configured `scroll_up` / `scroll_down`.
+fn overlay_list_nav_direction(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    kb: &Keybinds,
+    pending_gg: &mut bool,
+) -> Option<Direction> {
+    if *pending_gg {
+        *pending_gg = false;
+        if code == KeyCode::Char('g')
+            && !modifiers.intersects(
+                KeyModifiers::CONTROL
+                    | KeyModifiers::ALT
+                    | KeyModifiers::SUPER
+                    | KeyModifiers::HYPER,
+            )
+        {
+            return Some(Direction::Top);
+        }
+        // Otherwise treat this key as a fresh press (fall through).
+    }
+
+    if code == KeyCode::Char('G')
+        && !modifiers.intersects(
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::HYPER,
+        )
+    {
+        return Some(Direction::Bottom);
+    }
+
+    let ctrl = modifiers.intersects(KeyModifiers::CONTROL)
+        && !modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT);
+    if code == KeyCode::PageUp || (ctrl && matches!(code, KeyCode::Char('u') | KeyCode::Char('U')))
+    {
+        return Some(Direction::PageUp);
+    }
+    if code == KeyCode::PageDown
+        || (ctrl && matches!(code, KeyCode::Char('d') | KeyCode::Char('D')))
+    {
+        return Some(Direction::PageDown);
+    }
+
+    if code == KeyCode::Up || kb.scroll_up.matches(code, modifiers) {
+        return Some(Direction::Up);
+    }
+    if code == KeyCode::Down || kb.scroll_down.matches(code, modifiers) {
+        return Some(Direction::Down);
+    }
+
+    // Lone `g`: wait for second `g` (`gg`) to go to top.
+    if code == KeyCode::Char('g')
+        && !modifiers.intersects(
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::HYPER,
+        )
+    {
+        *pending_gg = true;
+        return None;
+    }
+
+    None
 }
 
 fn map_radio_picker_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action {
@@ -1405,6 +1487,7 @@ fn map_playlist_key(
     input_mode: &PlaylistInputMode,
     kb: &Keybinds,
     ratings_enabled: bool,
+    pending_gg: &mut bool,
 ) -> Action {
     match input_mode {
         // ── Text-input modes: feed characters into the buffer ──────────────
@@ -1423,23 +1506,24 @@ fn map_playlist_key(
         },
         // ── Normal navigation / mutation ───────────────────────────────────
         PlaylistInputMode::Normal => {
+            if let Some(dir) = overlay_list_nav_direction(code, modifiers, kb, pending_gg) {
+                return Action::PlaylistNavigate(dir);
+            }
             match code {
                 KeyCode::Esc => Action::TogglePlaylistOverlay,
                 _ if kb.playlist_overlay.matches(code, modifiers) => Action::TogglePlaylistOverlay,
-                KeyCode::Char('k') | KeyCode::Up => Action::PlaylistScrollUp,
-                KeyCode::Char('j') | KeyCode::Down => Action::PlaylistScrollDown,
                 _ if kb.column_left.matches(code, modifiers)
-                    || kb.seek_backward.matches(code, modifiers) =>
+                    || kb.seek_backward.matches(code, modifiers)
+                    || matches!(code, KeyCode::Left | KeyCode::Char('h')) =>
                 {
                     Action::PlaylistFocusList
                 }
                 _ if kb.column_right.matches(code, modifiers)
-                    || kb.seek_forward.matches(code, modifiers) =>
+                    || kb.seek_forward.matches(code, modifiers)
+                    || matches!(code, KeyCode::Right | KeyCode::Char('l')) =>
                 {
                     Action::PlaylistFocusTracks
                 }
-                KeyCode::Char('h') => Action::PlaylistFocusList,
-                KeyCode::Char('l') => Action::PlaylistFocusTracks,
                 // c: create new playlist
                 KeyCode::Char('c') => Action::PlaylistCreate,
                 // X (Shift+x): delete selected playlist
@@ -1490,12 +1574,18 @@ fn map_playlist_key(
 }
 
 /// Translate a key event into an `Action` when the playlist picker popup is open.
-fn map_picker_key(code: KeyCode, _modifiers: KeyModifiers) -> Action {
+fn map_picker_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    kb: &Keybinds,
+    pending_gg: &mut bool,
+) -> Action {
+    if let Some(dir) = overlay_list_nav_direction(code, modifiers, kb, pending_gg) {
+        return Action::PlaylistPickerNavigate(dir);
+    }
     match code {
         KeyCode::Esc => Action::PlaylistPickerCancel,
         KeyCode::Enter => Action::PlaylistPickerSelect,
-        KeyCode::Char('k') | KeyCode::Up => Action::PlaylistPickerScrollUp,
-        KeyCode::Char('j') | KeyCode::Down => Action::PlaylistPickerScrollDown,
         _ => Action::None,
     }
 }
@@ -2112,21 +2202,72 @@ fn handle_browser_overlay_wheel(
 }
 
 fn handle_mouse_wheel(x: u16, y: u16, dir: Direction, app: &mut App, terminal_size: Rect) {
-    if app.active_tab != Tab::Browser {
-        return;
-    }
-
     let areas = ui::layout::build_layout(terminal_size, &ui::layout::layout_options_for_app(app));
+
+    // Playlists / favorites / picker overlays sit on the Browse layout; handle them
+    // before tab-specific scrolling so the wheel always works when they are open.
     if handle_browser_overlay_wheel(x, y, dir, app, areas.center) {
         return;
     }
 
-    let Some(hit) = browser_column_hit(x, y, areas.center, app.browser_browse_mode) else {
+    match app.active_tab {
+        Tab::Browser => {
+            let Some(hit) = browser_column_hit(x, y, areas.center, app.browser_browse_mode) else {
+                return;
+            };
+
+            app.browser_focus = hit.focus;
+            app.navigate_browser_wheel(dir);
+        }
+        Tab::NowPlaying => {
+            handle_nowplaying_wheel(x, y, dir, app, areas.center);
+        }
+        Tab::Home => {}
+    }
+}
+
+fn now_playing_tab_rects(app: &App, center: Rect) -> ui::layout::NowPlayingRects {
+    let show_art = app.config.nowplaying_show_art;
+    let boxed_np = app
+        .config
+        .now_playing_layout
+        .trim()
+        .eq_ignore_ascii_case("boxed");
+    let art_position = ui::layout::placement_from_str(&app.config.nowplaying_art_position)
+        .unwrap_or(ui::layout::Placement::Left);
+    let queue_position = ui::layout::placement_from_str(&app.config.nowplaying_queue_position)
+        .unwrap_or(ui::layout::Placement::Right);
+    let visualizer_position = ui::layout::placement_from_str(&app.config.visualizer_location)
+        .unwrap_or(ui::layout::Placement::Right);
+    let now_playing_position = ui::layout::placement_from_str(&app.config.now_playing_box_location)
+        .unwrap_or(ui::layout::Placement::Right);
+    let lyrics_position =
+        ui::layout::placement_from_str(&app.config.lyrics_location).unwrap_or(queue_position);
+    ui::layout::now_playing_rects(
+        center,
+        show_art,
+        art_position,
+        queue_position,
+        app.config.nowplaying_left_width_percent,
+        app.config.nowplaying_vertical_fill_top_percent,
+        app.visualizer_visible,
+        visualizer_position,
+        app.lyrics_visible,
+        lyrics_position,
+        boxed_np,
+        now_playing_position,
+    )
+}
+
+fn handle_nowplaying_wheel(x: u16, y: u16, dir: Direction, app: &mut App, center: Rect) {
+    let rects = now_playing_tab_rects(app, center);
+    let Some(queue_area) = rects.queue else {
         return;
     };
-
-    app.browser_focus = hit.focus;
-    app.navigate_browser_wheel(dir);
+    if !rect_contains(queue_area, x, y) {
+        return;
+    }
+    app.navigate_np_sidebar_wheel(dir);
 }
 
 // ── Mouse click handler ───────────────────────────────────────────────────────
@@ -2406,42 +2547,14 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             }
         }
         Tab::NowPlaying => {
-            let show_art = app.config.nowplaying_show_art;
             let boxed_np = app
                 .config
                 .now_playing_layout
                 .trim()
                 .eq_ignore_ascii_case("boxed");
+            let rects = now_playing_tab_rects(app, center);
 
             if boxed_np {
-                let art_position =
-                    ui::layout::placement_from_str(&app.config.nowplaying_art_position)
-                        .unwrap_or(ui::layout::Placement::Left);
-                let queue_position =
-                    ui::layout::placement_from_str(&app.config.nowplaying_queue_position)
-                        .unwrap_or(ui::layout::Placement::Right);
-                let visualizer_position =
-                    ui::layout::placement_from_str(&app.config.visualizer_location)
-                        .unwrap_or(ui::layout::Placement::Right);
-                let now_playing_position =
-                    ui::layout::placement_from_str(&app.config.now_playing_box_location)
-                        .unwrap_or(ui::layout::Placement::Right);
-                let lyrics_position = ui::layout::placement_from_str(&app.config.lyrics_location)
-                    .unwrap_or(queue_position);
-                let rects = ui::layout::now_playing_rects(
-                    center,
-                    show_art,
-                    art_position,
-                    queue_position,
-                    app.config.nowplaying_left_width_percent,
-                    app.config.nowplaying_vertical_fill_top_percent,
-                    app.visualizer_visible,
-                    visualizer_position,
-                    app.lyrics_visible,
-                    lyrics_position,
-                    boxed_np,
-                    now_playing_position,
-                );
                 if let Some(pane) = rects.now_playing {
                     let chrome = ui::now_playing::interaction_rects_pane(app, pane);
                     if let Some(controls_area) = chrome.controls {
@@ -2488,33 +2601,6 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                 }
             }
 
-            let art_position = ui::layout::placement_from_str(&app.config.nowplaying_art_position)
-                .unwrap_or(ui::layout::Placement::Left);
-            let queue_position =
-                ui::layout::placement_from_str(&app.config.nowplaying_queue_position)
-                    .unwrap_or(ui::layout::Placement::Right);
-            let visualizer_position =
-                ui::layout::placement_from_str(&app.config.visualizer_location)
-                    .unwrap_or(ui::layout::Placement::Right);
-            let now_playing_position =
-                ui::layout::placement_from_str(&app.config.now_playing_box_location)
-                    .unwrap_or(ui::layout::Placement::Right);
-            let lyrics_position = ui::layout::placement_from_str(&app.config.lyrics_location)
-                .unwrap_or(queue_position);
-            let rects = ui::layout::now_playing_rects(
-                center,
-                show_art,
-                art_position,
-                queue_position,
-                app.config.nowplaying_left_width_percent,
-                app.config.nowplaying_vertical_fill_top_percent,
-                app.visualizer_visible,
-                visualizer_position,
-                app.lyrics_visible,
-                lyrics_position,
-                boxed_np,
-                now_playing_position,
-            );
             let Some(queue_area) = rects.queue else {
                 return;
             };

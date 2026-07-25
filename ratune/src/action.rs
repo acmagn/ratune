@@ -80,10 +80,8 @@ pub enum Action {
     RateSong(u8),
     /// Toggle the favorites (starred) browser overlay.
     ToggleFavoritesOverlay,
-    /// Favorites overlay: scroll up.
-    FavoritesScrollUp,
-    /// Favorites overlay: scroll down.
-    FavoritesScrollDown,
+    /// Favorites overlay: move selection (j/k, PageUp/Down, gg/G).
+    FavoritesNavigate(Direction),
     /// Favorites overlay: focus category list.
     FavoritesFocusCategories,
     /// Favorites overlay: focus items list.
@@ -135,10 +133,8 @@ pub enum Action {
     HomeAlbumAddToQueue,
     /// Toggle the playlist browser overlay.
     TogglePlaylistOverlay,
-    /// Scroll up within the playlist overlay (list or tracks pane).
-    PlaylistScrollUp,
-    /// Scroll down within the playlist overlay (list or tracks pane).
-    PlaylistScrollDown,
+    /// Move selection within the playlist overlay (list or tracks pane).
+    PlaylistNavigate(Direction),
     /// Move focus to the tracks pane of the playlist overlay.
     PlaylistFocusTracks,
     /// Move focus back to the playlist list pane of the overlay.
@@ -165,10 +161,8 @@ pub enum Action {
     PlaylistPickerSelect,
     /// Cancel and close the playlist picker.
     PlaylistPickerCancel,
-    /// Scroll up in the playlist picker.
-    PlaylistPickerScrollUp,
-    /// Scroll down in the playlist picker.
-    PlaylistPickerScrollDown,
+    /// Move selection in the playlist picker.
+    PlaylistPickerNavigate(Direction),
     /// Confirm the current text-input field (create / rename).
     PlaylistInputConfirm,
     /// Cancel the current text-input field.

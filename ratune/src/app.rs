@@ -36,6 +36,23 @@ use ratune_subsonic::LyricLine;
 
 // ── Sizing helper (used in dispatch for scroll clamping) ──────────────────────
 
+/// Move a list selection index by one row, one page, or to top/bottom.
+fn move_list_index(cur: usize, len: usize, page: usize, dir: Direction) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let max = len - 1;
+    let page = page.max(1);
+    match dir {
+        Direction::Up => cur.saturating_sub(1),
+        Direction::Down => (cur + 1).min(max),
+        Direction::Top => 0,
+        Direction::Bottom => max,
+        Direction::PageUp => cur.saturating_sub(page),
+        Direction::PageDown => (cur + page).min(max),
+    }
+}
+
 /// Map raw engine/network errors to a short status-bar line (no multiline chains).
 fn humanize_playback_error(message: &str) -> String {
     let raw = message
@@ -476,6 +493,8 @@ pub struct PlaylistPicker {
     /// `true` while a `getPlaylists` fetch is in flight.
     pub loading: bool,
     pub scroll: usize,
+    /// Visible rows in the picker list (excluding borders); updated on render.
+    pub viewport_rows: usize,
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -5635,8 +5654,7 @@ impl App {
                 }
             }
             Action::TogglePlaylistOverlay
-            | Action::PlaylistScrollUp
-            | Action::PlaylistScrollDown
+            | Action::PlaylistNavigate(_)
             | Action::PlaylistFocusTracks
             | Action::PlaylistFocusList
             | Action::PlaylistPlayAll
@@ -5652,8 +5670,7 @@ impl App {
             | Action::BrowserAddToPlaylist
             | Action::PlaylistPickerSelect
             | Action::PlaylistPickerCancel
-            | Action::PlaylistPickerScrollUp
-            | Action::PlaylistPickerScrollDown
+            | Action::PlaylistPickerNavigate(_)
             | Action::PlaylistInputConfirm
             | Action::PlaylistInputCancel
             | Action::PlaylistInputChar(_)
@@ -5662,8 +5679,7 @@ impl App {
                 self.handle_playlist_mutation(action);
             }
             Action::ToggleFavoritesOverlay
-            | Action::FavoritesScrollUp
-            | Action::FavoritesScrollDown
+            | Action::FavoritesNavigate(_)
             | Action::FavoritesFocusCategories
             | Action::FavoritesFocusItems
             | Action::FavoritesPlay
@@ -6878,39 +6894,42 @@ impl App {
         self.handle_navigate_browser(dir, steps);
     }
 
+    /// Mouse wheel over the Now Playing sidebar (library queue or radio station list).
+    pub fn navigate_np_sidebar_wheel(&mut self, dir: Direction) {
+        let steps = self.config.browse_mouse_wheel_scroll_lines.max(1);
+        for _ in 0..steps {
+            if self.np_radio_pane_available() {
+                match self.np_pane_focus {
+                    NowPlayingPaneFocus::Radio => self.handle_navigate_radio(dir),
+                    NowPlayingPaneFocus::Queue if !self.queue.songs.is_empty() => {
+                        self.handle_navigate_queue(dir);
+                    }
+                    NowPlayingPaneFocus::Queue => {}
+                }
+            } else if !self.queue.songs.is_empty() {
+                self.handle_navigate_queue(dir);
+            }
+        }
+    }
+
     pub fn navigate_playlist_wheel(&mut self, dir: Direction) {
         let steps = self.config.browse_mouse_wheel_scroll_lines.max(1);
         for _ in 0..steps {
-            let action = match dir {
-                Direction::Up => Action::PlaylistScrollUp,
-                Direction::Down => Action::PlaylistScrollDown,
-                _ => break,
-            };
-            self.handle_playlist_action(action);
+            self.handle_playlist_action(Action::PlaylistNavigate(dir));
         }
     }
 
     pub fn navigate_favorites_wheel(&mut self, dir: Direction) {
         let steps = self.config.browse_mouse_wheel_scroll_lines.max(1);
         for _ in 0..steps {
-            let action = match dir {
-                Direction::Up => Action::FavoritesScrollUp,
-                Direction::Down => Action::FavoritesScrollDown,
-                _ => break,
-            };
-            self.handle_favorites_action(action);
+            self.handle_favorites_action(Action::FavoritesNavigate(dir));
         }
     }
 
     pub fn navigate_playlist_picker_wheel(&mut self, dir: Direction) {
         let steps = self.config.browse_mouse_wheel_scroll_lines.max(1);
         for _ in 0..steps {
-            let action = match dir {
-                Direction::Up => Action::PlaylistPickerScrollUp,
-                Direction::Down => Action::PlaylistPickerScrollDown,
-                _ => break,
-            };
-            self.handle_playlist_mutation(action);
+            self.handle_playlist_mutation(Action::PlaylistPickerNavigate(dir));
         }
     }
 
@@ -7267,36 +7286,39 @@ impl App {
                     }
                 }
             }
-            Action::PlaylistScrollUp => match self.playlist_overlay.focus {
+            Action::PlaylistNavigate(dir) => match self.playlist_overlay.focus {
                 PlaylistFocus::List => {
-                    self.playlist_overlay.selected_playlist_index = self
-                        .playlist_overlay
-                        .selected_playlist_index
-                        .saturating_sub(1);
-                    self.playlist_overlay.selected_track_index = 0;
-                    self.schedule_playlist_tracks_for_selection();
-                }
-                PlaylistFocus::Tracks => {
-                    self.playlist_overlay.selected_track_index =
-                        self.playlist_overlay.selected_track_index.saturating_sub(1);
-                }
-            },
-            Action::PlaylistScrollDown => match self.playlist_overlay.focus {
-                PlaylistFocus::List => {
-                    if let LoadingState::Loaded(ref playlists) = self.playlist_overlay.playlists {
-                        let max = playlists.len().saturating_sub(1);
-                        self.playlist_overlay.selected_playlist_index =
-                            (self.playlist_overlay.selected_playlist_index + 1).min(max);
+                    let len = match &self.playlist_overlay.playlists {
+                        LoadingState::Loaded(playlists) => playlists.len(),
+                        _ => 0,
+                    };
+                    if len == 0 {
+                        return;
+                    }
+                    let page = self.playlist_overlay.list_viewport_rows.max(1);
+                    let next = move_list_index(
+                        self.playlist_overlay.selected_playlist_index,
+                        len,
+                        page,
+                        dir,
+                    );
+                    if next != self.playlist_overlay.selected_playlist_index {
+                        self.playlist_overlay.selected_playlist_index = next;
                         self.playlist_overlay.selected_track_index = 0;
                         self.schedule_playlist_tracks_for_selection();
                     }
                 }
                 PlaylistFocus::Tracks => {
-                    if let LoadingState::Loaded(ref songs) = self.playlist_overlay.tracks {
-                        let max = songs.len().saturating_sub(1);
-                        self.playlist_overlay.selected_track_index =
-                            (self.playlist_overlay.selected_track_index + 1).min(max);
+                    let len = match &self.playlist_overlay.tracks {
+                        LoadingState::Loaded(songs) => songs.len(),
+                        _ => 0,
+                    };
+                    if len == 0 {
+                        return;
                     }
+                    let page = self.playlist_overlay.tracks_viewport_rows.max(1);
+                    self.playlist_overlay.selected_track_index =
+                        move_list_index(self.playlist_overlay.selected_track_index, len, page, dir);
                 }
             },
             Action::PlaylistFocusTracks => {
@@ -7415,32 +7437,30 @@ impl App {
                     }
                 }
             }
-            Action::FavoritesScrollUp => match self.favorites_overlay.focus {
+            Action::FavoritesNavigate(dir) => match self.favorites_overlay.focus {
                 FavoritesFocus::Categories => {
-                    self.favorites_overlay.selected_category_index = self
-                        .favorites_overlay
-                        .selected_category_index
-                        .saturating_sub(1);
-                    self.favorites_overlay.selected_item_index = 0;
-                    self.favorites_overlay.sync_category_from_index();
+                    let len = FavoritesCategory::ALL.len();
+                    let page = self.favorites_overlay.categories_viewport_rows.max(1);
+                    let next = move_list_index(
+                        self.favorites_overlay.selected_category_index,
+                        len,
+                        page,
+                        dir,
+                    );
+                    if next != self.favorites_overlay.selected_category_index {
+                        self.favorites_overlay.selected_category_index = next;
+                        self.favorites_overlay.selected_item_index = 0;
+                        self.favorites_overlay.sync_category_from_index();
+                    }
                 }
                 FavoritesFocus::Items => {
+                    let len = self.favorites_overlay.item_count();
+                    if len == 0 {
+                        return;
+                    }
+                    let page = self.favorites_overlay.items_viewport_rows.max(1);
                     self.favorites_overlay.selected_item_index =
-                        self.favorites_overlay.selected_item_index.saturating_sub(1);
-                }
-            },
-            Action::FavoritesScrollDown => match self.favorites_overlay.focus {
-                FavoritesFocus::Categories => {
-                    let max = FavoritesCategory::ALL.len().saturating_sub(1);
-                    self.favorites_overlay.selected_category_index =
-                        (self.favorites_overlay.selected_category_index + 1).min(max);
-                    self.favorites_overlay.selected_item_index = 0;
-                    self.favorites_overlay.sync_category_from_index();
-                }
-                FavoritesFocus::Items => {
-                    let max = self.favorites_overlay.item_count().saturating_sub(1);
-                    self.favorites_overlay.selected_item_index =
-                        (self.favorites_overlay.selected_item_index + 1).min(max);
+                        move_list_index(self.favorites_overlay.selected_item_index, len, page, dir);
                 }
             },
             Action::FavoritesFocusCategories => {
@@ -7665,6 +7685,7 @@ impl App {
                                 song_id,
                                 loading: false,
                                 scroll: 0,
+                                viewport_rows: 8,
                             });
                         }
                         _ => {
@@ -7674,6 +7695,7 @@ impl App {
                                 song_id,
                                 loading: true,
                                 scroll: 0,
+                                viewport_rows: 8,
                             });
                             self.spawn_fetch_playlists_for_picker();
                         }
@@ -7694,15 +7716,14 @@ impl App {
             Action::PlaylistPickerCancel => {
                 self.playlist_picker = None;
             }
-            Action::PlaylistPickerScrollUp => {
+            Action::PlaylistPickerNavigate(dir) => {
                 if let Some(ref mut picker) = self.playlist_picker {
-                    picker.selected_index = picker.selected_index.saturating_sub(1);
-                }
-            }
-            Action::PlaylistPickerScrollDown => {
-                if let Some(ref mut picker) = self.playlist_picker {
-                    let max = picker.playlists.len().saturating_sub(1);
-                    picker.selected_index = (picker.selected_index + 1).min(max);
+                    let len = picker.playlists.len();
+                    if len == 0 {
+                        return;
+                    }
+                    let page = picker.viewport_rows.max(1);
+                    picker.selected_index = move_list_index(picker.selected_index, len, page, dir);
                 }
             }
             _ => {}
