@@ -1,7 +1,7 @@
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use ratatui_image::thread::ThreadProtocol;
 use ratatui_image::StatefulImage;
@@ -157,7 +157,7 @@ fn render_art_placeholder(app: &mut App, frame: &mut Frame, area: Rect) {
         .filter(|s| App::is_radio_song(s))
         .map(|s| format!(" {} ", s.title))
         .unwrap_or_else(|| " Album Art ".to_string());
-    let block = crate::ui::kitty_art::album_art_block()
+    let block = crate::ui::kitty_art::album_art_block(t.border_set)
         .title(art_title)
         .title_style(Style::default().fg(t.dimmed).add_modifier(Modifier::BOLD))
         .border_style(Style::default().fg(t.border));
@@ -193,7 +193,7 @@ fn render_visualizer_pane(app: &App, frame: &mut Frame, area: Rect) {
         .title(" Visualizer ")
         .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(t.border_set)
         .border_style(Style::default().fg(accent))
         .style(style_with_bg(t.surface));
 
@@ -228,7 +228,7 @@ fn render_lyrics_pane(app: &App, frame: &mut Frame, area: Rect) {
         .title(" Lyrics ")
         .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(t.border_set)
         .border_style(Style::default().fg(accent))
         .style(style_with_bg(t.surface));
 

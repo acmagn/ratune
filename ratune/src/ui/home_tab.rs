@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use ratatui_image::picker::ProtocolType;
 use ratatui_image::StatefulImage;
@@ -56,7 +56,7 @@ fn titled_block<'a>(title: &'a str, is_active: bool, accent: Color, theme: &Them
     Block::default()
         .style(style_with_bg(theme.surface))
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(theme.border_set)
         .border_style(border_style)
         .title(Span::styled(title, title_style))
 }

@@ -13,9 +13,12 @@ use crate::theme::{style_with_bg, Theme};
 ///
 /// Active tab: `accent` background, `Color::Black` foreground, bold.
 /// Inactive tabs: `theme.dimmed` foreground on `theme.tab_bar`.
-/// Separator: ` │ ` in `theme.dimmed`.
+/// Separator: `theme.icons.tab_separator` (default ` │ `) in `theme.dimmed`.
 pub fn render_tab_bar(f: &mut Frame, area: Rect, active_tab: Tab, accent: Color, theme: &Theme) {
-    let separator = Span::styled(" │ ", Style::default().fg(theme.dimmed));
+    let separator = Span::styled(
+        theme.icons.tab_separator.clone(),
+        Style::default().fg(theme.dimmed),
+    );
 
     let label_home = " Home ";
     let label_browser = " Browse ";

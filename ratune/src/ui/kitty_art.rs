@@ -12,7 +12,8 @@ use std::io::{self, Write};
 use anyhow::Result;
 use image::Rgba;
 use ratatui::layout::Rect;
-use ratatui::widgets::{Block, BorderType, Borders};
+use ratatui::symbols::border;
+use ratatui::widgets::{Block, Borders};
 
 // ── Detection ──────────────────────────────────────────────────────────────────
 
@@ -432,15 +433,18 @@ fn placeholder_row(cols: u16, image_id: u32, row_index: usize) -> String {
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 /// Bordered shell for the Now Playing art column (no title — set at render time).
-pub fn album_art_block() -> Block<'static> {
+pub fn album_art_block(border_set: border::Set) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
+        .border_set(border_set)
 }
 
 /// Content rectangle inside the album-art bordered box (matches ratatui’s [`Block::inner`]).
 pub fn album_art_placeholder_inner(outer: Rect) -> Rect {
-    album_art_block().title(" Album Art ").inner(outer)
+    // Border thickness is always one cell for every supported set; glyphs don't change layout.
+    album_art_block(border::PLAIN)
+        .title(" Album Art ")
+        .inner(outer)
 }
 
 /// Cached resize + zlib for Now Playing Kitty APC (image id 1).

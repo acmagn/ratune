@@ -10,8 +10,93 @@
 ///   background (terminal transparency / default bg).
 use image::Rgba;
 use ratatui::style::{Color, Style};
+use ratatui::symbols::border;
+use ratatui::widgets::BorderType;
 
-use crate::config::{ThemePreset, ThemeSection};
+use crate::config::{ThemeBorderSource, ThemeIconSection, ThemePreset, ThemeSection};
+
+/// ASCII-friendly box borders (`+`, `-`, `|`) for fonts without box-drawing glyphs.
+pub const ASCII_BORDER_SET: border::Set = border::Set {
+    top_left: "+",
+    top_right: "+",
+    bottom_left: "+",
+    bottom_right: "+",
+    vertical_left: "|",
+    vertical_right: "|",
+    horizontal_top: "-",
+    horizontal_bottom: "-",
+};
+
+/// Resolved UI glyphs from `[theme.icon]` (owned strings; defaults match prior hardcoding).
+#[derive(Debug, Clone)]
+pub struct ThemeIcons {
+    /// Shown while a track is playing.
+    pub playing: String,
+    /// Shown while paused.
+    pub paused: String,
+    /// Shown when nothing is loaded.
+    pub stopped: String,
+    pub next_song: String,
+    pub previous_song: String,
+    pub mode_shuffle: String,
+    pub mode_loop: String,
+    /// Favorite / starred marker (without trailing space).
+    pub favorite: String,
+    /// Full tab separator including spaces (e.g. `" │ "`).
+    pub tab_separator: String,
+    pub online: String,
+    pub offline: String,
+    /// Radio live indicator glyph (without the ` LIVE` suffix).
+    pub live: String,
+}
+
+impl Default for ThemeIcons {
+    fn default() -> Self {
+        Self {
+            playing: "( ⏸ )".into(),
+            paused: "( ▶ )".into(),
+            stopped: "▶".into(),
+            next_song: "⏭".into(),
+            previous_song: "⏮".into(),
+            mode_shuffle: "⇄".into(),
+            mode_loop: "↻".into(),
+            favorite: "★".into(),
+            tab_separator: " │ ".into(),
+            online: "●".into(),
+            offline: "○".into(),
+            live: "●".into(),
+        }
+    }
+}
+
+impl ThemeIcons {
+    pub fn from_section(sec: &ThemeIconSection) -> Self {
+        let d = Self::default();
+        Self {
+            playing: sec.playing.clone().unwrap_or(d.playing),
+            paused: sec.paused.clone().unwrap_or(d.paused),
+            stopped: sec.stopped.clone().unwrap_or(d.stopped),
+            next_song: sec.next_song.clone().unwrap_or(d.next_song),
+            previous_song: sec.previous_song.clone().unwrap_or(d.previous_song),
+            mode_shuffle: sec.mode_shuffle.clone().unwrap_or(d.mode_shuffle),
+            mode_loop: sec.mode_loop.clone().unwrap_or(d.mode_loop),
+            favorite: sec.favorite.clone().unwrap_or(d.favorite),
+            tab_separator: sec.tab_separator.clone().unwrap_or(d.tab_separator),
+            online: sec.online.clone().unwrap_or(d.online),
+            offline: sec.offline.clone().unwrap_or(d.offline),
+            live: sec.live.clone().unwrap_or(d.live),
+        }
+    }
+
+    /// `"★ "` when favorite is non-empty, else `""`.
+    pub fn favorite_prefix(&self) -> String {
+        if self.favorite.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", self.favorite)
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -36,6 +121,11 @@ pub struct Theme {
     pub border_active: Color,
     /// Whether to use the dynamic accent extracted from album art.
     pub dynamic: bool,
+    /// Transport / chrome glyphs from `[theme.icon]`.
+    pub icons: ThemeIcons,
+    /// Pane box-drawing set from `[theme.border_lines]`
+    /// (legacy: flat `[theme].border_*` / `[theme.icon].border_*`).
+    pub border_set: border::Set,
 }
 
 impl Theme {
@@ -68,6 +158,8 @@ impl Theme {
                     border: Color::Indexed(8),
                     border_active: Color::Indexed(4),
                     dynamic: false,
+                    icons: ThemeIcons::default(),
+                    border_set: BorderType::Plain.to_border_set(),
                 }
             }
             ThemePreset::Static => {
@@ -84,6 +176,8 @@ impl Theme {
                     border: Color::Rgb(37, 37, 37),
                     border_active: Color::Rgb(58, 58, 58),
                     dynamic: false,
+                    icons: ThemeIcons::default(),
+                    border_set: BorderType::Plain.to_border_set(),
                 }
             }
             ThemePreset::Dynamic => {
@@ -100,9 +194,14 @@ impl Theme {
                     border: Color::Rgb(37, 37, 37),
                     border_active: Color::Rgb(58, 58, 58),
                     dynamic: true,
+                    icons: ThemeIcons::default(),
+                    border_set: BorderType::Plain.to_border_set(),
                 }
             }
         };
+
+        theme.icons = ThemeIcons::from_section(&sec.icon);
+        theme.border_set = resolve_border_set(&sec.border_source());
 
         let chrome_default = theme.background;
 
@@ -132,6 +231,62 @@ impl Theme {
         } else {
             self.accent
         }
+    }
+}
+
+fn border_type_preset(name: &str) -> Option<border::Set> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "plain" | "normal" | "single" => Some(BorderType::Plain.to_border_set()),
+        "rounded" | "round" => Some(BorderType::Rounded.to_border_set()),
+        "double" => Some(BorderType::Double.to_border_set()),
+        "thick" | "bold" => Some(BorderType::Thick.to_border_set()),
+        "ascii" | "plus" => Some(ASCII_BORDER_SET),
+        _ => None,
+    }
+}
+
+fn leak_glyph(s: &str) -> &'static str {
+    Box::leak(s.to_owned().into_boxed_str())
+}
+
+fn resolve_border_set(sec: &ThemeBorderSource<'_>) -> border::Set {
+    let base = sec
+        .border_type
+        .and_then(border_type_preset)
+        .unwrap_or_else(|| BorderType::Plain.to_border_set());
+
+    let has_override = sec.top_left.is_some()
+        || sec.top_right.is_some()
+        || sec.bottom_left.is_some()
+        || sec.bottom_right.is_some()
+        || sec.vertical.is_some()
+        || sec.horizontal.is_some();
+
+    if !has_override {
+        return base;
+    }
+
+    let vert = sec.vertical.map(leak_glyph).unwrap_or(base.vertical_left);
+    let horiz = sec
+        .horizontal
+        .map(leak_glyph)
+        .unwrap_or(base.horizontal_top);
+
+    border::Set {
+        top_left: sec.top_left.map(leak_glyph).unwrap_or(base.top_left),
+        top_right: sec.top_right.map(leak_glyph).unwrap_or(base.top_right),
+        bottom_left: sec.bottom_left.map(leak_glyph).unwrap_or(base.bottom_left),
+        bottom_right: sec
+            .bottom_right
+            .map(leak_glyph)
+            .unwrap_or(base.bottom_right),
+        vertical_left: vert,
+        vertical_right: sec.vertical.map(leak_glyph).unwrap_or(base.vertical_right),
+        horizontal_top: horiz,
+        horizontal_bottom: sec
+            .horizontal
+            .map(leak_glyph)
+            .unwrap_or(base.horizontal_bottom),
     }
 }
 
@@ -294,6 +449,90 @@ mod tests {
         assert_eq!(t.background, Color::Rgb(0, 0, 0));
         assert_eq!(t.tab_bar, Color::Reset);
         assert_eq!(t.status_bar, Color::Rgb(0x11, 0x11, 0x11));
+    }
+
+    #[test]
+    fn theme_icons_from_section_override() {
+        let sec = crate::config::ThemeSection {
+            icon: crate::config::ThemeIconSection {
+                playing: Some("||".into()),
+                paused: Some("( > )".into()),
+                stopped: Some(">".into()),
+                next_song: Some(">>".into()),
+                previous_song: Some("<<".into()),
+                mode_shuffle: Some("><".into()),
+                mode_loop: Some("o".into()),
+                favorite: Some("*".into()),
+                tab_separator: Some(" | ".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert_eq!(t.icons.playing, "||");
+        assert_eq!(t.icons.paused, "( > )");
+        assert_eq!(t.icons.stopped, ">");
+        assert_eq!(t.icons.next_song, ">>");
+        assert_eq!(t.icons.previous_song, "<<");
+        assert_eq!(t.icons.mode_shuffle, "><");
+        assert_eq!(t.icons.mode_loop, "o");
+        assert_eq!(t.icons.favorite, "*");
+        assert_eq!(t.icons.tab_separator, " | ");
+        assert_eq!(t.icons.favorite_prefix(), "* ");
+    }
+
+    #[test]
+    fn theme_border_type_on_theme_section() {
+        let sec = crate::config::ThemeSection {
+            border_lines: crate::config::ThemeBorderLinesSection {
+                style: Some("ascii".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert_eq!(t.border_set, ASCII_BORDER_SET);
+    }
+
+    #[test]
+    fn theme_border_type_legacy_flat_theme_fallback() {
+        let sec = crate::config::ThemeSection {
+            border_type: Some("ascii".into()),
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert_eq!(t.border_set, ASCII_BORDER_SET);
+    }
+
+    #[test]
+    fn theme_border_type_legacy_icon_fallback() {
+        let sec = crate::config::ThemeSection {
+            icon: crate::config::ThemeIconSection {
+                border_type: Some("ascii".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert_eq!(t.border_set, ASCII_BORDER_SET);
+    }
+
+    #[test]
+    fn theme_border_lines_prefers_over_legacy() {
+        let sec = crate::config::ThemeSection {
+            border_lines: crate::config::ThemeBorderLinesSection {
+                style: Some("ascii".into()),
+                ..Default::default()
+            },
+            border_type: Some("double".into()),
+            icon: crate::config::ThemeIconSection {
+                border_type: Some("thick".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert_eq!(t.border_set, ASCII_BORDER_SET);
     }
 
     #[test]
