@@ -127,7 +127,7 @@ pub struct KeybindsSection {
     pub toggle_visualizer: Option<String>,
     /// Browser: playlist overlay. Default: Shift+p
     pub playlist_overlay: Option<String>,
-    /// Browser: add track to playlist. Default: >
+    /// Browser: add focused track (or all tracks of focused album) to a playlist. Default: >
     pub browser_add_to_playlist: Option<String>,
     /// Playlist overlay (tracks pane): remove highlighted track. Default: <
     pub remove_from_playlist: Option<String>,
