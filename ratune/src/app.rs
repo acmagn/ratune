@@ -482,14 +482,18 @@ enum AddAllMode {
 
 // ── PlaylistPicker ────────────────────────────────────────────────────────────
 
-/// Floating picker shown when the user wants to add a browser track to a
+/// Floating picker shown when the user wants to add browser track(s) to a
 /// playlist.  Populated lazily from `getPlaylists`.
 #[derive(Debug)]
 pub struct PlaylistPicker {
     pub playlists: Vec<ratune_subsonic::Playlist>,
     pub selected_index: usize,
-    /// The song ID to be added to whichever playlist the user selects.
-    pub song_id: String,
+    /// Song IDs to append (may be empty when `album_id` is set and tracks are
+    /// still loading — resolved on confirm).
+    pub song_ids: Vec<String>,
+    /// When set and `song_ids` is empty at confirm time, fetch this album and
+    /// append all of its tracks.
+    pub album_id: Option<String>,
     /// `true` while a `getPlaylists` fetch is in flight.
     pub loading: bool,
     pub scroll: usize,
@@ -7669,37 +7673,17 @@ impl App {
                 }
             }
             Action::BrowserAddToPlaylist => {
-                let song = if self.browse_files() {
-                    self.folders
-                        .current_preview_track(self.browser_column_filter(BrowserColumn::Tracks))
-                } else {
-                    self.library.current_track()
-                };
-                if let Some(song) = song {
-                    let song_id = song.id.clone();
-                    match &self.playlist_overlay.playlists {
-                        LoadingState::Loaded(playlists) => {
-                            self.playlist_picker = Some(PlaylistPicker {
-                                playlists: playlists.clone(),
-                                selected_index: 0,
-                                song_id,
-                                loading: false,
-                                scroll: 0,
-                                viewport_rows: 8,
-                            });
-                        }
-                        _ => {
-                            self.playlist_picker = Some(PlaylistPicker {
-                                playlists: vec![],
-                                selected_index: 0,
-                                song_id,
-                                loading: true,
-                                scroll: 0,
-                                viewport_rows: 8,
-                            });
-                            self.spawn_fetch_playlists_for_picker();
-                        }
+                let (song_ids, album_id) = self.playlist_add_selection();
+                if let Some(ref album_id) = album_id {
+                    if !self.library.tracks.contains_key(album_id) {
+                        self.library
+                            .tracks
+                            .insert(album_id.clone(), LoadingState::Loading);
+                        self.fetch_tracks(album_id.clone());
                     }
+                }
+                if !song_ids.is_empty() || album_id.is_some() {
+                    self.open_playlist_picker(song_ids, album_id);
                 }
             }
             Action::PlaylistPickerSelect => {
@@ -7707,8 +7691,23 @@ impl App {
                     if let Some(playlist) = picker.playlists.get(picker.selected_index) {
                         let playlist_id = playlist.id.clone();
                         let playlist_name = playlist.name.clone();
-                        let song_id = picker.song_id.clone();
-                        self.spawn_add_track_to_playlist(playlist_id, playlist_name, song_id);
+                        let mut song_ids = picker.song_ids.clone();
+                        let album_id = picker.album_id.clone();
+                        // Tracks may have finished loading while the picker was open.
+                        if song_ids.is_empty() {
+                            if let Some(ref aid) = album_id {
+                                if let Some(LoadingState::Loaded(songs)) =
+                                    self.library.tracks.get(aid)
+                                {
+                                    song_ids = sorted_album_song_ids(songs);
+                                }
+                            }
+                        }
+                        if !song_ids.is_empty() {
+                            self.spawn_add_tracks_to_playlist(playlist_id, playlist_name, song_ids);
+                        } else if let Some(album_id) = album_id {
+                            self.spawn_add_album_to_playlist(playlist_id, playlist_name, album_id);
+                        }
                     }
                 }
                 self.playlist_picker = None;
@@ -7820,19 +7819,77 @@ impl App {
         });
     }
 
-    fn spawn_add_track_to_playlist(
+    /// Resolve what `BrowserAddToPlaylist` should append: a single track, or
+    /// every track of the focused album (as song IDs and/or an album id to fetch).
+    fn playlist_add_selection(&self) -> (Vec<String>, Option<String>) {
+        if self.browse_files() {
+            let song_ids = self
+                .folders
+                .current_preview_track(self.browser_column_filter(BrowserColumn::Tracks))
+                .map(|s| vec![s.id.clone()])
+                .unwrap_or_default();
+            return (song_ids, None);
+        }
+        if self.browser_focus == BrowserColumn::Albums {
+            let Some(album) = self.library.current_album() else {
+                return (Vec::new(), None);
+            };
+            let album_id = album.id.clone();
+            if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
+                return (sorted_album_song_ids(songs), None);
+            }
+            return (Vec::new(), Some(album_id));
+        }
+        let song_ids = self
+            .library
+            .current_track()
+            .map(|s| vec![s.id.clone()])
+            .unwrap_or_default();
+        (song_ids, None)
+    }
+
+    fn open_playlist_picker(&mut self, song_ids: Vec<String>, album_id: Option<String>) {
+        match &self.playlist_overlay.playlists {
+            LoadingState::Loaded(playlists) => {
+                self.playlist_picker = Some(PlaylistPicker {
+                    playlists: playlists.clone(),
+                    selected_index: 0,
+                    song_ids,
+                    album_id,
+                    loading: false,
+                    scroll: 0,
+                    viewport_rows: 8,
+                });
+            }
+            _ => {
+                self.playlist_picker = Some(PlaylistPicker {
+                    playlists: vec![],
+                    selected_index: 0,
+                    song_ids,
+                    album_id,
+                    loading: true,
+                    scroll: 0,
+                    viewport_rows: 8,
+                });
+                self.spawn_fetch_playlists_for_picker();
+            }
+        }
+    }
+
+    fn spawn_add_tracks_to_playlist(
         &self,
         playlist_id: String,
         playlist_name: String,
-        song_id: String,
+        song_ids: Vec<String>,
     ) {
-        if !self.remote_available() {
+        if !self.remote_available() || song_ids.is_empty() {
             return;
         }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
-            match client.add_track_to_playlist(&playlist_id, &song_id).await {
+            let refs: Vec<&str> = song_ids.iter().map(|s| s.as_str()).collect();
+            match client.add_tracks_to_playlist(&playlist_id, &refs).await {
                 Ok(()) => {
                     let _ = tx
                         .send(LibraryUpdate::PlaylistTrackAdded {
@@ -7841,8 +7898,66 @@ impl App {
                         })
                         .await;
                 }
-                Err(e) => eprintln!("add_track_to_playlist failed: {e}"),
+                Err(e) => eprintln!("add_tracks_to_playlist failed: {e}"),
             }
         });
     }
+
+    /// Fetch an album's tracks, then append them all to the playlist.
+    fn spawn_add_album_to_playlist(
+        &self,
+        playlist_id: String,
+        playlist_name: String,
+        album_id: String,
+    ) {
+        if !self.remote_available() {
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let mut songs = match client.get_album(&album_id).await {
+                Ok(album) => album.song,
+                Err(e) => {
+                    eprintln!("add_album_to_playlist get_album({album_id}): {e}");
+                    return;
+                }
+            };
+            songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
+            let song_ids: Vec<String> = songs.into_iter().map(|s| s.id).collect();
+            if song_ids.is_empty() {
+                return;
+            }
+            let refs: Vec<&str> = song_ids.iter().map(|s| s.as_str()).collect();
+            match client.add_tracks_to_playlist(&playlist_id, &refs).await {
+                Ok(()) => {
+                    let _ = tx
+                        .send(LibraryUpdate::PlaylistTrackAdded {
+                            _playlist_id: playlist_id,
+                            playlist_name,
+                        })
+                        .await;
+                }
+                Err(e) => eprintln!("add_album_to_playlist failed: {e}"),
+            }
+        });
+    }
+}
+
+fn sorted_album_song_ids(songs: &[ratune_subsonic::Song]) -> Vec<String> {
+    let mut indexed: Vec<(u32, u32, &str)> = songs
+        .iter()
+        .map(|s| {
+            (
+                s.disc_number.unwrap_or(1),
+                s.track.unwrap_or(0),
+                s.id.as_str(),
+            )
+        })
+        .collect();
+    indexed.sort_by_key(|&(disc, track, _)| (disc, track));
+    indexed
+        .into_iter()
+        .map(|(_, _, id)| id.to_string())
+        .collect()
 }

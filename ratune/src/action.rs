@@ -155,7 +155,8 @@ pub enum Action {
     PlaylistRename,
     /// Remove the highlighted track from the current playlist.
     PlaylistRemoveTrack,
-    /// Open the playlist picker to add the focused browser track to a playlist.
+    /// Open the playlist picker to add the focused browser track (or all tracks
+    /// of the focused album) to a playlist.
     BrowserAddToPlaylist,
     /// Confirm selection in the playlist picker.
     PlaylistPickerSelect,

@@ -581,9 +581,19 @@ impl SubsonicClient {
 
     /// Append a single track to a playlist (`updatePlaylist` + `songIdToAdd`).
     pub async fn add_track_to_playlist(&self, playlist_id: &str, song_id: &str) -> Result<()> {
+        self.add_tracks_to_playlist(playlist_id, &[song_id]).await
+    }
+
+    /// Append one or more tracks to a playlist (`updatePlaylist` + repeated `songIdToAdd`).
+    pub async fn add_tracks_to_playlist(&self, playlist_id: &str, song_ids: &[&str]) -> Result<()> {
+        if song_ids.is_empty() {
+            return Ok(());
+        }
         let mut params = self.auth_params();
         params.push(("playlistId", playlist_id.to_string()));
-        params.push(("songIdToAdd", song_id.to_string()));
+        for song_id in song_ids {
+            params.push(("songIdToAdd", (*song_id).to_string()));
+        }
         let env: PingEnvelope = self
             .http
             .get(self.endpoint_url("updatePlaylist"))
