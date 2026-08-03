@@ -212,7 +212,7 @@ impl Default for CacheSection {
 /// Lyrics fetch settings from config.toml.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LyricsSection {
-    /// Where to fetch lyrics: `lrclib` (default) or `subsonic`.
+    /// Where to fetch lyrics: `lrclib` (default), `netease`, or `subsonic`.
     #[serde(default = "default_lyrics_source")]
     pub source: String,
     /// LRCLib server base URL (used when `source = "lrclib"`). Default: https://lrclib.net
@@ -251,6 +251,8 @@ pub enum LyricsSource {
     /// Public LRCLib API (default).
     #[default]
     LrcLib,
+    /// Unauthenticated NetEase Cloud Music web API.
+    Netease,
     /// Subsonic server (`getLyricsBySongId` / `getLyrics`).
     Subsonic,
 }
@@ -259,6 +261,7 @@ impl LyricsSource {
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "lrclib" | "lrc-lib" | "lrc" => Some(Self::LrcLib),
+            "netease" | "netease-cloud-music" | "163" => Some(Self::Netease),
             "subsonic" | "server" => Some(Self::Subsonic),
             _ => None,
         }
@@ -268,6 +271,7 @@ impl LyricsSource {
     pub fn cache_dir_name(self) -> &'static str {
         match self {
             Self::LrcLib => "lrclib",
+            Self::Netease => "netease",
             Self::Subsonic => "subsonic",
         }
     }
@@ -1434,7 +1438,7 @@ pub struct Config {
     pub cache_starred_albums: bool,
     /// Concurrent downloads when prefetching favorite tracks.
     pub cache_starred_parallelism: usize,
-    /// Where to fetch lyrics (`lrclib` or `subsonic`).
+    /// Where to fetch lyrics (`lrclib`, `netease`, or `subsonic`).
     pub lyrics_source: LyricsSource,
     /// LRCLib base URL when `lyrics_source` is `LrcLib`.
     pub lyrics_lrclib_url: String,
@@ -2086,7 +2090,7 @@ enabled     = true
 max_size_gb = 2   # maximum total cache size in gigabytes
 
 [lyrics]
-# source — "lrclib" (default) | "subsonic"
+# source — "lrclib" (default) | "netease" | "subsonic"
 source = "lrclib"
 # lrclib_url — LRCLib base URL when source = "lrclib". Default: https://lrclib.net
 # lrclib_url = "https://lrclib.net"
@@ -2688,8 +2692,10 @@ api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
     }
 
     #[test]
-    fn lyrics_source_parses_lrclib_and_subsonic() {
+    fn lyrics_source_parses_supported_values() {
         assert_eq!(LyricsSource::parse("lrclib"), Some(LyricsSource::LrcLib));
+        assert_eq!(LyricsSource::parse("netease"), Some(LyricsSource::Netease));
+        assert_eq!(LyricsSource::parse("163"), Some(LyricsSource::Netease));
         assert_eq!(
             LyricsSource::parse("subsonic"),
             Some(LyricsSource::Subsonic)
@@ -2700,6 +2706,7 @@ api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
     #[test]
     fn lyrics_source_cache_dir_names() {
         assert_eq!(LyricsSource::LrcLib.cache_dir_name(), "lrclib");
+        assert_eq!(LyricsSource::Netease.cache_dir_name(), "netease");
         assert_eq!(LyricsSource::Subsonic.cache_dir_name(), "subsonic");
     }
 

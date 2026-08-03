@@ -435,8 +435,9 @@ location = "right"
 # [lyrics] — lyrics fetch source
 # -----------------------------------------------------------------------------
 #
-# source — "lrclib" (default) | "subsonic"
+# source — "lrclib" (default) | "netease" | "subsonic"
 #   lrclib   — query LRCLib (public API; requests only when the lyrics pane is open)
+#   netease  — query NetEase Cloud Music by title and artist (no login required)
 #   subsonic — query your Subsonic server (getLyricsBySongId / getLyrics; no third party)
 # lrclib_url — LRCLib base URL when source = "lrclib". Default: https://lrclib.net
 # cache_enabled — store lyrics under ~/.cache/ratune/lyrics/ for offline use. Default: true
@@ -445,6 +446,7 @@ location = "right"
 source = "lrclib"
 # lrclib_url = "https://lrclib.net"
 # cache_enabled = false
+# source = "netease"
 # source = "subsonic"
 
 # [ui.nptab.visualizer_pane]

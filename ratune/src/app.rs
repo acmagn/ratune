@@ -2462,6 +2462,12 @@ impl App {
         self.lyrics_scroll = 0;
         let source = self.config.lyrics_source;
         let lrclib_url = self.config.lyrics_lrclib_url.clone();
+        let duration_secs = self
+            .queue
+            .songs
+            .iter()
+            .find(|song| song.id == song_id)
+            .and_then(|song| song.duration);
         let cache_enabled = self.config.lyrics_cache_enabled;
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
@@ -2471,10 +2477,13 @@ impl App {
                 source,
                 &lrclib_url,
                 &client,
-                &song_id,
-                &artist,
-                &title,
-                &album,
+                crate::lyrics::LyricsTrack {
+                    song_id: &song_id,
+                    artist: &artist,
+                    title: &title,
+                    album: &album,
+                    duration_secs,
+                },
             )
             .await;
             if cache_enabled {
