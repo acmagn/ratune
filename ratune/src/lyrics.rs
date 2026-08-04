@@ -206,7 +206,6 @@ fn select_netease_song<'a>(
                 .iter()
                 .find(|song| netease_titles_match(&song.name, title))
         })
-        .or_else(|| songs.first())
 }
 
 fn netease_titles_match(candidate: &str, title: &str) -> bool {
@@ -382,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn netease_match_falls_back_to_title_then_first_result() {
+    fn netease_match_falls_back_to_title() {
         let songs = vec![
             NeteaseSong {
                 id: 1,
@@ -401,12 +400,7 @@ mod tests {
                 .id,
             2
         );
-        assert_eq!(
-            select_netease_song(&songs, "Unknown", Some(180))
-                .expect("first result")
-                .id,
-            1
-        );
+        assert!(select_netease_song(&songs, "Unknown", Some(180)).is_none());
     }
 
     #[test]
