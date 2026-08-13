@@ -498,12 +498,17 @@ colors = ["#00aaff", "#00ff99", "#ffee55", "#ff3355"]
 # [library] — on-disk metadata index + fzf picker
 # -----------------------------------------------------------------------------
 #
-# enabled — Build/use index for Ctrl+f picker. Default: true.
+# enabled — Build/use index for Ctrl+f picker and online Browse columns. Default: true.
+#   First startup (or first enable with no index yet) may be slower while Ratune walks the
+#   library to build ~/.cache/ratune/library_index.json; later launches use that file.
 # index_path — JSON index file. Empty → ~/.cache/ratune/library_index.json (see code).
 # max_age_secs — Staleness threshold; background refresh when older. 0 = always stale at startup.
 # fetch_*_parallelism — Tunables for full index refresh (minimum 1 enforced at runtime).
 # navidrome_skip_unchanged_scan — Navidrome: skip full walk when lastScan unchanged.
 # notify_on_forced_index_refresh — Desktop notification when forced refresh completes.
+#
+# When enabled and a fresh/local index exists, the Browse tab (artists / albums / tracks)
+# is served from this cache instead of per-navigation Subsonic getArtist/getAlbum calls.
 #
 # [library.fzf] — fuzzy picker (legacy: fzf_binary / fzf_args under [library])
 # binary — Executable ("fzf", "sk", …). For skim, ratune appends --bind=ctrl-r:accept(ctrl-r).

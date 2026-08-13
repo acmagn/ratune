@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 
 use ratune_player::{spawn_player, PlayerCommand, PlayerEvent, SampleBuffer};
-use ratune_subsonic::{InternetRadioStation, StarItemType, SubsonicClient};
+use ratune_subsonic::{is_auth_failure, InternetRadioStation, StarItemType, SubsonicClient};
 
 use serde::{Deserialize, Serialize};
 
@@ -395,8 +395,17 @@ pub enum LibraryUpdate {
     /// - Vec<Song>: fresh index contents
     /// - Option<String>: Navidrome `lastScan` token to persist when scan-skip is enabled.
     /// - bool: whether this refresh was explicitly forced by the user (e.g. Ctrl+g).
+    /// - BrowseSnapshot: artist/album/track tree built off the UI thread.
     LibraryIndexRefreshComplete {
-        result: Result<(Vec<ratune_subsonic::Song>, Option<String>, bool), String>,
+        result: Result<
+            (
+                Vec<ratune_subsonic::Song>,
+                Option<String>,
+                bool,
+                std::sync::Arc<crate::library_index::BrowseSnapshot>,
+            ),
+            String,
+        >,
     },
     /// Full-library fetch (from server) finished for "append whole library" when index is disabled.
     LibraryServerAppendQueueComplete {
@@ -439,6 +448,24 @@ pub enum LibraryUpdate {
     ConnectivityChanged {
         reachable: bool,
         forced: bool,
+    },
+    /// Initial startup `ping` succeeded (non-blocking startup path).
+    StartupPingOk,
+    /// Initial startup `ping` failed with Subsonic auth error — quit after TUI teardown.
+    StartupPingAuthFailed {
+        detail: String,
+    },
+    /// Initial startup `ping` failed for non-auth reasons — enter offline mode.
+    StartupPingUnreachable {
+        detail: String,
+    },
+    /// Overlay artist `userRating` values from a live `getArtists` onto Browse (index may omit them).
+    BrowseArtistRatings(Vec<(String, u8)>),
+    /// Overlay album (and artist) ratings from a live `getArtist` onto Browse columns.
+    BrowseAlbumRatings {
+        artist_id: String,
+        artist_rating: Option<u8>,
+        album_ratings: Vec<(String, u8)>,
     },
     /// Internet radio stations from `getInternetRadioStations`.
     RadioStations(Result<Vec<InternetRadioStation>, String>),
@@ -580,8 +607,20 @@ pub struct App {
     library_index_by_id: HashMap<String, ratune_subsonic::Song>,
     /// Unix seconds when the index was last fully refreshed, if known.
     pub library_index_refreshed_at: Option<u64>,
-    /// Browse hierarchy built from [`library_index_tracks`] for offline artist/album/track columns.
+    /// Full-library browse tree from the index — used for online Browse (and offline when
+    /// audio cache filtering is not needed).
+    index_browse: Option<std::sync::Arc<crate::library_index::BrowseSnapshot>>,
+    /// Cache-filtered browse hierarchy for offline artist/album/track columns when caching
+    /// is enabled (only tracks with audio on disk).
     offline_browse: Option<std::sync::Arc<crate::library_index::BrowseSnapshot>>,
+    /// In-flight online `getArtist` fetches; aborted when the user navigates away.
+    browse_album_fetches: HashMap<String, tokio::task::AbortHandle>,
+    /// In-flight online `getAlbum` fetches; aborted when the user navigates away.
+    browse_track_fetches: HashMap<String, tokio::task::AbortHandle>,
+    /// True until the initial non-blocking startup `ping` finishes.
+    startup_ping_pending: bool,
+    /// Set when startup auth fails; printed after the alternate screen is left.
+    pub startup_auth_error: Option<String>,
     /// True while a background full-library fetch is running.
     pub library_index_refreshing: bool,
     /// When the current refresh started; drives status-bar animation until complete.
@@ -826,7 +865,12 @@ impl App {
             library_index_tracks,
             library_index_by_id,
             library_index_refreshed_at,
+            index_browse: None,
             offline_browse: None,
+            browse_album_fetches: HashMap::new(),
+            browse_track_fetches: HashMap::new(),
+            startup_ping_pending: false,
+            startup_auth_error: None,
             library_index_refreshing: false,
             library_index_refresh_started: None,
             library_server_append_fetching: false,
@@ -1931,16 +1975,22 @@ impl App {
 
     fn on_went_offline(&mut self) {
         self.home_art_loading.clear();
+        self.abort_all_browse_fetches();
         self.prepare_offline_browse();
         if self.browser_browse_mode != BrowseMode::Files {
             self.library.albums.clear();
             self.library.tracks.clear();
             self.fetch_artists();
+        } else {
+            self.folders.roots = LoadingState::Error(
+                "Folder browse requires server — switch to artists (config or toggle)".into(),
+            );
         }
     }
 
     fn on_went_online(&mut self) {
         self.offline_browse = None;
+        self.prepare_index_browse();
         if self.browser_browse_mode == BrowseMode::Files {
             if matches!(
                 self.folders.roots,
@@ -1961,6 +2011,123 @@ impl App {
         if self.config.scrobble_enabled {
             self.spawn_scrobble_queue_flush();
         }
+    }
+
+    /// Non-blocking startup Subsonic `ping`. Reachability / auth are applied via
+    /// [`LibraryUpdate`] once the TUI is already up.
+    pub fn spawn_startup_ping(&mut self) {
+        self.startup_ping_pending = true;
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let update = match client.ping().await {
+                Ok(()) => LibraryUpdate::StartupPingOk,
+                Err(e) if is_auth_failure(e.as_ref()) => LibraryUpdate::StartupPingAuthFailed {
+                    detail: format!("{e:#}"),
+                },
+                Err(e) => LibraryUpdate::StartupPingUnreachable {
+                    detail: format!("{e:#}"),
+                },
+            };
+            let _ = tx.send(update).await;
+        });
+    }
+
+    fn after_startup_ping_ok(&mut self) {
+        self.startup_ping_pending = false;
+        self.server_reachable = true;
+        if self.config.scrobble_enabled && !self.scrobble_queue.is_empty() {
+            eprintln!(
+                "scrobble: retrying {} queued scrobble(s)…",
+                self.scrobble_queue.len()
+            );
+        }
+        if self.browser_browse_mode == BrowseMode::Files {
+            if matches!(
+                self.folders.roots,
+                LoadingState::NotLoaded | LoadingState::Error(_) | LoadingState::Loading
+            ) {
+                self.fetch_music_folders();
+            }
+        } else {
+            match &self.library.artists {
+                LoadingState::Loaded(artists)
+                    if artists
+                        .iter()
+                        .any(|a| a.user_rating.filter(|r| (1..=5).contains(r)).is_none()) =>
+                {
+                    self.refresh_browse_loading_after_online();
+                    self.spawn_browse_artist_ratings_overlay();
+                }
+                LoadingState::Loaded(_) => {
+                    self.refresh_browse_loading_after_online();
+                }
+                _ => {
+                    self.fetch_artists();
+                }
+            }
+        }
+        self.spawn_library_index_refresh(false);
+        self.fetch_starred();
+        if self.config.radio_enabled {
+            self.fetch_radio_stations();
+        }
+        if self.config.scrobble_enabled {
+            self.spawn_scrobble_queue_flush();
+        }
+    }
+
+    /// Re-kick albums/tracks left in `Loading` while startup ping was pending.
+    fn refresh_browse_loading_after_online(&mut self) {
+        let Some(artist) = self.library.current_artist() else {
+            return;
+        };
+        let artist_id = artist.id.clone();
+        let albums_need = match self.library.albums.get(&artist_id) {
+            None | Some(LoadingState::Loading) | Some(LoadingState::Error(_)) => true,
+            Some(LoadingState::Loaded(_)) | Some(LoadingState::NotLoaded) => false,
+        };
+        if albums_need {
+            self.library
+                .albums
+                .insert(artist_id.clone(), LoadingState::Loading);
+            self.fetch_albums(artist_id);
+            return;
+        }
+        let Some(album) = self.library.current_album() else {
+            return;
+        };
+        let album_id = album.id.clone();
+        let tracks_need = match self.library.tracks.get(&album_id) {
+            None | Some(LoadingState::Loading) | Some(LoadingState::Error(_)) => true,
+            Some(LoadingState::Loaded(_)) | Some(LoadingState::NotLoaded) => false,
+        };
+        if tracks_need {
+            self.library
+                .tracks
+                .insert(album_id.clone(), LoadingState::Loading);
+            self.fetch_tracks(album_id);
+        }
+    }
+
+    /// Build (or rebuild) the full-library browse tree from the on-disk index.
+    pub fn prepare_index_browse(&mut self) {
+        if self.library_index_tracks.is_empty() {
+            self.index_browse = None;
+            return;
+        }
+        self.index_browse = Some(std::sync::Arc::new(
+            crate::library_index::build_browse_snapshot(&self.library_index_tracks),
+        ));
+    }
+
+    fn ensure_index_browse(
+        &mut self,
+    ) -> Option<std::sync::Arc<crate::library_index::BrowseSnapshot>> {
+        if self.index_browse.is_none() && !self.library_index_tracks.is_empty() {
+            self.prepare_index_browse();
+        }
+        self.index_browse.clone()
     }
 
     /// Build (or rebuild) the in-memory browse tree from the on-disk library index.
@@ -2001,30 +2168,91 @@ impl App {
         self.offline_browse.clone()
     }
 
+    /// Preferred browse snapshot: offline cache-filtered when offline; otherwise full index.
+    fn browse_snapshot(&mut self) -> Option<std::sync::Arc<crate::library_index::BrowseSnapshot>> {
+        if !self.remote_available() {
+            return self.ensure_offline_browse();
+        }
+        if self.config.library_index_enabled {
+            self.ensure_index_browse()
+        } else {
+            None
+        }
+    }
+
+    fn abort_stale_album_fetches(&mut self, keep: Option<&str>) {
+        let stale: Vec<String> = self
+            .browse_album_fetches
+            .keys()
+            .filter(|id| Some(id.as_str()) != keep)
+            .cloned()
+            .collect();
+        for id in stale {
+            if let Some(handle) = self.browse_album_fetches.remove(&id) {
+                handle.abort();
+            }
+            if matches!(self.library.albums.get(&id), Some(LoadingState::Loading)) {
+                self.library.albums.remove(&id);
+            }
+        }
+    }
+
+    fn abort_stale_track_fetches(&mut self, keep: Option<&str>) {
+        let stale: Vec<String> = self
+            .browse_track_fetches
+            .keys()
+            .filter(|id| Some(id.as_str()) != keep)
+            .cloned()
+            .collect();
+        for id in stale {
+            if let Some(handle) = self.browse_track_fetches.remove(&id) {
+                handle.abort();
+            }
+            if matches!(self.library.tracks.get(&id), Some(LoadingState::Loading)) {
+                self.library.tracks.remove(&id);
+            }
+        }
+    }
+
+    fn abort_all_browse_fetches(&mut self) {
+        self.abort_stale_album_fetches(None);
+        self.abort_stale_track_fetches(None);
+    }
+
     /// Spawn a task to fetch the artist list.
     pub fn fetch_artists(&mut self) {
-        if !self.remote_available() {
-            let tx = self.library_tx.clone();
-            let Some(snapshot) = self.ensure_offline_browse() else {
-                self.library.artists =
-                    LoadingState::Error(self.offline_browse_empty_message().into());
-                return;
-            };
+        if let Some(snapshot) = self.browse_snapshot() {
             let artists = snapshot.artists.clone();
-            let cached_n = self
-                .cache
-                .filter_cached_tracks(&self.library_index_tracks)
-                .len();
-            let flash = if self.cache.enabled {
+            let needs_rating_overlay = self.remote_available()
+                && !self.startup_ping_pending
+                && artists
+                    .iter()
+                    .any(|a| a.user_rating.filter(|r| (1..=5).contains(r)).is_none());
+            let flash = if !self.remote_available() && self.cache.enabled {
+                let cached_n = self
+                    .cache
+                    .filter_cached_tracks(&self.library_index_tracks)
+                    .len();
                 Some(format!("Browse: {cached_n} cached track(s)"))
             } else {
                 None
             };
-            tokio::spawn(async move {
-                let _ = tx.send(LibraryUpdate::Artists(Ok(artists))).await;
-            });
+            self.apply_library_update(LibraryUpdate::Artists(Ok(artists)));
+            if needs_rating_overlay {
+                self.spawn_browse_artist_ratings_overlay();
+            }
             if let Some(msg) = flash {
                 self.flash_status_secs(msg, 5);
+            }
+            return;
+        }
+        if !self.remote_available() {
+            self.library.artists = LoadingState::Error(self.offline_browse_empty_message().into());
+            return;
+        }
+        if self.startup_ping_pending {
+            if !matches!(self.library.artists, LoadingState::Loaded(_)) {
+                self.library.artists = LoadingState::Loading;
             }
             return;
         }
@@ -2036,6 +2264,67 @@ impl App {
                 .map(|lib| lib.artists)
                 .map_err(|e| e.to_string());
             let _ = tx.send(LibraryUpdate::Artists(result)).await;
+        });
+    }
+
+    /// One cheap `getArtists` to fill Browse artist ratings when the local index lacks them.
+    fn spawn_browse_artist_ratings_overlay(&self) {
+        if !self.remote_available() {
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let Ok(lib) = ratune_subsonic::fetch_library(&client).await else {
+                return;
+            };
+            let ratings: Vec<(String, u8)> = lib
+                .artists
+                .into_iter()
+                .filter_map(|a| {
+                    a.user_rating
+                        .filter(|r| (1..=5).contains(r))
+                        .map(|r| (a.id, r))
+                })
+                .collect();
+            if ratings.is_empty() {
+                return;
+            }
+            let _ = tx.send(LibraryUpdate::BrowseArtistRatings(ratings)).await;
+        });
+    }
+
+    /// One `getArtist` to fill album (and artist) ratings for a Browse artist from the index.
+    fn spawn_browse_album_ratings_overlay(&self, artist_id: String) {
+        if !self.remote_available() {
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let Ok(artist) = client.get_artist(&artist_id).await else {
+                return;
+            };
+            let artist_rating = artist.user_rating.filter(|r| (1..=5).contains(r));
+            let album_ratings: Vec<(String, u8)> = artist
+                .album
+                .into_iter()
+                .filter_map(|a| {
+                    a.user_rating
+                        .filter(|r| (1..=5).contains(r))
+                        .map(|r| (a.id, r))
+                })
+                .collect();
+            if artist_rating.is_none() && album_ratings.is_empty() {
+                return;
+            }
+            let _ = tx
+                .send(LibraryUpdate::BrowseAlbumRatings {
+                    artist_id,
+                    artist_rating,
+                    album_ratings,
+                })
+                .await;
         });
     }
 
@@ -2080,41 +2369,90 @@ impl App {
         let album_p = self.config.library_fetch_album_parallelism;
         let artist_p = self.config.library_fetch_artist_parallelism;
         tokio::spawn(async move {
-            let result: Result<(Vec<ratune_subsonic::Song>, Option<String>, bool), String> =
-                async {
-                    if nav_skip && !force {
-                        if let Some(file) = crate::library_index::load(&index_path) {
-                            if let Some(ref tok) = file.navidrome_last_scan {
-                                if let Ok(status) = client.get_scan_status().await {
-                                    if !status.scanning
-                                        && status.last_scan.as_deref() == Some(tok.as_str())
-                                    {
-                                        return Ok((file.tracks.clone(), Some(tok.clone()), false));
+            let result: Result<
+                (
+                    Vec<ratune_subsonic::Song>,
+                    Option<String>,
+                    bool,
+                    std::sync::Arc<crate::library_index::BrowseSnapshot>,
+                ),
+                String,
+            > = async {
+                if nav_skip && !force {
+                    if let Some(file) = crate::library_index::load(&index_path) {
+                        if let Some(ref tok) = file.navidrome_last_scan {
+                            if let Ok(status) = client.get_scan_status().await {
+                                if !status.scanning
+                                    && status.last_scan.as_deref() == Some(tok.as_str())
+                                {
+                                    let now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0);
+                                    let path = index_path;
+                                    let scan_save = Some(tok.clone());
+                                    let tracks = file.tracks;
+                                    let save_out = tokio::task::spawn_blocking(move || {
+                                        let res = crate::library_index::save(
+                                            &path,
+                                            &tracks,
+                                            now,
+                                            scan_save.as_deref(),
+                                        );
+                                        let snapshot = std::sync::Arc::new(
+                                            crate::library_index::build_browse_snapshot(&tracks),
+                                        );
+                                        (res, tracks, snapshot)
+                                    })
+                                    .await
+                                    .map_err(|e| e.to_string())?;
+                                    if let Err(e) = save_out.0 {
+                                        eprintln!("library index save: {e}");
                                     }
+                                    return Ok((save_out.1, Some(tok.clone()), false, save_out.2));
                                 }
                             }
                         }
                     }
-                    let opts = ratune_subsonic::FetchLibraryOptions {
-                        album_parallelism: album_p,
-                        artist_parallelism: artist_p,
-                    };
-                    let tracks =
-                        ratune_subsonic::fetch_all_library_songs_with_options(&client, opts)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                    let scan_tok = if nav_skip {
-                        client
-                            .get_scan_status()
-                            .await
-                            .ok()
-                            .and_then(|s| s.last_scan)
-                    } else {
-                        None
-                    };
-                    Ok((tracks, scan_tok, force))
                 }
-                .await;
+
+                let opts = ratune_subsonic::FetchLibraryOptions {
+                    album_parallelism: album_p,
+                    artist_parallelism: artist_p,
+                };
+                let tracks = ratune_subsonic::fetch_all_library_songs_with_options(&client, opts)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let scan_tok = if nav_skip {
+                    client
+                        .get_scan_status()
+                        .await
+                        .ok()
+                        .and_then(|s| s.last_scan)
+                } else {
+                    None
+                };
+
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let path = index_path;
+                let scan_save = scan_tok.clone();
+                let save_out = tokio::task::spawn_blocking(move || {
+                    let res = crate::library_index::save(&path, &tracks, now, scan_save.as_deref());
+                    let snapshot =
+                        std::sync::Arc::new(crate::library_index::build_browse_snapshot(&tracks));
+                    (res, tracks, snapshot)
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+                if let Err(e) = save_out.0 {
+                    eprintln!("library index save: {e}");
+                }
+                Ok((save_out.1, scan_tok, force, save_out.2))
+            }
+            .await;
             let _ = tx
                 .send(LibraryUpdate::LibraryIndexRefreshComplete { result })
                 .await;
@@ -2216,25 +2554,42 @@ impl App {
 
     /// Spawn a task to fetch albums for the given artist.
     pub fn fetch_albums(&mut self, artist_id: String) {
-        if !self.remote_available() {
-            let tx = self.library_tx.clone();
-            let albums = self
-                .ensure_offline_browse()
-                .and_then(|s| s.albums_by_artist.get(&artist_id).cloned())
+        self.abort_stale_album_fetches(Some(&artist_id));
+
+        if let Some(snapshot) = self.browse_snapshot() {
+            let albums = snapshot
+                .albums_by_artist
+                .get(&artist_id)
+                .cloned()
                 .unwrap_or_default();
-            tokio::spawn(async move {
-                let _ = tx
-                    .send(LibraryUpdate::Albums {
-                        artist_id,
-                        result: Ok(albums),
-                    })
-                    .await;
+            let needs_rating_overlay = self.remote_available()
+                && !self.startup_ping_pending
+                && albums
+                    .iter()
+                    .any(|a| a.user_rating.filter(|r| (1..=5).contains(r)).is_none());
+            self.apply_library_update(LibraryUpdate::Albums {
+                artist_id: artist_id.clone(),
+                result: Ok(albums),
             });
+            if needs_rating_overlay {
+                self.spawn_browse_album_ratings_overlay(artist_id);
+            }
+            return;
+        }
+        if !self.remote_available() {
+            self.apply_library_update(LibraryUpdate::Albums {
+                artist_id,
+                result: Ok(Vec::new()),
+            });
+            return;
+        }
+        if self.startup_ping_pending {
             return;
         }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
-        tokio::spawn(async move {
+        let fetch_id = artist_id.clone();
+        let handle = tokio::spawn(async move {
             let result = client
                 .get_artist(&artist_id)
                 .await
@@ -2242,29 +2597,40 @@ impl App {
                 .map_err(|e| e.to_string());
             let _ = tx.send(LibraryUpdate::Albums { artist_id, result }).await;
         });
+        self.browse_album_fetches
+            .insert(fetch_id, handle.abort_handle());
     }
 
     /// Spawn a task to fetch the track list for the given album.
     pub fn fetch_tracks(&mut self, album_id: String) {
-        if !self.remote_available() {
-            let tx = self.library_tx.clone();
-            let songs = self
-                .ensure_offline_browse()
-                .and_then(|s| s.tracks_by_album.get(&album_id).cloned())
+        self.abort_stale_track_fetches(Some(&album_id));
+
+        if let Some(snapshot) = self.browse_snapshot() {
+            let songs = snapshot
+                .tracks_by_album
+                .get(&album_id)
+                .cloned()
                 .unwrap_or_default();
-            tokio::spawn(async move {
-                let _ = tx
-                    .send(LibraryUpdate::Tracks {
-                        album_id,
-                        result: Ok(songs),
-                    })
-                    .await;
+            self.apply_library_update(LibraryUpdate::Tracks {
+                album_id,
+                result: Ok(songs),
             });
+            return;
+        }
+        if !self.remote_available() {
+            self.apply_library_update(LibraryUpdate::Tracks {
+                album_id,
+                result: Ok(Vec::new()),
+            });
+            return;
+        }
+        if self.startup_ping_pending {
             return;
         }
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
-        tokio::spawn(async move {
+        let fetch_id = album_id.clone();
+        let handle = tokio::spawn(async move {
             let result = client
                 .get_album(&album_id)
                 .await
@@ -2272,6 +2638,8 @@ impl App {
                 .map_err(|e| e.to_string());
             let _ = tx.send(LibraryUpdate::Tracks { album_id, result }).await;
         });
+        self.browse_track_fetches
+            .insert(fetch_id, handle.abort_handle());
     }
 
     /// Spawn a task to fetch raw cover art bytes for the given cover art ID.
@@ -2638,6 +3006,8 @@ impl App {
                 self.merge_server_starred();
             }
             LibraryUpdate::Albums { artist_id, result } => {
+                self.browse_album_fetches.remove(&artist_id);
+
                 // Is this update for the currently-selected artist?
                 let is_selected_artist = self
                     .library
@@ -2667,18 +3037,8 @@ impl App {
                                     .insert(album_id.clone(), LoadingState::Loading);
                                 prefetch_tracks = Some(album_id);
                             }
-                        } else {
-                            if self.library.selected_album.is_none() {
-                                self.library.selected_album = Some(0);
-                            }
-                            let first_id = albums[0].id.clone();
-                            if !self.library.tracks.contains_key(&first_id) {
-                                self.library
-                                    .tracks
-                                    .insert(first_id.clone(), LoadingState::Loading);
-                                prefetch_tracks = Some(first_id);
-                            }
                         }
+                        // Non-selected artists: cache albums only — do not cascade track fetches.
                         LoadingState::Loaded(albums)
                     }
                     Ok(albums) => LoadingState::Loaded(albums),
@@ -2691,6 +3051,8 @@ impl App {
                 self.merge_server_starred();
             }
             LibraryUpdate::Tracks { album_id, result } => {
+                self.browse_track_fetches.remove(&album_id);
+
                 // Is this update for the currently-selected album?
                 let is_current_album = self
                     .library
@@ -2986,18 +3348,26 @@ impl App {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 match result {
-                    Ok((tracks, navidrome_last_scan, forced)) => {
-                        let path = self.config.resolved_library_index_path();
-                        let scan_save = navidrome_last_scan.as_deref();
-                        if let Err(e) = crate::library_index::save(&path, &tracks, now, scan_save) {
-                            eprintln!("library index save: {e}");
-                        }
+                    Ok((tracks, _navidrome_last_scan, forced, snapshot)) => {
+                        // Disk save already ran off the UI thread in the refresh task.
                         self.library_index_refreshed_at = Some(now);
                         self.library_index_tracks = tracks;
                         self.library_index_by_id =
                             crate::library_index::index_by_id(&self.library_index_tracks);
+                        self.index_browse = Some(snapshot);
                         if !self.server_reachable {
                             self.prepare_offline_browse();
+                            if self.browser_browse_mode != BrowseMode::Files {
+                                self.library.albums.clear();
+                                self.library.tracks.clear();
+                                self.fetch_artists();
+                            }
+                        } else if self.browser_browse_mode != BrowseMode::Files {
+                            // Rebuild Browse columns from the new index (instant, no network).
+                            self.abort_all_browse_fetches();
+                            self.library.albums.clear();
+                            self.library.tracks.clear();
+                            self.fetch_artists();
                         }
                         self.merge_server_starred();
                         let msg = if forced {
@@ -3156,6 +3526,55 @@ impl App {
             }
             LibraryUpdate::ConnectivityChanged { reachable, forced } => {
                 self.apply_connectivity_changed(reachable, forced);
+            }
+            LibraryUpdate::StartupPingOk => {
+                self.after_startup_ping_ok();
+            }
+            LibraryUpdate::StartupPingAuthFailed { detail } => {
+                self.startup_ping_pending = false;
+                self.startup_auth_error = Some(detail);
+                self.should_quit = true;
+            }
+            LibraryUpdate::StartupPingUnreachable { detail } => {
+                self.startup_ping_pending = false;
+                eprintln!(
+                    "warn: could not reach Subsonic server at {} — starting offline (cache and saved state)",
+                    self.config.subsonic_url
+                );
+                eprintln!("warn: {detail}");
+                self.server_reachable = false;
+                self.flash_status_secs("Server unreachable — offline (cached content only)", 8);
+                self.on_went_offline();
+            }
+            LibraryUpdate::BrowseArtistRatings(ratings) => {
+                if let LoadingState::Loaded(artists) = &mut self.library.artists {
+                    for (id, rating) in ratings {
+                        if let Some(artist) = artists.iter_mut().find(|a| a.id == id) {
+                            artist.user_rating = Some(rating);
+                        }
+                    }
+                }
+            }
+            LibraryUpdate::BrowseAlbumRatings {
+                artist_id,
+                artist_rating,
+                album_ratings,
+            } => {
+                if let Some(rating) = artist_rating {
+                    if let LoadingState::Loaded(artists) = &mut self.library.artists {
+                        if let Some(artist) = artists.iter_mut().find(|a| a.id == artist_id) {
+                            artist.user_rating = Some(rating);
+                        }
+                    }
+                }
+                if let Some(LoadingState::Loaded(albums)) = self.library.albums.get_mut(&artist_id)
+                {
+                    for (id, rating) in album_ratings {
+                        if let Some(album) = albums.iter_mut().find(|a| a.id == id) {
+                            album.user_rating = Some(rating);
+                        }
+                    }
+                }
             }
             LibraryUpdate::RadioStations(result) => match result {
                 Ok(stations) => {
@@ -3764,6 +4183,11 @@ impl App {
             cover_art: Some(station.art_cache_key()),
             album_id: None,
             artist_id: None,
+            album_artist: None,
+            album_artist_id: None,
+            album_artists: Vec::new(),
+            album_user_rating: None,
+            artist_user_rating: None,
             track: None,
             disc_number: None,
             year: None,
@@ -6015,11 +6439,31 @@ impl App {
                     self.library.selected_artist = Some(new_idx);
                     self.library.selected_album = Some(0);
                     self.library.selected_track = Some(0);
+                    self.abort_stale_album_fetches(Some(&artist_id));
+                    self.abort_stale_track_fetches(None);
                     if !self.library.albums.contains_key(&artist_id) {
                         self.library
                             .albums
                             .insert(artist_id.clone(), LoadingState::Loading);
                         self.fetch_albums(artist_id);
+                    } else {
+                        let first_album_id =
+                            self.library.albums.get(&artist_id).and_then(|state| {
+                                if let LoadingState::Loaded(albums) = state {
+                                    albums.first().map(|a| a.id.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                        if let Some(album_id) = first_album_id {
+                            self.abort_stale_track_fetches(Some(&album_id));
+                            if !self.library.tracks.contains_key(&album_id) {
+                                self.library
+                                    .tracks
+                                    .insert(album_id.clone(), LoadingState::Loading);
+                                self.fetch_tracks(album_id);
+                            }
+                        }
                     }
                 }
             }
@@ -6068,6 +6512,7 @@ impl App {
                 if let Some((new_idx, album_id)) = result {
                     self.library.selected_album = Some(new_idx);
                     self.library.selected_track = Some(0);
+                    self.abort_stale_track_fetches(Some(&album_id));
                     if !self.library.tracks.contains_key(&album_id) {
                         self.library
                             .tracks
@@ -6288,6 +6733,11 @@ impl App {
                         title: record.track_name.clone(),
                         artist: Some(record.artist_name.clone()),
                         artist_id: Some(record.artist_id.clone()),
+                        album_artist: None,
+                        album_artist_id: None,
+                        album_artists: Vec::new(),
+                        album_user_rating: None,
+                        artist_user_rating: None,
                         album: Some(record.album_name.clone()),
                         album_id: Some(record.album_id.clone()),
                         duration: Some(record.duration_secs as u32),
@@ -6391,6 +6841,11 @@ impl App {
             title: record.track_name.clone(),
             artist: Some(record.artist_name.clone()),
             artist_id: Some(record.artist_id.clone()),
+            album_artist: None,
+            album_artist_id: None,
+            album_artists: Vec::new(),
+            album_user_rating: None,
+            artist_user_rating: None,
             album: Some(record.album_name.clone()),
             album_id: Some(record.album_id.clone()),
             duration: Some(record.duration_secs as u32),

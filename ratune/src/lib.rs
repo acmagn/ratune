@@ -48,9 +48,7 @@ use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
 use config::{AlbumArtBackend, BrowseMode, Config, HomePanel};
 use keybinds::Keybinds;
-use state::{
-    FavoritesFocus, GlobalConfirm, LoadingState, PlaylistFocus, PlaylistInputMode, RadioInputMode,
-};
+use state::{FavoritesFocus, GlobalConfirm, PlaylistFocus, PlaylistInputMode, RadioInputMode};
 
 /// Entry point shared by the `ratune` binary and integration tests.
 pub async fn run() -> Result<()> {
@@ -62,27 +60,6 @@ pub async fn run() -> Result<()> {
         process::exit(1);
     });
     let mut app = App::new(config)?;
-
-    if let Err(e) = app.subsonic.ping().await {
-        if ratune_subsonic::is_auth_failure(e.as_ref()) {
-            eprintln!(
-                "error: authentication failed for Subsonic server at {}",
-                app.config.subsonic_url
-            );
-            eprintln!(
-                "Authentication failed (wrong username or password).\n\
-                 Check [server] url, username, password, password_command, OS keyring, or SUBSONIC_PASS."
-            );
-            eprintln!("{e:#}");
-            process::exit(1);
-        }
-        eprintln!(
-            "warn: could not reach Subsonic server at {} — starting offline (cache and saved state)",
-            app.config.subsonic_url
-        );
-        app.server_reachable = false;
-        app.flash_status_secs("Server unreachable — offline (cached content only)", 8);
-    }
 
     // Detect tmux first: $TMUX is set when running inside a tmux session.
     app.in_tmux = std::env::var("TMUX").is_ok();
@@ -126,14 +103,9 @@ pub async fn run() -> Result<()> {
         Err(e) => eprintln!("warn: could not load history: {e}"),
     }
 
-    if app.config.scrobble_enabled && app.server_reachable {
-        if !app.scrobble_queue.is_empty() {
-            eprintln!(
-                "scrobble: retrying {} queued scrobble(s)…",
-                app.scrobble_queue.len()
-            );
-        }
-        app.spawn_scrobble_queue_flush();
+    // Warm Browse from the on-disk library index before the first frame (no network).
+    if !app.library_index_tracks.is_empty() {
+        app.prepare_index_browse();
     }
 
     // `refresh_home_data()` only ran when navigating to Home — not on cold start. If we restore
@@ -143,28 +115,10 @@ pub async fn run() -> Result<()> {
         app.home_art_needs_redraw = true;
     }
 
-    if app.server_reachable {
-        // Begin fetching library metadata for the browse tab.
-        if app.browser_browse_mode == crate::config::BrowseMode::Files {
-            app.fetch_music_folders();
-        } else {
-            app.fetch_artists();
-        }
-        // Background metadata index refresh when missing or stale (Milestone 2).
-        app.spawn_library_index_refresh(false);
-        app.fetch_starred();
-        if app.config.radio_enabled && app.server_reachable {
-            app.fetch_radio_stations();
-        }
-    } else {
-        app.prepare_offline_browse();
-        if app.browser_browse_mode != BrowseMode::Files {
-            app.fetch_artists();
-        } else {
-            app.folders.roots = LoadingState::Error(
-                "Folder browse requires server — switch to artists (config or toggle)".into(),
-            );
-        }
+    // Kick Browse immediately from the local index when available. Network-backed
+    // startup work (index refresh, starred, radio, scrobble flush) waits for ping.
+    if app.browser_browse_mode != crate::config::BrowseMode::Files {
+        app.fetch_artists();
     }
 
     // Spawn a task that sets a flag on SIGTERM, SIGHUP, SIGPIPE, or SIGINT so the main loop
@@ -192,6 +146,9 @@ pub async fn run() -> Result<()> {
             flag.store(true, Ordering::Relaxed);
         });
     }
+
+    // Non-blocking reachability: TUI appears immediately; ping result arrives via LibraryUpdate.
+    app.spawn_startup_ping();
 
     // Set up terminal.
     enable_raw_mode()?;
@@ -274,6 +231,19 @@ pub async fn run() -> Result<()> {
     }
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
+
+    if let Some(detail) = app.startup_auth_error.take() {
+        eprintln!(
+            "error: authentication failed for Subsonic server at {}",
+            app.config.subsonic_url
+        );
+        eprintln!(
+            "Authentication failed (wrong username or password).\n\
+             Check [server] url, username, password, password_command, OS keyring, or SUBSONIC_PASS."
+        );
+        eprintln!("{detail}");
+        process::exit(1);
+    }
 
     // Shut down the audio engine cleanly.
     // Send Quit so the thread stops playback and releases the audio device.

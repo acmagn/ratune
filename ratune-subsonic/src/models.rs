@@ -103,6 +103,14 @@ pub fn music_library_root_cache_key(music_folder_id: impl AsRef<str>) -> String 
 pub fn parse_music_library_root_folder_id(cache_id: &str) -> Option<&str> {
     cache_id.strip_prefix(MUSIC_FOLDER_ROOT_ID_PREFIX)
 }
+/// Lightweight artist id/name pair (OpenSubsonic `artists` / `albumArtists` entries).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistRef {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Song {
@@ -112,6 +120,23 @@ pub struct Song {
     pub artist: Option<String>,
     pub album_id: Option<String>,
     pub artist_id: Option<String>,
+    /// Album artist name — used for Browse column grouping (matches server `getArtists`).
+    /// Populated from OpenSubsonic `albumArtist` when present, or stamped during library index walks.
+    #[serde(default)]
+    pub album_artist: Option<String>,
+    /// Album artist id for Browse grouping (OpenSubsonic / stamped from `getAlbum`).
+    #[serde(default)]
+    pub album_artist_id: Option<String>,
+    /// All album artists (OpenSubsonic `albumArtists`) — classical releases often list
+    /// composer + performer separately; Browse should show the album under each.
+    #[serde(default)]
+    pub album_artists: Vec<ArtistRef>,
+    /// Album `userRating` stamped during library index walks (Browse album column).
+    #[serde(default)]
+    pub album_user_rating: Option<u8>,
+    /// Artist `userRating` stamped during library index walks (Browse artist column).
+    #[serde(default)]
+    pub artist_user_rating: Option<u8>,
     pub track: Option<u32>,
     pub disc_number: Option<u32>,
     pub year: Option<u32>,
@@ -209,6 +234,9 @@ pub struct Album {
     pub name: String,
     pub artist: Option<String>,
     pub artist_id: Option<String>,
+    /// OpenSubsonic: all album artists (composer + performers, etc.).
+    #[serde(default)]
+    pub artists: Vec<ArtistRef>,
     pub cover_art: Option<String>,
     pub song_count: Option<u32>,
     /// Total duration in seconds.
@@ -389,6 +417,11 @@ impl DirectoryChild {
             artist: self.artist.clone(),
             album_id: self.album_id.clone(),
             artist_id: self.artist_id.clone(),
+            album_artist: None,
+            album_artist_id: None,
+            album_artists: Vec::new(),
+            album_user_rating: None,
+            artist_user_rating: None,
             track: self.track,
             disc_number: self.disc_number,
             year: None,
