@@ -26,7 +26,7 @@ use tokio::task::JoinSet;
 use crate::error::check_status;
 use crate::models::{
     parse_music_library_root_folder_id, structured_lyrics_to_lines, Album, AlbumEnvelope, Artist,
-    ArtistEnvelope, Artists, ArtistsEnvelope, DirectoryChild, IndexesEnvelope,
+    ArtistEnvelope, ArtistRef, Artists, ArtistsEnvelope, DirectoryChild, IndexesEnvelope,
     InternetRadioStation, InternetRadioStationsEnvelope, LegacyLyricsEnvelope, LyricLine,
     LyricsBySongIdEnvelope, MusicDirectory, MusicDirectoryEnvelope, MusicFolder,
     MusicFoldersEnvelope, PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope,
@@ -946,6 +946,9 @@ async fn fetch_songs_for_artist_inner(
 
     let library_name = artist_detail.name.clone();
     let library_name_ref = library_name.as_str();
+    // Navidrome returns artist ratings on getArtists / getArtist; normalize 0 = unrated.
+    let artist_user_rating = normalized_user_rating(artist_detail.user_rating)
+        .or_else(|| normalized_user_rating(artist.user_rating));
     let limit = album_parallelism.max(1);
     let sem = Arc::new(Semaphore::new(limit));
     let mut set = JoinSet::new();
@@ -954,27 +957,80 @@ async fn fetch_songs_for_artist_inner(
         let client = client.clone();
         let sem = sem.clone();
         let aid = album_stub.id.clone();
+        // Album ratings appear on getArtist stubs (and usually getAlbum too); keep the stub
+        // value so we still stamp when getAlbum omits userRating.
+        let stub_rating = normalized_user_rating(album_stub.user_rating);
         set.spawn(async move {
             let _permit = match sem.acquire().await {
                 Ok(p) => p,
-                Err(_) => return (aid, Err(anyhow!("semaphore closed"))),
+                Err(_) => return (aid, Err(anyhow!("semaphore closed")), stub_rating),
             };
-            (aid, client.get_album(&album_stub.id).await)
+            (aid, client.get_album(&album_stub.id).await, stub_rating)
         });
     }
 
     let mut songs: Vec<Song> = Vec::new();
     while let Some(joined) = set.join_next().await {
         match joined {
-            Ok((_album_id, Ok(album))) => {
+            Ok((_album_id, Ok(album), stub_rating)) => {
                 let album_artist_owned = album.artist.clone();
                 let album_artist = album_artist_owned.as_deref();
+                let stamp_artist_id = album
+                    .artist_id
+                    .clone()
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| artist.id.clone());
+                let stamp_artist_name = album
+                    .artist
+                    .clone()
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| library_name.clone());
+                let album_user_rating = normalized_user_rating(album.user_rating).or(stub_rating);
                 for mut s in album.song {
                     apply_album_artist_fallback(&mut s, album_artist, library_name_ref);
+                    // Prefer API-provided album artist when present; otherwise stamp from the
+                    // parent album / library artist so Browse matches `getArtists` grouping.
+                    if s.album_artist_id
+                        .as_ref()
+                        .map(|id| id.trim().is_empty())
+                        .unwrap_or(true)
+                    {
+                        s.album_artist_id = Some(stamp_artist_id.clone());
+                    }
+                    if s.album_artist
+                        .as_ref()
+                        .map(|n| n.trim().is_empty())
+                        .unwrap_or(true)
+                    {
+                        s.album_artist = Some(stamp_artist_name.clone());
+                    }
+                    // Merge OpenSubsonic albumArtists + album.artists + the getArtists
+                    // entry we walked (performers like Andreas Staier must remain linked).
+                    for a in &album.artists {
+                        push_album_artist_ref(&mut s, a);
+                    }
+                    push_album_artist_ref(
+                        &mut s,
+                        &ArtistRef {
+                            id: artist.id.clone(),
+                            name: library_name.clone(),
+                        },
+                    );
+                    if let (Some(id), Some(name)) =
+                        (s.album_artist_id.clone(), s.album_artist.clone())
+                    {
+                        push_album_artist_ref(&mut s, &ArtistRef { id, name });
+                    }
+                    if s.artist_user_rating.is_none() {
+                        s.artist_user_rating = artist_user_rating;
+                    }
+                    if s.album_user_rating.is_none() {
+                        s.album_user_rating = album_user_rating;
+                    }
                     songs.push(s);
                 }
             }
-            Ok((album_id, Err(e))) => {
+            Ok((album_id, Err(e), _)) => {
                 eprintln!("ratune-subsonic: get_album({}) failed — {e}", album_id);
             }
             Err(e) => eprintln!("ratune-subsonic: album task join — {e}"),
@@ -983,6 +1039,56 @@ async fn fetch_songs_for_artist_inner(
 
     songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
     songs
+}
+
+/// Subsonic/Navidrome use `userRating` 0 (or omit) for unrated; only 1–5 are real ratings.
+fn normalized_user_rating(rating: Option<u8>) -> Option<u8> {
+    rating.filter(|r| (1..=5).contains(r))
+}
+
+fn push_album_artist_ref(song: &mut Song, artist: &ArtistRef) {
+    let id = artist.id.trim();
+    let name = artist.name.trim();
+    if id.is_empty() || name.is_empty() {
+        return;
+    }
+    if song.album_artists.iter().any(|a| a.id == id) {
+        return;
+    }
+    song.album_artists.push(ArtistRef {
+        id: id.to_string(),
+        name: name.to_string(),
+    });
+}
+
+/// Merge index-only fields when the same song is discovered under multiple `getArtists` entries
+/// (classical: composer walk + performer walk).
+fn merge_indexed_song(into: &mut Song, from: Song) {
+    for a in from.album_artists {
+        push_album_artist_ref(into, &a);
+    }
+    if into
+        .album_artist_id
+        .as_ref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
+        into.album_artist_id = from.album_artist_id;
+    }
+    if into
+        .album_artist
+        .as_ref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
+        into.album_artist = from.album_artist;
+    }
+    if into.artist_user_rating.is_none() {
+        into.artist_user_rating = from.artist_user_rating;
+    }
+    if into.album_user_rating.is_none() {
+        into.album_user_rating = from.album_user_rating;
+    }
 }
 
 /// Fetch all songs for a single artist: `getArtist`, then `getAlbum` for each album.
@@ -1026,7 +1132,12 @@ pub async fn fetch_all_library_songs_with_options(
         match joined {
             Ok(song_vecs) => {
                 for s in song_vecs {
-                    by_id.insert(s.id.clone(), s);
+                    match by_id.get_mut(&s.id) {
+                        Some(existing) => merge_indexed_song(existing, s),
+                        None => {
+                            by_id.insert(s.id.clone(), s);
+                        }
+                    }
                 }
             }
             Err(e) => eprintln!("ratune-subsonic: artist task join — {e}"),
@@ -1064,6 +1175,11 @@ mod tests {
             artist,
             album_id: None,
             artist_id: None,
+            album_artist: None,
+            album_artist_id: None,
+            album_artists: Vec::new(),
+            album_user_rating: None,
+            artist_user_rating: None,
             track: None,
             disc_number: None,
             year: None,
