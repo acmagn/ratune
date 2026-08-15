@@ -664,7 +664,10 @@ fn stream_http_client() -> &'static reqwest::blocking::Client {
         reqwest::blocking::Client::builder()
             // Whole request including body (large lossless files over slow links).
             .timeout(Duration::from_secs(900))
-            .connect_timeout(Duration::from_secs(60))
+            // Keep a dead server from monopolizing the player thread. This is no
+            // longer than the app's connectivity probe, so cached commands are not
+            // left queued behind a stale online request after entering offline mode.
+            .connect_timeout(Duration::from_secs(4))
             .pool_idle_timeout(Some(Duration::from_secs(90)))
             .user_agent(concat!("ratune/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -804,7 +807,21 @@ fn download_and_decode(url: &str) -> Result<Decoder<Cursor<Vec<u8>>>> {
         let identity = attempt == 3;
         match fetch_track_bytes(url, identity).and_then(build_symphonia_decoder) {
             Ok(decoder) => return Ok(decoder),
-            Err(e) => last_err = Some(e),
+            Err(e) => {
+                // Retrying an unreachable host four times keeps the single player
+                // thread blocked and prevents a subsequent cached track from
+                // starting. Preserve retries for truncated bodies, HTTP failures,
+                // and decode quirks, but fail fast for connect/timeout errors.
+                let connectivity_failure = e.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<reqwest::Error>()
+                        .is_some_and(|request| request.is_connect() || request.is_timeout())
+                });
+                last_err = Some(e);
+                if connectivity_failure {
+                    break;
+                }
+            }
         }
     }
     Err(last_err.expect("loop runs at least once"))

@@ -134,28 +134,11 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     } else {
         let hint = "i — help";
         let sep = "  ·  ";
-        let host_label = if let Some(alias) = app
-            .config
-            .server_alias
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-        {
-            if app.server_reachable {
-                alias.to_string()
-            } else {
-                format!("{alias} (offline)")
-            }
+        let server = app.server_label();
+        let host_label = if app.server_reachable {
+            server
         } else {
-            let host = app
-                .config
-                .subsonic_url
-                .trim_start_matches("http://")
-                .trim_start_matches("https://");
-            if app.server_reachable {
-                host.to_string()
-            } else {
-                format!("{host} (offline)")
-            }
+            format!("{server} (offline)")
         };
         let vol_label = format!("{}%", app.config.default_volume);
 
