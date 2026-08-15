@@ -24,7 +24,7 @@
           };
 
           nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [
+          buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             pkgs.alsa-lib
             pkgs.dbus
             pkgs.openssl
