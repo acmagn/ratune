@@ -136,6 +136,7 @@ fn humanize_playback_error(message: &str) -> String {
 enum ResolvedPlayback {
     Url(String),
     Cached(PathBuf),
+    UnavailableOffline,
 }
 
 /// Prefix for synthetic [`Song::id`] values built from internet radio stations.
@@ -779,6 +780,27 @@ impl App {
     /// not logged to stderr and corrupt the alternate-screen TUI.
     fn remote_available(&self) -> bool {
         self.server_reachable
+    }
+
+    /// Server name for status-bar and warning text: the configured alias when set,
+    /// otherwise the URL without its scheme. Keeps full URLs (and anything that
+    /// could carry credentials) out of user-visible messages.
+    pub fn server_label(&self) -> String {
+        if let Some(alias) = self
+            .config
+            .server_alias
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return alias.to_string();
+        }
+        self.config
+            .subsonic_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .to_string()
     }
 
     pub fn new(config: Config) -> Result<Self> {
@@ -2015,19 +2037,31 @@ impl App {
 
     /// Non-blocking startup Subsonic `ping`. Reachability / auth are applied via
     /// [`LibraryUpdate`] once the TUI is already up.
+    ///
+    /// Uses the short connectivity probe first so offline / no-route startups fail in
+    /// a few seconds instead of waiting on the pooled client's 30s request timeout.
+    /// A full `ping` still runs when the server answers, so auth failures are detected.
     pub fn spawn_startup_ping(&mut self) {
         self.startup_ping_pending = true;
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
-            let update = match client.ping().await {
-                Ok(()) => LibraryUpdate::StartupPingOk,
-                Err(e) if is_auth_failure(e.as_ref()) => LibraryUpdate::StartupPingAuthFailed {
-                    detail: format!("{e:#}"),
-                },
-                Err(e) => LibraryUpdate::StartupPingUnreachable {
-                    detail: format!("{e:#}"),
-                },
+            let update = if !client.is_network_reachable().await {
+                LibraryUpdate::StartupPingUnreachable {
+                    detail: "no response".into(),
+                }
+            } else {
+                match client.ping().await {
+                    Ok(()) => LibraryUpdate::StartupPingOk,
+                    Err(e) if is_auth_failure(e.as_ref()) => LibraryUpdate::StartupPingAuthFailed {
+                        // Auth errors are Subsonic status payloads — safe to show.
+                        detail: format!("{e:#}"),
+                    },
+                    Err(_) => LibraryUpdate::StartupPingUnreachable {
+                        // reqwest error text embeds the request URL (auth token query).
+                        detail: "network error".into(),
+                    },
+                }
             };
             let _ = tx.send(update).await;
         });
@@ -3537,14 +3571,14 @@ impl App {
             }
             LibraryUpdate::StartupPingUnreachable { detail } => {
                 self.startup_ping_pending = false;
-                eprintln!(
-                    "warn: could not reach Subsonic server at {} — starting offline (cache and saved state)",
-                    self.config.subsonic_url
+                // Same path as a mid-session connectivity drop; stderr would corrupt
+                // the alternate screen, so the reason goes to the status bar.
+                self.apply_connectivity_changed(false, false);
+                let label = self.server_label();
+                self.flash_status_secs(
+                    format!("Could not reach {label} ({detail}) — offline mode"),
+                    8,
                 );
-                eprintln!("warn: {detail}");
-                self.server_reachable = false;
-                self.flash_status_secs("Server unreachable — offline (cached content only)", 8);
-                self.on_went_offline();
             }
             LibraryUpdate::BrowseArtistRatings(ratings) => {
                 if let LoadingState::Loaded(artists) = &mut self.library.artists {
@@ -3871,6 +3905,7 @@ impl App {
                                 .player_tx
                                 .send(PlayerCommand::EnqueueNext { url, duration });
                         }
+                        ResolvedPlayback::UnavailableOffline => {}
                     }
                 }
             }
@@ -4149,6 +4184,10 @@ impl App {
                         .player_tx
                         .send(PlayerCommand::PlayUrl { url, duration, gen });
                 }
+                ResolvedPlayback::UnavailableOffline => {
+                    self.playback.player_loaded = false;
+                    self.flash_status_secs("Track is not available in the offline cache", 6);
+                }
             }
         }
     }
@@ -4160,6 +4199,9 @@ impl App {
                 self.cache.touch(&song.id);
                 return ResolvedPlayback::Cached(path);
             }
+        }
+        if !self.remote_available() {
+            return ResolvedPlayback::UnavailableOffline;
         }
         ResolvedPlayback::Url(self.subsonic.stream_url(&song.id, self.config.max_bit_rate))
     }
@@ -6794,6 +6836,13 @@ impl App {
                                 duration: dur,
                                 gen,
                             });
+                        }
+                        ResolvedPlayback::UnavailableOffline => {
+                            self.playback.player_loaded = false;
+                            self.flash_status_secs(
+                                "Track is not available in the offline cache",
+                                6,
+                            );
                         }
                     }
                 }
