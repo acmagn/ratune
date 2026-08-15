@@ -77,6 +77,7 @@ Current options are:
 [AUR](#arch-linux-aur)
 [crates.io](#cratesio)
 [Homebrew](#macos-homebrew)
+[Nix](#nix)
 [From source](#build-from-source-1).
 
 
@@ -109,6 +110,23 @@ This **builds** from the published crate. You need a **Rust toolchain**; on **Li
 ```bash
 brew tap acmagn/tap
 brew install ratune
+```
+
+### Nix
+
+```sh
+nix profile install github:acmagn/ratune
+```
+
+That puts `ratune` on your `PATH`. To try it without installing: `nix run github:acmagn/ratune`.
+
+Home Manager (package only; config stays at `~/.config/ratune/config.toml`):
+
+```nix
+{
+  imports = [ inputs.ratune.homeManagerModules.default ];
+  programs.ratune.enable = true;
+}
 ```
 
 ### Build from source
