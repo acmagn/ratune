@@ -108,7 +108,8 @@ This **builds** from the published crate. You need a **Rust toolchain**; on **Li
 ### macOS (Homebrew)
 
 ```bash
-brew tap acmagn/tap
+brew tap acmagn/ratune
+brew trust --formula acmagn/ratune/ratune
 brew install ratune
 ```
 
