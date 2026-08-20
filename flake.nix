@@ -11,7 +11,7 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        cargoToml = builtins.fromTOML (builtins.readFile ./ratune/Cargo.toml);
+        cargoToml = fromTOML (builtins.readFile ./ratune/Cargo.toml);
 
         ratune = pkgs.rustPlatform.buildRustPackage {
           pname = "ratune";
@@ -24,7 +24,7 @@
           };
 
           nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+          buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             pkgs.alsa-lib
             pkgs.dbus
             pkgs.openssl
