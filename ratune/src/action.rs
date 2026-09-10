@@ -191,5 +191,7 @@ pub enum Action {
     /// Check server connectivity now (optional keybind; periodic check uses `[server].connection_check_interval_secs`).
     CheckConnection,
     Quit,
+    /// Quit the TUI and stop the playback daemon (`quit_stop`; default Ctrl+q).
+    QuitStop,
     None,
 }

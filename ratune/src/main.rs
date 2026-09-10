@@ -13,6 +13,13 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  {PKG_NAME}                               Start the terminal music player");
+    println!("  {PKG_NAME} stop                          Stop background playback");
+    println!(
+        "  {PKG_NAME} status                        Show whether the playback daemon is running"
+    );
+    println!(
+        "  {PKG_NAME} daemon                        Run the playback daemon in the foreground"
+    );
     println!("  {PKG_NAME} scrobble-api-secret             Prompt for API shared secret");
     println!("  {PKG_NAME} scrobble-api-secret --save-keyring  …and store it in the OS keyring");
     println!(
@@ -56,6 +63,29 @@ async fn main() -> Result<()> {
             }
             "scrobble-api-secret" | "scrobble-auth" => {
                 return run_scrobble_subcommand(a, false).await;
+            }
+            "stop" => {
+                return match ratune::stop_daemon() {
+                    Ok(true) => {
+                        println!("Stopped ratune playback daemon");
+                        Ok(())
+                    }
+                    Ok(false) => {
+                        println!("No ratune playback daemon is running");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e:#}");
+                        process::exit(1);
+                    }
+                };
+            }
+            "status" => {
+                println!("{}", ratune::daemon_status());
+                return Ok(());
+            }
+            "daemon" => {
+                return ratune::run_daemon().await;
             }
             other => {
                 eprintln!("{PKG_NAME}: unknown argument '{other}'");

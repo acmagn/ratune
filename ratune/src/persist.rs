@@ -106,10 +106,15 @@ pub fn restore_state(app: &mut App) -> Result<()> {
 
     if let Some(vol) = state.player_volume {
         let v = vol.min(100);
-        app.config.default_volume = v;
-        let _ = app
-            .player_tx
-            .send(PlayerCommand::SetVolume(v as f32 / 100.0));
+        if !app.is_player_client() {
+            app.config.default_volume = v;
+            app.send_player(PlayerCommand::SetVolume(v as f32 / 100.0));
+        }
+    }
+
+    // Client TUI takes live queue/playback from the daemon snapshot after connect.
+    if app.is_player_client() {
+        return Ok(());
     }
 
     // Populate display-only playback state so the now-playing bar shows the

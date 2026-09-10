@@ -531,6 +531,17 @@ pub struct PlaylistPicker {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
+/// Who owns the rodio engine in this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlayerMode {
+    /// TUI + player thread (no background daemon).
+    Local,
+    /// Headless playback process.
+    Daemon,
+    /// TUI attached to a daemon over a Unix socket.
+    Client,
+}
+
 pub struct App {
     pub active_tab: Tab,
     pub browser_focus: BrowserColumn,
@@ -558,7 +569,12 @@ pub struct App {
     pub player_rx: std_mpsc::Receiver<PlayerEvent>,
     /// Join handle for the audio engine thread; taken on shutdown.
     pub player_join: Option<std::thread::JoinHandle<()>>,
+    pub(crate) player_mode: PlayerMode,
+    #[cfg(unix)]
+    pub(crate) daemon_ctrl: Option<crate::daemon::DaemonCtrl>,
     pub should_quit: bool,
+    /// When quitting, also stop the playback daemon (`Action::QuitStop`).
+    stop_daemon_on_quit: bool,
     pub search_mode: SearchMode,
     /// Active filter applied to one browser column after a search confirm.
     /// `None` = show all items; `Some(q)` = show only items whose name contains `q`.
@@ -804,17 +820,51 @@ impl App {
     }
 
     pub fn new(config: Config) -> Result<Self> {
+        #[cfg(unix)]
+        {
+            Self::new_with_mode(config, PlayerMode::Local, None)
+        }
+        #[cfg(not(unix))]
+        {
+            Self::new_with_mode(config, PlayerMode::Local)
+        }
+    }
+
+    pub(crate) fn new_with_mode(
+        config: Config,
+        mode: PlayerMode,
+        #[cfg(unix)] client: Option<crate::daemon::ClientIo>,
+    ) -> Result<Self> {
         let subsonic = SubsonicClient::new(
             &config.subsonic_url,
             &config.subsonic_user,
             &config.subsonic_pass,
         )?;
         let (library_tx, library_rx) = mpsc::channel(64);
-        let (player_tx, player_rx, player_join, sample_buffer) = spawn_player();
-        // Apply configured default volume immediately.
-        let _ = player_tx.send(PlayerCommand::SetVolume(
-            config.default_volume as f32 / 100.0,
-        ));
+        #[cfg(unix)]
+        let (player_tx, player_rx, player_join, sample_buffer, daemon_ctrl) = match client {
+            Some(io) => {
+                let (dummy_tx, _dummy_rx) = std_mpsc::channel();
+                (dummy_tx, io.event_rx, None, io.sample_buffer, Some(io.ctrl))
+            }
+            None => {
+                let (tx, rx, join, samples) = spawn_player();
+                if mode != PlayerMode::Client {
+                    let _ = tx.send(PlayerCommand::SetVolume(
+                        config.default_volume as f32 / 100.0,
+                    ));
+                }
+                (tx, rx, Some(join), samples, None)
+            }
+        };
+        #[cfg(not(unix))]
+        let (player_tx, player_rx, player_join, sample_buffer) = {
+            let (tx, rx, join, samples) = spawn_player();
+            let _ = tx.send(PlayerCommand::SetVolume(
+                config.default_volume as f32 / 100.0,
+            ));
+            (tx, rx, Some(join), samples)
+        };
         let keybinds = Keybinds::from_section(&config.keybinds);
         let theme = Theme::from_section(&config.theme);
         let static_accent = theme.accent;
@@ -823,12 +873,15 @@ impl App {
         let track_cache =
             crate::cache::TrackCache::load(config.cache_enabled, config.cache_max_size_gb);
         let lyrics_disk_cache = crate::lyrics_cache::LyricsDiskCache::load();
-        let index_path = config.resolved_library_index_path();
-        let (library_index_tracks, library_index_refreshed_at) =
+        let (library_index_tracks, library_index_refreshed_at) = if mode == PlayerMode::Daemon {
+            (Vec::new(), None)
+        } else {
+            let index_path = config.resolved_library_index_path();
             match crate::library_index::load(&index_path) {
                 Some(f) => (f.tracks, Some(f.refreshed_at_unix)),
                 None => (Vec::new(), None),
-            };
+            }
+        };
         let library_index_by_id = crate::library_index::index_by_id(&library_index_tracks);
         let browser_browse_mode = match config.browse_mode {
             BrowseMode::Genre => BrowseMode::Genre,
@@ -862,10 +915,14 @@ impl App {
             library_tx,
             player_tx,
             player_rx,
-            player_join: Some(player_join),
+            player_join,
+            player_mode: mode,
+            #[cfg(unix)]
+            daemon_ctrl,
             config,
             browser_browse_mode,
             should_quit: false,
+            stop_daemon_on_quit: false,
             search_mode: SearchMode::default(),
             search_filter: None,
             search_filter_column: None,
@@ -962,6 +1019,209 @@ impl App {
             app.np_pane_focus = NowPlayingPaneFocus::Queue;
         }
         Ok(app)
+    }
+
+    pub(crate) fn is_player_client(&self) -> bool {
+        self.player_mode == PlayerMode::Client
+    }
+
+    pub(crate) fn is_player_daemon(&self) -> bool {
+        self.player_mode == PlayerMode::Daemon
+    }
+
+    /// Keep the daemon alive after the TUI exits: a track is loaded, and the
+    /// user did not request a hard quit (`quit_stop` / Ctrl+q).
+    pub(crate) fn keep_background_daemon(&self) -> bool {
+        self.player_mode == PlayerMode::Client
+            && self.playback.player_loaded
+            && !self.stop_daemon_on_quit
+    }
+
+    pub(crate) fn send_player(&self, cmd: PlayerCommand) {
+        #[cfg(unix)]
+        if self.player_mode == PlayerMode::Client {
+            if let Some(ctrl) = &self.daemon_ctrl {
+                use crate::daemon::ClientMessage;
+                let msg = match &cmd {
+                    PlayerCommand::Pause => ClientMessage::Pause,
+                    PlayerCommand::Resume => ClientMessage::Resume,
+                    PlayerCommand::Stop => ClientMessage::Stop,
+                    PlayerCommand::Seek(d) => ClientMessage::SeekMs(d.as_millis() as u64),
+                    PlayerCommand::SetVolume(v) => {
+                        ClientMessage::SetVolume((v.clamp(0.0, 1.0) * 100.0).round() as u8)
+                    }
+                    PlayerCommand::PlayUrl { .. } | PlayerCommand::PlayCached { .. } => {
+                        let _ = ctrl.msg_tx.send(ClientMessage::SyncSession(
+                            crate::daemon::SessionSnapshot::from_app(self),
+                        ));
+                        ClientMessage::PlayNow
+                    }
+                    PlayerCommand::PlayLiveStream { url, .. } => ClientMessage::PlayLive {
+                        url: url.clone(),
+                        song: self.playback.current_song.clone().unwrap_or_else(|| {
+                            Self::song_from_radio_station(&InternetRadioStation {
+                                id: String::new(),
+                                name: "Radio".into(),
+                                stream_url: url.clone(),
+                                home_page_url: None,
+                                cover_art: None,
+                            })
+                        }),
+                    },
+                    PlayerCommand::EnqueueNext { .. }
+                    | PlayerCommand::EnqueueNextCached { .. }
+                    | PlayerCommand::Quit => return,
+                };
+                let _ = ctrl.msg_tx.send(msg);
+            }
+            return;
+        }
+        let _ = self.player_tx.send(cmd);
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn drain_daemon_snapshots(&mut self) {
+        let mut last = None;
+        if let Some(ctrl) = &mut self.daemon_ctrl {
+            while let Some(snap) = ctrl.try_recv_snapshot() {
+                last = Some(snap);
+            }
+        }
+        if let Some(snap) = last {
+            self.apply_daemon_snapshot(snap, true);
+            let fp = crate::daemon::SessionSnapshot::from_app(self).fingerprint();
+            if let Some(ctrl) = &mut self.daemon_ctrl {
+                ctrl.note_fingerprint(fp);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn flush_daemon_session(&mut self) {
+        let snap = crate::daemon::SessionSnapshot::from_app(self);
+        if let Some(ctrl) = &mut self.daemon_ctrl {
+            ctrl.flush_if_changed(snap);
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn daemon_shutdown(&self) {
+        if let Some(ctrl) = &self.daemon_ctrl {
+            ctrl.send(crate::daemon::ClientMessage::Shutdown);
+        }
+    }
+
+    /// Apply a session snapshot. `apply_progress` copies elapsed/total (TUI following the daemon).
+    pub(crate) fn apply_daemon_snapshot(
+        &mut self,
+        snap: crate::daemon::SessionSnapshot,
+        apply_progress: bool,
+    ) {
+        let prev_id = self.playback.current_song.as_ref().map(|s| s.id.clone());
+        self.queue.songs = snap.songs;
+        self.queue.cursor = snap.cursor.min(self.queue.songs.len().saturating_sub(1));
+        self.queue.loop_enabled = snap.loop_enabled;
+        self.queue.shuffle_active = snap.shuffle_active;
+        self.queue.pre_shuffle_order = snap.pre_shuffle_order;
+        self.queue
+            .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
+        self.config.default_volume = snap.volume.min(100);
+        self.np_pane_focus = snap.np_pane_focus;
+        self.playback.current_song = snap.current_song;
+        self.playback.paused = snap.paused;
+        self.playback.player_loaded = snap.player_loaded;
+        if apply_progress {
+            self.playback.elapsed = Duration::from_millis(snap.elapsed_ms);
+            self.playback.total = snap.total_ms.map(Duration::from_millis);
+        }
+        if self.player_mode == PlayerMode::Client && apply_progress {
+            let new_id = self.playback.current_song.as_ref().map(|s| s.id.as_str());
+            if prev_id.as_deref() != new_id {
+                self.client_on_song_changed();
+            }
+        }
+    }
+
+    fn client_on_song_changed(&mut self) {
+        let Some(song) = self.playback.current_song.clone() else {
+            self.apply_dynamic_accent(None);
+            return;
+        };
+        if Self::is_radio_song(&song) {
+            let station = match &self.radio.stations {
+                LoadingState::Loaded(stations) => {
+                    Self::radio_station_for_song(&song, stations).cloned()
+                }
+                _ => None,
+            };
+            if let Some(station) = station {
+                let cache_key = station.art_cache_key();
+                let needs_fetch = self
+                    .art_cache
+                    .as_ref()
+                    .map(|(cached_id, _)| cached_id != &cache_key)
+                    .unwrap_or(true);
+                if needs_fetch {
+                    self.apply_dynamic_accent(None);
+                    self.fetch_radio_station_art(&station);
+                } else if self.art_cache_decoded.is_some() {
+                    let accent = self.accent_from_art_cache();
+                    self.apply_dynamic_accent(accent);
+                }
+            }
+            return;
+        }
+        let cover_id = song.cover_art.clone();
+        if let Some(ref cid) = cover_id {
+            let needs_fetch = self
+                .art_cache
+                .as_ref()
+                .map(|(cached_id, _)| cached_id != cid)
+                .unwrap_or(true);
+            if needs_fetch {
+                self.apply_dynamic_accent(None);
+                self.fetch_cover_art(cid.clone());
+            } else if self.art_cache.is_some() {
+                let accent = self.accent_from_art_cache();
+                self.apply_dynamic_accent(accent);
+            }
+        } else {
+            self.apply_dynamic_accent(None);
+        }
+        if self.should_fetch_lyrics() {
+            let cached_for_song = self
+                .lyrics_cache
+                .as_ref()
+                .map(|(id, _)| id == &song.id)
+                .unwrap_or(false);
+            if !cached_for_song {
+                self.fetch_lyrics(
+                    song.id.clone(),
+                    song.artist.clone().unwrap_or_default(),
+                    song.title.clone(),
+                    song.album.clone().unwrap_or_default(),
+                );
+            }
+        }
+    }
+
+    pub(crate) fn play_current_from_daemon(&mut self) {
+        self.play_current_local();
+    }
+
+    pub(crate) fn play_live_from_daemon(&mut self, url: String, song: ratune_subsonic::Song) {
+        self.play_gen += 1;
+        self.prefetch_gen.fetch_add(1, Ordering::Release);
+        self.playback.current_song = Some(song);
+        self.np_pane_focus = NowPlayingPaneFocus::Radio;
+        self.playback.player_loaded = true;
+        self.playback.paused = false;
+        self.playback.elapsed = Duration::ZERO;
+        self.playback.total = None;
+        let gen = self.play_gen;
+        let _ = self
+            .player_tx
+            .send(PlayerCommand::PlayLiveStream { url, gen });
     }
 
     /// Restore the on-disk favorites snapshot into browse caches (offline-capable).
@@ -1998,6 +2258,9 @@ impl App {
     fn on_went_offline(&mut self) {
         self.home_art_loading.clear();
         self.abort_all_browse_fetches();
+        if self.is_player_daemon() {
+            return;
+        }
         self.prepare_offline_browse();
         if self.browser_browse_mode != BrowseMode::Files {
             self.library.albums.clear();
@@ -2011,6 +2274,15 @@ impl App {
     }
 
     fn on_went_online(&mut self) {
+        if self.config.scrobble_enabled {
+            self.spawn_scrobble_queue_flush();
+        }
+        if self.config.radio_enabled {
+            self.fetch_radio_stations();
+        }
+        if self.is_player_daemon() {
+            return;
+        }
         self.offline_browse = None;
         self.prepare_index_browse();
         if self.browser_browse_mode == BrowseMode::Files {
@@ -2027,12 +2299,6 @@ impl App {
         }
         self.spawn_library_index_refresh(false);
         self.fetch_starred();
-        if self.config.radio_enabled {
-            self.fetch_radio_stations();
-        }
-        if self.config.scrobble_enabled {
-            self.spawn_scrobble_queue_flush();
-        }
     }
 
     /// Non-blocking startup Subsonic `ping`. Reachability / auth are applied via
@@ -2076,6 +2342,15 @@ impl App {
                 self.scrobble_queue.len()
             );
         }
+        if self.config.scrobble_enabled {
+            self.spawn_scrobble_queue_flush();
+        }
+        if self.config.radio_enabled {
+            self.fetch_radio_stations();
+        }
+        if self.is_player_daemon() {
+            return;
+        }
         if self.browser_browse_mode == BrowseMode::Files {
             if matches!(
                 self.folders.roots,
@@ -2103,12 +2378,6 @@ impl App {
         }
         self.spawn_library_index_refresh(false);
         self.fetch_starred();
-        if self.config.radio_enabled {
-            self.fetch_radio_stations();
-        }
-        if self.config.scrobble_enabled {
-            self.spawn_scrobble_queue_flush();
-        }
     }
 
     /// Re-kick albums/tracks left in `Loading` while startup ping was pending.
@@ -2255,6 +2524,9 @@ impl App {
 
     /// Spawn a task to fetch the artist list.
     pub fn fetch_artists(&mut self) {
+        if self.is_player_daemon() {
+            return;
+        }
         if let Some(snapshot) = self.browse_snapshot() {
             let artists = snapshot.artists.clone();
             let needs_rating_overlay = self.remote_available()
@@ -2365,6 +2637,9 @@ impl App {
     /// Walk the full library (`getArtists` + `getAlbum` per album) and refresh the
     /// on-disk metadata index used by the fzf picker.
     pub fn spawn_library_index_refresh(&mut self, force: bool) {
+        if self.is_player_daemon() {
+            return;
+        }
         if !self.remote_available() {
             if force {
                 self.flash_status_secs("Server unreachable — offline mode", 5);
@@ -2544,7 +2819,7 @@ impl App {
             self.queue.cursor = 0;
             self.queue.scroll = 0;
             self.queue.clear_shuffle_state();
-            let _ = self.player_tx.send(PlayerCommand::Stop);
+            self.send_player(PlayerCommand::Stop);
             self.playback.current_song = None;
             self.playback.elapsed = std::time::Duration::ZERO;
             self.playback.paused = false;
@@ -3678,6 +3953,9 @@ impl App {
                     duration_secs: song.duration.map(|d| d as u64).unwrap_or(0),
                 };
                 self.history.record_play(record);
+                if self.player_mode == PlayerMode::Daemon {
+                    let _ = self.history.save(&crate::history::history_path());
+                }
                 if self.remote_available() && self.config.scrobble_to_server {
                     crate::scrobble::spawn_subsonic_scrobble(
                         self.subsonic.clone(),
@@ -3777,6 +4055,8 @@ impl App {
     }
 
     pub fn handle_player_event(&mut self, event: PlayerEvent) {
+        let client = self.player_mode == PlayerMode::Client;
+        let daemon = self.player_mode == PlayerMode::Daemon;
         let progress_only = matches!(&event, PlayerEvent::Progress { .. });
         match event {
             PlayerEvent::TrackStarted => {
@@ -3784,176 +4064,179 @@ impl App {
                 if let Some(song) = self.playback.current_song.clone() {
                     if Self::is_radio_song(&song) {
                         self.playback.player_loaded = true;
-                        let station = match &self.radio.stations {
-                            LoadingState::Loaded(stations) => {
-                                Self::radio_station_for_song(&song, stations).cloned()
-                            }
-                            _ => None,
-                        };
-                        if let Some(station) = station {
-                            let cache_key = station.art_cache_key();
-                            let needs_fetch = self
-                                .art_cache
-                                .as_ref()
-                                .map(|(cached_id, _)| cached_id != &cache_key)
-                                .unwrap_or(true)
-                                || self
+                        if !daemon {
+                            let station = match &self.radio.stations {
+                                LoadingState::Loaded(stations) => {
+                                    Self::radio_station_for_song(&song, stations).cloned()
+                                }
+                                _ => None,
+                            };
+                            if let Some(station) = station {
+                                let cache_key = station.art_cache_key();
+                                let needs_fetch = self
                                     .art_cache
                                     .as_ref()
-                                    .is_some_and(|(cached_id, _)| cached_id == &cache_key)
-                                    && self.art_cache_decoded.is_none();
-                            if needs_fetch {
-                                self.apply_dynamic_accent(None);
-                                self.fetch_radio_station_art(&station);
-                            } else if self.art_cache_decoded.is_some() {
-                                let accent = self.accent_from_art_cache();
-                                self.apply_dynamic_accent(accent);
+                                    .map(|(cached_id, _)| cached_id != &cache_key)
+                                    .unwrap_or(true)
+                                    || self
+                                        .art_cache
+                                        .as_ref()
+                                        .is_some_and(|(cached_id, _)| cached_id == &cache_key)
+                                        && self.art_cache_decoded.is_none();
+                                if needs_fetch {
+                                    self.apply_dynamic_accent(None);
+                                    self.fetch_radio_station_art(&station);
+                                } else if self.art_cache_decoded.is_some() {
+                                    let accent = self.accent_from_art_cache();
+                                    self.apply_dynamic_accent(accent);
+                                }
                             }
                         }
                         return;
                     }
                 }
                 if let Some(song) = self.queue.current().cloned() {
-                    // Fetch cover art when the track has one and it differs from cache.
-                    let cover_id = song.cover_art.clone();
-                    if let Some(ref cid) = cover_id {
-                        let needs_fetch = self
-                            .art_cache
-                            .as_ref()
-                            .map(|(cached_id, _)| cached_id != cid)
-                            .unwrap_or(true);
-                        if needs_fetch {
-                            // Art will arrive via CoverArt library update — accent
-                            // is applied there.  Clear stale dynamic accent for now.
+                    if !daemon {
+                        // Fetch cover art when the track has one and it differs from cache.
+                        let cover_id = song.cover_art.clone();
+                        if let Some(ref cid) = cover_id {
+                            let needs_fetch = self
+                                .art_cache
+                                .as_ref()
+                                .map(|(cached_id, _)| cached_id != cid)
+                                .unwrap_or(true);
+                            if needs_fetch {
+                                self.apply_dynamic_accent(None);
+                                self.fetch_cover_art(cid.clone());
+                            } else if self.art_cache.is_some() {
+                                let accent = self.accent_from_art_cache();
+                                self.apply_dynamic_accent(accent);
+                            }
+                        } else {
                             self.apply_dynamic_accent(None);
-                            self.fetch_cover_art(cid.clone());
-                        } else if self.art_cache.is_some() {
-                            // Art already cached for this cover_id — extract immediately.
-                            let accent = self.accent_from_art_cache();
-                            self.apply_dynamic_accent(accent);
                         }
-                    } else {
-                        // Track has no cover art.
-                        self.apply_dynamic_accent(None);
-                    }
-                    // Fetch lyrics only when the lyrics pane is visible.
-                    if self.should_fetch_lyrics() {
-                        let cached_for_song = self
-                            .lyrics_cache
-                            .as_ref()
-                            .map(|(id, _)| id == &song.id)
-                            .unwrap_or(false);
-                        if !cached_for_song {
-                            self.fetch_lyrics(
-                                song.id.clone(),
-                                song.artist.clone().unwrap_or_default(),
-                                song.title.clone(),
-                                song.album.clone().unwrap_or_default(),
-                            );
-                        }
-                    }
-                    // Background-cache current track + prefetch next 2.
-                    if self.config.cache_enabled {
-                        // Collect (song_id, album_id) pairs to download, then spawn.
-                        // We read from queue and cache separately to satisfy the borrow checker.
-                        let mut to_download: Vec<(String, String)> = Vec::new();
-                        // Current track.
-                        if !self.cache.get_const(&song.id) {
-                            to_download
-                                .push((song.id.clone(), song.album_id.clone().unwrap_or_default()));
-                        }
-                        // Next 2 tracks.
-                        let cursor = self.queue.cursor;
-                        for offset in 1..=2usize {
-                            let idx = cursor + offset;
-                            if idx < self.queue.songs.len() {
-                                let s_id = self.queue.songs[idx].id.clone();
-                                let a_id =
-                                    self.queue.songs[idx].album_id.clone().unwrap_or_default();
-                                if !self.cache.get_const(&s_id) {
-                                    to_download.push((s_id, a_id));
-                                }
+                        if self.should_fetch_lyrics() {
+                            let cached_for_song = self
+                                .lyrics_cache
+                                .as_ref()
+                                .map(|(id, _)| id == &song.id)
+                                .unwrap_or(false);
+                            if !cached_for_song {
+                                self.fetch_lyrics(
+                                    song.id.clone(),
+                                    song.artist.clone().unwrap_or_default(),
+                                    song.title.clone(),
+                                    song.album.clone().unwrap_or_default(),
+                                );
                             }
                         }
-                        for (s_id, a_id) in to_download {
-                            self.spawn_cache_download(&s_id, &a_id);
-                        }
                     }
-                    self.scrobble_track_started(&song);
+                    if !client {
+                        if self.config.cache_enabled {
+                            let mut to_download: Vec<(String, String)> = Vec::new();
+                            if !self.cache.get_const(&song.id) {
+                                to_download.push((
+                                    song.id.clone(),
+                                    song.album_id.clone().unwrap_or_default(),
+                                ));
+                            }
+                            let cursor = self.queue.cursor;
+                            for offset in 1..=2usize {
+                                let idx = cursor + offset;
+                                if idx < self.queue.songs.len() {
+                                    let s_id = self.queue.songs[idx].id.clone();
+                                    let a_id =
+                                        self.queue.songs[idx].album_id.clone().unwrap_or_default();
+                                    if !self.cache.get_const(&s_id) {
+                                        to_download.push((s_id, a_id));
+                                    }
+                                }
+                            }
+                            for (s_id, a_id) in to_download {
+                                self.spawn_cache_download(&s_id, &a_id);
+                            }
+                        }
+                        self.scrobble_track_started(&song);
+                    }
                     self.playback.current_song = Some(song);
                 }
             }
             PlayerEvent::Progress { elapsed, total } => {
                 self.playback.elapsed = elapsed;
                 self.playback.total = total;
-                self.try_record_listen(elapsed, total);
+                if !client {
+                    self.try_record_listen(elapsed, total);
+                }
             }
             PlayerEvent::AboutToFinish => {
-                // Pre-load the next track for gapless playback.
-                if let Some(next) = self.queue.peek_next().cloned() {
+                if client {
+                    // Daemon owns gapless enqueue.
+                } else if let Some(next) = self.queue.peek_next().cloned() {
                     let duration = next
                         .duration
                         .map(|s| std::time::Duration::from_secs(u64::from(s)));
                     match self.resolve_playback(&next) {
                         ResolvedPlayback::Cached(path) => {
-                            let _ = self
-                                .player_tx
-                                .send(PlayerCommand::EnqueueNextCached { path, duration });
+                            self.send_player(PlayerCommand::EnqueueNextCached { path, duration });
                         }
                         ResolvedPlayback::Url(url) => {
-                            let _ = self
-                                .player_tx
-                                .send(PlayerCommand::EnqueueNext { url, duration });
+                            self.send_player(PlayerCommand::EnqueueNext { url, duration });
                         }
                         ResolvedPlayback::UnavailableOffline => {}
                     }
                 }
             }
             PlayerEvent::TrackAdvanced => {
-                // The gapless transition happened — advance the queue cursor.
-                self.queue.next();
-                self.playback.paused = false;
-                self.playback.elapsed = std::time::Duration::ZERO;
-                if let Some(song) = self.queue.current().cloned() {
-                    let cover_id = song.cover_art.clone();
-                    if let Some(ref cid) = cover_id {
-                        let needs_fetch = self
-                            .art_cache
-                            .as_ref()
-                            .map(|(cached_id, _)| cached_id != cid)
-                            .unwrap_or(true);
-                        if needs_fetch {
-                            self.apply_dynamic_accent(None);
-                            self.fetch_cover_art(cid.clone());
-                        } else if self.art_cache.is_some() {
-                            let accent = self.accent_from_art_cache();
-                            self.apply_dynamic_accent(accent);
+                if client {
+                    // Queue cursor comes from the daemon snapshot.
+                } else {
+                    self.queue.next();
+                    self.playback.paused = false;
+                    self.playback.elapsed = std::time::Duration::ZERO;
+                    if let Some(song) = self.queue.current().cloned() {
+                        if !daemon {
+                            let cover_id = song.cover_art.clone();
+                            if let Some(ref cid) = cover_id {
+                                let needs_fetch = self
+                                    .art_cache
+                                    .as_ref()
+                                    .map(|(cached_id, _)| cached_id != cid)
+                                    .unwrap_or(true);
+                                if needs_fetch {
+                                    self.apply_dynamic_accent(None);
+                                    self.fetch_cover_art(cid.clone());
+                                } else if self.art_cache.is_some() {
+                                    let accent = self.accent_from_art_cache();
+                                    self.apply_dynamic_accent(accent);
+                                }
+                            } else {
+                                self.apply_dynamic_accent(None);
+                            }
+                            if self.should_fetch_lyrics() {
+                                let cached_for_song = self
+                                    .lyrics_cache
+                                    .as_ref()
+                                    .map(|(id, _)| id == &song.id)
+                                    .unwrap_or(false);
+                                if !cached_for_song {
+                                    self.fetch_lyrics(
+                                        song.id.clone(),
+                                        song.artist.clone().unwrap_or_default(),
+                                        song.title.clone(),
+                                        song.album.clone().unwrap_or_default(),
+                                    );
+                                }
+                            }
                         }
-                    } else {
-                        self.apply_dynamic_accent(None);
+                        self.scrobble_track_started(&song);
+                        self.playback.current_song = Some(song);
                     }
-                    // Fetch lyrics only when the lyrics pane is visible.
-                    if self.should_fetch_lyrics() {
-                        let cached_for_song = self
-                            .lyrics_cache
-                            .as_ref()
-                            .map(|(id, _)| id == &song.id)
-                            .unwrap_or(false);
-                        if !cached_for_song {
-                            self.fetch_lyrics(
-                                song.id.clone(),
-                                song.artist.clone().unwrap_or_default(),
-                                song.title.clone(),
-                                song.album.clone().unwrap_or_default(),
-                            );
-                        }
-                    }
-                    self.scrobble_track_started(&song);
-                    self.playback.current_song = Some(song);
                 }
             }
             PlayerEvent::TrackEnded => {
-                if self
+                if client {
+                    // Queue advance is applied from the daemon snapshot.
+                } else if self
                     .playback
                     .current_song
                     .as_ref()
@@ -3964,11 +4247,9 @@ impl App {
                     self.playback.elapsed = Duration::ZERO;
                     self.playback.total = None;
                     return;
-                }
-                if self.queue.next() {
+                } else if self.queue.next() {
                     self.play_current();
                 } else if !self.queue.songs.is_empty() && self.queue.loop_enabled {
-                    // End of queue — loop back to the first track.
                     self.queue.cursor = 0;
                     self.queue.scroll = 0;
                     self.play_current();
@@ -4013,7 +4294,7 @@ impl App {
     }
 
     #[cfg(target_os = "linux")]
-    fn mpris_emit_props(&mut self) {
+    pub(crate) fn mpris_emit_props(&mut self) {
         if let Some(link) = &self.mpris {
             crate::mpris::write_snapshot(self, &link.snapshot);
             link.notify_refresh();
@@ -4027,7 +4308,7 @@ impl App {
     }
 
     #[cfg(target_os = "linux")]
-    fn mpris_emit_seek(&mut self, pos: std::time::Duration) {
+    pub(crate) fn mpris_emit_seek(&mut self, pos: std::time::Duration) {
         if let Some(link) = &self.mpris {
             crate::mpris::write_snapshot(self, &link.snapshot);
             link.notify_seeked(pos);
@@ -4086,7 +4367,7 @@ impl App {
             Pause => {
                 if self.playback.player_loaded && !self.playback.paused {
                     self.playback.paused = true;
-                    let _ = self.player_tx.send(PlayerCommand::Pause);
+                    self.send_player(PlayerCommand::Pause);
                 }
             }
             Play => {
@@ -4094,11 +4375,11 @@ impl App {
                     self.play_current();
                 } else if self.playback.paused {
                     self.playback.paused = false;
-                    let _ = self.player_tx.send(PlayerCommand::Resume);
+                    self.send_player(PlayerCommand::Resume);
                 }
             }
             Stop => {
-                let _ = self.player_tx.send(PlayerCommand::Stop);
+                self.send_player(PlayerCommand::Stop);
                 self.playback.player_loaded = false;
                 self.playback.elapsed = std::time::Duration::ZERO;
                 self.playback.paused = false;
@@ -4114,7 +4395,7 @@ impl App {
                     .unwrap_or(clamped_low);
                 let final_micros = clamped_low.min(max_micros).max(0);
                 let new_pos = std::time::Duration::from_micros(final_micros as u64);
-                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.send_player(PlayerCommand::Seek(new_pos));
                 self.playback.elapsed = new_pos;
                 self.mpris_emit_seek(new_pos);
                 return;
@@ -4134,7 +4415,7 @@ impl App {
                 if let Some(total) = self.playback.total {
                     new_pos = new_pos.min(total);
                 }
-                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.send_player(PlayerCommand::Seek(new_pos));
                 self.playback.elapsed = new_pos;
                 self.mpris_emit_seek(new_pos);
                 return;
@@ -4142,7 +4423,7 @@ impl App {
             SetVolume(v) => {
                 let pct = (v.clamp(0.0, 1.0) * 100.0).round() as u8;
                 self.config.default_volume = pct;
-                let _ = self.player_tx.send(PlayerCommand::SetVolume(
+                self.send_player(PlayerCommand::SetVolume(
                     self.config.default_volume as f32 / 100.0,
                 ));
             }
@@ -4159,6 +4440,25 @@ impl App {
 
     /// Send a PlayUrl command for the song the queue cursor points at.
     fn play_current(&mut self) {
+        if self.player_mode == PlayerMode::Client {
+            if let Some(song) = self.queue.current().cloned() {
+                self.np_pane_focus = NowPlayingPaneFocus::Queue;
+                self.playback.current_song = Some(song);
+                self.playback.player_loaded = true;
+                #[cfg(unix)]
+                if let Some(ctrl) = &self.daemon_ctrl {
+                    ctrl.send(crate::daemon::ClientMessage::SyncSession(
+                        crate::daemon::SessionSnapshot::from_app(self),
+                    ));
+                    ctrl.send(crate::daemon::ClientMessage::PlayNow);
+                }
+            }
+            return;
+        }
+        self.play_current_local();
+    }
+
+    fn play_current_local(&mut self) {
         if let Some(song) = self.queue.current().cloned() {
             self.np_pane_focus = NowPlayingPaneFocus::Queue;
             self.play_gen += 1;
@@ -4173,7 +4473,7 @@ impl App {
             let gen = self.play_gen;
             match resolved {
                 ResolvedPlayback::Cached(path) => {
-                    let _ = self.player_tx.send(PlayerCommand::PlayCached {
+                    self.send_player(PlayerCommand::PlayCached {
                         path,
                         duration,
                         gen,
@@ -4345,13 +4645,7 @@ impl App {
             return;
         }
         let gen = self.play_gen;
-        if self
-            .player_tx
-            .send(PlayerCommand::PlayLiveStream { url, gen })
-            .is_err()
-        {
-            self.flash_status_secs("Playback failed: audio engine unavailable", 5);
-        }
+        self.send_player(PlayerCommand::PlayLiveStream { url, gen });
     }
 
     fn play_selected_radio_station(&mut self) {
@@ -5610,6 +5904,10 @@ impl App {
             }
             Action::LibraryFzfPicker => {}
             Action::Quit => self.should_quit = true,
+            Action::QuitStop => {
+                self.stop_daemon_on_quit = true;
+                self.should_quit = true;
+            }
             Action::SwitchTab => {
                 self.playlist_overlay.visible = false;
                 self.playlist_picker = None;
@@ -5750,20 +6048,20 @@ impl App {
                         self.play_selected_radio_station();
                     } else if self.playback.paused {
                         self.playback.paused = false;
-                        let _ = self.player_tx.send(PlayerCommand::Resume);
+                        self.send_player(PlayerCommand::Resume);
                     } else {
                         self.playback.paused = true;
-                        let _ = self.player_tx.send(PlayerCommand::Pause);
+                        self.send_player(PlayerCommand::Pause);
                     }
                 } else if !self.playback.player_loaded && self.queue.current().is_some() {
                     // Restored queue: engine has no track yet — load and start playing.
                     self.play_current();
                 } else if self.playback.paused {
                     self.playback.paused = false;
-                    let _ = self.player_tx.send(PlayerCommand::Resume);
+                    self.send_player(PlayerCommand::Resume);
                 } else {
                     self.playback.paused = true;
-                    let _ = self.player_tx.send(PlayerCommand::Pause);
+                    self.send_player(PlayerCommand::Pause);
                 }
             }
             Action::NextTrack => {
@@ -5782,13 +6080,13 @@ impl App {
             }
             Action::VolumeUp => {
                 self.config.default_volume = self.config.default_volume.saturating_add(5).min(100);
-                let _ = self.player_tx.send(PlayerCommand::SetVolume(
+                self.send_player(PlayerCommand::SetVolume(
                     self.config.default_volume as f32 / 100.0,
                 ));
             }
             Action::VolumeDown => {
                 self.config.default_volume = self.config.default_volume.saturating_sub(5);
-                let _ = self.player_tx.send(PlayerCommand::SetVolume(
+                self.send_player(PlayerCommand::SetVolume(
                     self.config.default_volume as f32 / 100.0,
                 ));
             }
@@ -5804,7 +6102,7 @@ impl App {
                 } else {
                     self.playback.elapsed + std::time::Duration::from_secs(10)
                 };
-                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.send_player(PlayerCommand::Seek(new_pos));
                 self.playback.elapsed = new_pos;
             }
             Action::SeekBackward => {
@@ -5812,7 +6110,7 @@ impl App {
                     .playback
                     .elapsed
                     .saturating_sub(std::time::Duration::from_secs(10));
-                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.send_player(PlayerCommand::Seek(new_pos));
                 self.playback.elapsed = new_pos;
             }
             Action::SeekTo(pos) => {
@@ -5821,7 +6119,7 @@ impl App {
                 } else {
                     pos
                 };
-                let _ = self.player_tx.send(PlayerCommand::Seek(new_pos));
+                self.send_player(PlayerCommand::Seek(new_pos));
                 self.playback.elapsed = new_pos;
             }
             Action::SearchStart => {
@@ -6094,7 +6392,7 @@ impl App {
                         self.queue.cursor = 0;
                         self.queue.scroll = 0;
                         self.queue.clear_shuffle_state();
-                        let _ = self.player_tx.send(PlayerCommand::Stop);
+                        self.send_player(PlayerCommand::Stop);
                         self.playback.current_song = None;
                         self.playback.elapsed = std::time::Duration::ZERO;
                         self.playback.paused = false;
@@ -6822,16 +7120,14 @@ impl App {
                     let gen = self.play_gen;
                     match resolved {
                         ResolvedPlayback::Cached(path) => {
-                            let _ = self
-                                .player_tx
-                                .send(ratune_player::PlayerCommand::PlayCached {
-                                    path,
-                                    duration: dur,
-                                    gen,
-                                });
+                            self.send_player(ratune_player::PlayerCommand::PlayCached {
+                                path,
+                                duration: dur,
+                                gen,
+                            });
                         }
                         ResolvedPlayback::Url(url) => {
-                            let _ = self.player_tx.send(ratune_player::PlayerCommand::PlayUrl {
+                            self.send_player(ratune_player::PlayerCommand::PlayUrl {
                                 url,
                                 duration: dur,
                                 gen,
@@ -7002,7 +7298,7 @@ impl App {
                     self.queue.cursor = 0;
                     self.queue.scroll = 0;
                     self.queue.adopt_current_order_as_shuffle_baseline();
-                    let _ = self.player_tx.send(PlayerCommand::Stop);
+                    self.send_player(PlayerCommand::Stop);
                     self.playback.current_song = None;
                     self.playback.elapsed = std::time::Duration::ZERO;
                     self.playback.paused = false;
@@ -7318,7 +7614,7 @@ impl App {
         self.queue.cursor = 0;
         self.queue.scroll = 0;
         self.queue.clear_shuffle_state();
-        let _ = self.player_tx.send(PlayerCommand::Stop);
+        self.send_player(PlayerCommand::Stop);
         self.playback.current_song = None;
         self.playback.elapsed = std::time::Duration::ZERO;
         self.playback.paused = false;
@@ -7373,7 +7669,7 @@ impl App {
         self.playback.total = duration;
         self.playback.elapsed = std::time::Duration::ZERO;
         if self.playback.player_loaded {
-            let _ = self.player_tx.send(PlayerCommand::Stop);
+            self.send_player(PlayerCommand::Stop);
             self.playback.player_loaded = false;
         }
     }
@@ -7917,7 +8213,7 @@ impl App {
     // ── Favorites overlay ─────────────────────────────────────────────────────
 
     pub fn fetch_starred(&self) {
-        if !self.remote_available() {
+        if self.is_player_daemon() || !self.remote_available() {
             return;
         }
         let client = self.subsonic.clone();

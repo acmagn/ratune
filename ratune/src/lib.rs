@@ -3,6 +3,7 @@ mod app;
 mod cache;
 mod color;
 mod config;
+mod daemon;
 mod debug;
 mod desktop_notify;
 mod favorites_cache;
@@ -50,6 +51,43 @@ use config::{AlbumArtBackend, BrowseMode, Config, HomePanel};
 use keybinds::Keybinds;
 use state::{FavoritesFocus, GlobalConfirm, PlaylistFocus, PlaylistInputMode, RadioInputMode};
 
+/// Headless playback process (`ratune daemon`).
+pub async fn run_daemon() -> Result<()> {
+    #[cfg(unix)]
+    {
+        daemon::run_daemon().await
+    }
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!("background playback is not supported on this OS")
+    }
+}
+
+/// Stop a running playback daemon (`ratune stop`).
+pub fn stop_daemon() -> Result<bool> {
+    #[cfg(unix)]
+    {
+        daemon::stop()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = ();
+        Ok(false)
+    }
+}
+
+/// Human-readable daemon status (`ratune status`).
+pub fn daemon_status() -> String {
+    #[cfg(unix)]
+    {
+        daemon::status_text()
+    }
+    #[cfg(not(unix))]
+    {
+        "background playback is not supported on this OS".into()
+    }
+}
+
 /// Entry point shared by the `ratune` binary and integration tests.
 pub async fn run() -> Result<()> {
     keyring_init::install_default_keyring_store();
@@ -59,6 +97,26 @@ pub async fn run() -> Result<()> {
         eprintln!("error: {e:#}");
         process::exit(1);
     });
+    let background = config.daemon_enabled;
+    #[cfg(unix)]
+    let mut app = if background {
+        match daemon::ensure_and_connect() {
+            Ok(io) => match App::new_with_mode(config, crate::app::PlayerMode::Client, Some(io)) {
+                Ok(app) => app,
+                Err(e) => {
+                    eprintln!("error: {e:#}");
+                    process::exit(1);
+                }
+            },
+            Err(e) => {
+                eprintln!("warn: playback daemon unavailable ({e:#}); using in-process player");
+                App::new(config)?
+            }
+        }
+    } else {
+        App::new(config)?
+    };
+    #[cfg(not(unix))]
     let mut app = App::new(config)?;
 
     // Detect tmux first: $TMUX is set when running inside a tmux session.
@@ -95,6 +153,8 @@ pub async fn run() -> Result<()> {
     if let Err(e) = persist::restore_state(&mut app) {
         eprintln!("warn: could not restore state: {e}");
     }
+    #[cfg(unix)]
+    app.drain_daemon_snapshots();
 
     // Load play history.
     let history_path = history::history_path();
@@ -195,7 +255,9 @@ pub async fn run() -> Result<()> {
     }
 
     #[cfg(target_os = "linux")]
-    let mpris_ctrl_rx = if let Some((link, rx)) = mpris::setup(app.config.mpris_enabled) {
+    let mpris_ctrl_rx = if app.is_player_client() {
+        None
+    } else if let Some((link, rx)) = mpris::setup(app.config.mpris_enabled) {
         app.mpris = Some(link);
         app.mpris_sync_now();
         Some(rx)
@@ -232,6 +294,8 @@ pub async fn run() -> Result<()> {
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
+    let keep_daemon = app.keep_background_daemon();
+
     if let Some(detail) = app.startup_auth_error.take() {
         eprintln!(
             "error: authentication failed for Subsonic server at {}",
@@ -245,18 +309,26 @@ pub async fn run() -> Result<()> {
         process::exit(1);
     }
 
-    // Shut down the audio engine cleanly.
-    // Send Quit so the thread stops playback and releases the audio device.
-    // Then join with a 1-second timeout; if the thread is stuck on a network
-    // fetch (blocking download), detach it — the OS will clean it up on exit.
-    let _ = app.player_tx.send(ratune_player::PlayerCommand::Quit);
-    if let Some(handle) = app.player_join.take() {
-        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-        std::thread::spawn(move || {
-            let _ = handle.join();
-            let _ = done_tx.send(());
-        });
-        let _ = done_rx.recv_timeout(Duration::from_secs(1));
+    // Shut down the audio engine unless a background daemon should keep playing.
+    if keep_daemon {
+        eprintln!("Playback continues in the background. Run `ratune stop` to stop the player.");
+    } else if app.is_player_client() {
+        #[cfg(unix)]
+        app.daemon_shutdown();
+        std::thread::sleep(Duration::from_millis(150));
+    } else {
+        // Send Quit so the thread stops playback and releases the audio device.
+        // Then join with a 1-second timeout; if the thread is stuck on a network
+        // fetch (blocking download), detach it — the OS will clean it up on exit.
+        let _ = app.player_tx.send(ratune_player::PlayerCommand::Quit);
+        if let Some(handle) = app.player_join.take() {
+            let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+            std::thread::spawn(move || {
+                let _ = handle.join();
+                let _ = done_tx.send(());
+            });
+            let _ = done_rx.recv_timeout(Duration::from_secs(1));
+        }
     }
 
     result
@@ -439,6 +511,8 @@ async fn run_loop(
         while let Ok(update) = app.library_rx.try_recv() {
             app.apply_library_update(update);
         }
+        #[cfg(unix)]
+        app.drain_daemon_snapshots();
         // Drain player events from the audio thread.
         while let Ok(event) = app.player_rx.try_recv() {
             app.handle_player_event(event);
@@ -757,9 +831,16 @@ async fn run_loop(
                                             | KeyCode::Char('2')
                                             | KeyCode::Char('3')
                                     );
+                                    let is_quit_stop = matches_quit_stop(
+                                        &app.keybinds,
+                                        key.code,
+                                        key.modifiers,
+                                    );
                                     let is_quit_in_normal =
                                         app.keybinds.quit.matches(key.code, key.modifiers);
-                                    if is_tab_switch {
+                                    if is_quit_stop {
+                                        app.dispatch(Action::QuitStop);
+                                    } else if is_tab_switch {
                                         app.favorites_overlay.visible = false;
                                         let action = map_key(
                                             key.code,
@@ -799,13 +880,23 @@ async fn run_loop(
                                     // Quit key in Normal mode closes the overlay only;
                                     // the user must press q again (overlay closed) to quit.
                                     // In text-input modes q is a typed character — don't intercept.
+                                    let is_quit_stop = matches_quit_stop(
+                                        &app.keybinds,
+                                        key.code,
+                                        key.modifiers,
+                                    ) && matches!(
+                                        app.playlist_overlay.input_mode,
+                                        PlaylistInputMode::Normal
+                                    );
                                     let is_quit_in_normal =
                                         app.keybinds.quit.matches(key.code, key.modifiers)
                                             && matches!(
                                                 app.playlist_overlay.input_mode,
                                                 PlaylistInputMode::Normal
                                             );
-                                    if is_tab_switch {
+                                    if is_quit_stop {
+                                        app.dispatch(Action::QuitStop);
+                                    } else if is_tab_switch {
                                         app.playlist_overlay.visible = false;
                                         let action = map_key(
                                             key.code,
@@ -834,6 +925,12 @@ async fn run_loop(
                                 } else {
                                     let action = if app.help_visible {
                                         map_help_key(key.code, key.modifiers, &app.keybinds)
+                                    } else if matches_quit_stop(
+                                        &app.keybinds,
+                                        key.code,
+                                        key.modifiers,
+                                    ) {
+                                        Action::QuitStop
                                     } else if app.search_mode.active {
                                         map_search_key(key.code, key.modifiers)
                                     } else if app.search_filter.is_some()
@@ -1022,6 +1119,8 @@ async fn run_loop(
         while let Ok(event) = app.player_rx.try_recv() {
             app.handle_player_event(event);
         }
+        #[cfg(unix)]
+        app.flush_daemon_session();
         if let Some(rx) = &mpris_ctrl_rx {
             while let Ok(c) = rx.try_recv() {
                 app.handle_mpris_control(c);
@@ -1044,12 +1143,14 @@ async fn run_loop(
     if let Err(e) = persist::save_state(app) {
         eprintln!("warn: could not save state: {e}");
     }
-    // Persist play history.
-    let history_path = history::history_path();
-    if let Err(e) = app.history.save(&history_path) {
-        eprintln!("warn: could not save history: {e}");
+    // Daemon owns history and the scrobble retry queue while the TUI is a client.
+    if !app.is_player_client() {
+        let history_path = history::history_path();
+        if let Err(e) = app.history.save(&history_path) {
+            eprintln!("warn: could not save history: {e}");
+        }
+        app.persist_scrobble_queue();
     }
-    app.persist_scrobble_queue();
     Ok(())
 }
 
@@ -1399,6 +1500,9 @@ fn overlay_list_nav_direction(
 }
 
 fn map_radio_picker_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action {
+    if matches_quit_stop(kb, code, modifiers) {
+        return Action::QuitStop;
+    }
     if kb.toggle_radio.matches(code, modifiers) {
         return Action::ToggleRadioPicker;
     }
@@ -1543,6 +1647,12 @@ fn map_playlist_key(
     }
 }
 
+fn matches_quit_stop(kb: &Keybinds, code: KeyCode, modifiers: KeyModifiers) -> bool {
+    kb.quit_stop
+        .as_ref()
+        .is_some_and(|spec| spec.matches(code, modifiers))
+}
+
 /// Translate a key event into an `Action` when the playlist picker popup is open.
 fn map_picker_key(
     code: KeyCode,
@@ -1550,6 +1660,9 @@ fn map_picker_key(
     kb: &Keybinds,
     pending_gg: &mut bool,
 ) -> Action {
+    if matches_quit_stop(kb, code, modifiers) {
+        return Action::QuitStop;
+    }
     if let Some(dir) = overlay_list_nav_direction(code, modifiers, kb, pending_gg) {
         return Action::PlaylistPickerNavigate(dir);
     }
@@ -1731,6 +1844,9 @@ fn map_key(
     if kb.quit.matches(code, modifiers) {
         return Action::Quit;
     }
+    if matches_quit_stop(kb, code, modifiers) {
+        return Action::QuitStop;
+    }
     if kb.tab_switch.matches(code, modifiers) {
         return Action::SwitchTab;
     }
@@ -1901,8 +2017,8 @@ fn map_search_key(code: KeyCode, modifiers: KeyModifiers) -> Action {
 }
 
 /// Key handler when the help popup is open.
-/// Only `i`, `Esc`, and the configured quit key close the popup — everything
-/// else is suppressed so no accidental navigation occurs.
+/// `i`, `Esc`, and the configured quit key close the popup; `quit_stop` still
+/// hard-quits. Everything else is suppressed so no accidental navigation occurs.
 fn map_help_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action {
     if kb.toggle_help.matches(code, modifiers) {
         return Action::ToggleHelp;
@@ -1912,6 +2028,9 @@ fn map_help_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action
     }
     if kb.quit.matches(code, modifiers) {
         return Action::ToggleHelp;
+    }
+    if matches_quit_stop(kb, code, modifiers) {
+        return Action::QuitStop;
     }
     if code == KeyCode::Char('k') || code == KeyCode::Up {
         return Action::HelpScrollUp;

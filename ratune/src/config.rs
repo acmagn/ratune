@@ -109,6 +109,8 @@ pub struct KeybindsSection {
     /// Jump to NowPlaying tab (default: '3')
     pub go_to_nowplaying: Option<String>,
     pub quit: Option<String>,
+    /// Quit the TUI and stop the playback daemon. Default: Ctrl+q (`""` disables).
+    pub quit_stop: Option<String>,
     /// Fuzzy track picker (metadata index). Default: Ctrl+f
     pub library_fzf: Option<String>,
     /// Force library index refresh. Default: Ctrl+g
@@ -1204,6 +1206,11 @@ struct PlayerSection {
     /// When true, playback wraps to the first queue track after the last one ends.
     #[serde(default = "default_queue_loop")]
     queue_loop: bool,
+    /// When true (default on Unix), playback continues in a background daemon
+    /// after the TUI closes. Set false to restore in-process playback (music
+    /// stops when ratune exits). Ignored on non-Unix platforms.
+    #[serde(default = "default_daemon", alias = "background_playback")]
+    daemon: bool,
 }
 
 impl Default for PlayerSection {
@@ -1213,6 +1220,7 @@ impl Default for PlayerSection {
             max_bit_rate: 0,
             mpris: default_mpris(),
             queue_loop: default_queue_loop(),
+            daemon: default_daemon(),
         }
     }
 }
@@ -1257,6 +1265,10 @@ fn default_mpris() -> bool {
 }
 
 fn default_queue_loop() -> bool {
+    true
+}
+
+fn default_daemon() -> bool {
     true
 }
 
@@ -1355,6 +1367,8 @@ pub struct Config {
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     pub queue_loop: bool,
+    /// Unix: keep a playback daemon so music continues after the TUI closes.
+    pub daemon_enabled: bool,
     /// When true, show ratings in the UI and allow rating keybinds / MPRIS UserRating (`[ratings].enabled`).
     pub ratings_enabled: bool,
     /// Star glyphs for rating display (`[theme.icon].rating_*`, legacy `[ratings].star_*`).
@@ -1790,6 +1804,17 @@ impl Config {
             max_bit_rate: file_cfg.player.max_bit_rate,
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
+            daemon_enabled: {
+                #[cfg(unix)]
+                {
+                    file_cfg.player.daemon
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = file_cfg.player.daemon;
+                    false
+                }
+            },
             ratings_enabled: file_cfg.ratings.enabled,
             rating_stars: resolve_rating_stars(&file_cfg.theme.icon, &file_cfg.ratings),
             radio_enabled,
@@ -1931,6 +1956,7 @@ default_volume = 70
 max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # mpris = true     # Linux: register on session D-Bus for media keys / playerctl (default: true)
 # queue_loop = true   # wrap to first track after the last queue item (default: true)
+# daemon = true       # Unix: keep playing after the TUI closes (`q` detaches, Ctrl+q / `ratune stop` quits)
 
 [ratings]
 # enabled = false     # show ratings in UI, enable Shift+1…5 keybinds, export MPRIS UserRating
@@ -1969,6 +1995,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # go_to_browser = "2"
 # go_to_nowplaying = "3"
 # quit          = "q"
+# quit_stop     = "Ctrl+q"    # quit TUI and stop daemon; "" disables
 # library_fzf     = "Ctrl+f"
 # library_refresh = "Ctrl+g"
 # library_index_append_queue = "Ctrl+a"   # append full index to queue (y/n); "" to disable
@@ -2740,6 +2767,25 @@ cache_enabled = false
     fn parses_queue_loop() {
         let fc: FileConfig = toml::from_str("[player]\nqueue_loop = false\n").expect("toml");
         assert!(!fc.player.queue_loop);
+    }
+
+    #[test]
+    fn daemon_defaults_true() {
+        let fc: FileConfig = toml::from_str("").expect("toml");
+        assert!(fc.player.daemon);
+    }
+
+    #[test]
+    fn parses_daemon() {
+        let fc: FileConfig = toml::from_str("[player]\ndaemon = false\n").expect("toml");
+        assert!(!fc.player.daemon);
+    }
+
+    #[test]
+    fn parses_daemon_alias_background_playback() {
+        let fc: FileConfig =
+            toml::from_str("[player]\nbackground_playback = false\n").expect("toml");
+        assert!(!fc.player.daemon);
     }
 
     #[test]
