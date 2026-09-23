@@ -18,6 +18,7 @@ Ratune was built to bring together a combination of features often missing from 
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Player daemon](#player-daemon)
 - [Default keybinds](#default-keybinds)
 - [Mouse support](#mouse-support)
 - [tmux](#tmux)
@@ -31,7 +32,7 @@ Ratune was built to bring together a combination of features often missing from 
 
 ## Highlights
 
-- **Playback**: Gapless queue, seek, shuffle/unshuffle, and playlist management.
+- **Playback**: Gapless queue, seek, shuffle/unshuffle, and playlist management. A player daemon keeps music going after you close the TUI (`ratune stop` to quit).
 - **Internet radio**: Stations from your server
 - **Album Art**: Display using Kitty graphics and [ratatui-image](https://github.com/ratatui/ratatui-image) (see link for compatible terminals)
 - **Lyrics**: Synced lyrics via LRCLib (default), NetEase Cloud Music, or your Subsonic server. Optional on-disk cache for offline use
@@ -398,6 +399,21 @@ Get `session_key` once with `ratune scrobble-auth` (prints the key for config un
 
 ---
 
+## Player daemon
+
+On Linux and macOS, Ratune runs a playback daemon so music does not stop when you close the TUI.
+
+- **`q`** leaves the interface. If a track is loaded, playback continues (pause, next, and media keys still work via MPRIS).
+- **`Ctrl+q`** (`quit_stop`) leaves the interface and stops the daemon (same as `ratune stop`). Set `quit_stop = ""` in `[keybinds]` to disable it, or bind any other key.
+- Opening `ratune` again attaches to the same daemon.
+- **`ratune stop`** shuts the daemon down and stops the music.
+- **`ratune status`** shows whether the daemon is running.
+- Set `[player] daemon = false` in `config.toml` to restore the old in-process behaviour (music stops when the TUI exits).
+
+The daemon socket lives under `$XDG_RUNTIME_DIR/ratune/` (or a temp dir if that variable is unset). Logs go to `~/.local/state/ratune/daemon.log`.
+
+---
+
 ## Default keybinds
 
 These are defaults; everything is overridable in `config.toml`. Press `i` in the app for the list that matches your file.
@@ -429,7 +445,8 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `Ctrl+b` | Toggle folder / artist browse (if `[ui.browsetab] folder_navigation = true`) |
 | `t` | Toggle dynamic theme |
 | `i` | Help |
-| `q` | Quit |
+| `q` | Close the TUI (music keeps playing if a track is loaded) |
+| `Ctrl+q` | Quit the TUI and stop the playback daemon (`quit_stop`) |
 
 ---
 
@@ -539,6 +556,8 @@ Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `~/.config/ratune/state.json` | UI state, queue, browser position, Now Playing pane focus |
 | `~/.local/share/ratune/history.json` | Play history |
 | `~/.local/share/ratune/scrobble-queue.json` | Pending Last.fm scrobbles (offline retry) |
+| `~/.local/state/ratune/daemon.log` | Playback daemon log |
+| `$XDG_RUNTIME_DIR/ratune/ratune.sock` | Playback daemon socket (Unix) |
 | `~/.cache/ratune/` | Track cache, library index JSON, etc. |
 
 ---
