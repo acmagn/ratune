@@ -11,7 +11,7 @@ use crate::state::NowPlayingPaneFocus;
 
 // ── Saved state ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedState {
     #[serde(default)]
     pub active_tab: Tab,
@@ -48,11 +48,32 @@ fn state_path() -> Result<PathBuf> {
     Ok(dir.join("state.json"))
 }
 
+fn read_existing_state() -> Option<SavedState> {
+    let path = state_path().ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Keep TUI navigation from `ui`; take live queue/volume/pane from `playback`.
+fn merge_daemon_playback_into_saved(ui: SavedState, playback: SavedState) -> SavedState {
+    SavedState {
+        active_tab: ui.active_tab,
+        browser_focus: ui.browser_focus,
+        selected_artist: ui.selected_artist,
+        selected_album: ui.selected_album,
+        selected_track: ui.selected_track,
+        queue: playback.queue,
+        queue_cursor: playback.queue_cursor,
+        player_volume: playback.player_volume,
+        np_pane_focus: playback.np_pane_focus,
+    }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Serialize current UI state to `~/.config/ratune/state.json`.
 pub fn save_state(app: &App) -> Result<()> {
-    let state = SavedState {
+    let mut state = SavedState {
         active_tab: app.active_tab,
         browser_focus: app.browser_focus,
         selected_artist: app.library.selected_artist,
@@ -63,6 +84,13 @@ pub fn save_state(app: &App) -> Result<()> {
         player_volume: Some(app.config.default_volume),
         np_pane_focus: app.np_pane_focus,
     };
+    // The daemon never drives Browse/Home selection. Keep those fields from the
+    // last TUI save so a 30s persist does not rewind the browser position.
+    if app.is_player_daemon() {
+        if let Some(existing) = read_existing_state() {
+            state = merge_daemon_playback_into_saved(existing, state);
+        }
+    }
     let path = state_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -75,7 +103,7 @@ pub fn save_state(app: &App) -> Result<()> {
 
 /// Restore previously saved state into `app`. Populates playback display state
 /// (current_song, total, paused=true) so the now-playing bar renders immediately,
-/// but does NOT send any command to the player engine — the track loads on first play.
+/// but does NOT send any command to the player engine. The track loads on first play.
 pub fn restore_state(app: &mut App) -> Result<()> {
     let path = state_path()?;
     if !path.exists() {
@@ -91,6 +119,12 @@ pub fn restore_state(app: &mut App) -> Result<()> {
     app.library.selected_artist = state.selected_artist;
     app.library.selected_album = state.selected_album;
     app.library.selected_track = state.selected_track;
+
+    // Client TUI takes live queue/playback from the daemon snapshot after connect.
+    if app.is_player_client() {
+        return Ok(());
+    }
+
     app.queue.songs = state.queue;
     app.queue.cursor = state
         .queue_cursor
@@ -107,13 +141,11 @@ pub fn restore_state(app: &mut App) -> Result<()> {
     if let Some(vol) = state.player_volume {
         let v = vol.min(100);
         app.config.default_volume = v;
-        let _ = app
-            .player_tx
-            .send(PlayerCommand::SetVolume(v as f32 / 100.0));
+        app.send_player(PlayerCommand::SetVolume(v as f32 / 100.0));
     }
 
     // Populate display-only playback state so the now-playing bar shows the
-    // restored track immediately. `player_loaded` stays false — the engine gets
+    // restored track immediately. `player_loaded` stays false. The engine gets
     // the actual URL only when the user presses play for the first time.
     if let Some(song) = app.queue.current().cloned() {
         let duration = song
@@ -126,8 +158,54 @@ pub fn restore_state(app: &mut App) -> Result<()> {
         app.playback.current_song = Some(song);
         app.playback.total = duration;
         app.playback.paused = true;
-        // player_loaded remains false (default) — engine has no track yet.
+        // player_loaded remains false (default). Engine has no track yet.
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ui_only() -> SavedState {
+        SavedState {
+            active_tab: Tab::Browser,
+            browser_focus: BrowserColumn::Albums,
+            selected_artist: Some(2),
+            selected_album: Some(4),
+            selected_track: Some(1),
+            queue: Vec::new(),
+            queue_cursor: 0,
+            player_volume: Some(40),
+            np_pane_focus: NowPlayingPaneFocus::Queue,
+        }
+    }
+
+    fn playback_only() -> SavedState {
+        SavedState {
+            active_tab: Tab::Home,
+            browser_focus: BrowserColumn::Artists,
+            selected_artist: None,
+            selected_album: None,
+            selected_track: None,
+            queue: Vec::new(),
+            queue_cursor: 7,
+            player_volume: Some(80),
+            np_pane_focus: NowPlayingPaneFocus::Radio,
+        }
+    }
+
+    #[test]
+    fn daemon_save_keeps_tui_navigation() {
+        let merged = merge_daemon_playback_into_saved(ui_only(), playback_only());
+        assert_eq!(merged.active_tab, Tab::Browser);
+        assert_eq!(merged.browser_focus, BrowserColumn::Albums);
+        assert_eq!(merged.selected_artist, Some(2));
+        assert_eq!(merged.selected_album, Some(4));
+        assert_eq!(merged.selected_track, Some(1));
+        assert_eq!(merged.queue_cursor, 7);
+        assert_eq!(merged.player_volume, Some(80));
+        assert_eq!(merged.np_pane_focus, NowPlayingPaneFocus::Radio);
+    }
 }

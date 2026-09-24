@@ -380,7 +380,7 @@ pub struct MprisSnapshot {
     pub length_micros: i64,
     pub position_micros: i64,
     pub volume: f64,
-    /// `mpris:artUrl` — typically `file:///…` for the current cover image.
+    /// `mpris:artUrl` for the current cover image (usually `file:///…`).
     pub art_url: Option<String>,
     #[cfg(target_os = "linux")]
     pub playback_status: mpris_server::PlaybackStatus,

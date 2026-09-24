@@ -66,7 +66,7 @@ fn make_token(password: &str, salt: &str) -> String {
 
 /// Generate `len` random lowercase alphanumeric characters for use as a salt.
 ///
-/// Uses a simple LCG seeded from the current system time — sufficient
+/// Uses a simple LCG seeded from the current system time. Sufficient
 /// entropy for a per-request Subsonic salt.
 fn random_ascii(len: usize) -> String {
     use std::time::SystemTime;
@@ -91,7 +91,7 @@ fn random_ascii(len: usize) -> String {
 
 /// Async Subsonic API client.
 ///
-/// Create one instance and reuse it — the underlying `reqwest::Client` maintains
+/// Create one instance and reuse it. The underlying `reqwest::Client` maintains
 /// a connection pool.
 ///
 /// ```no_run
@@ -165,7 +165,7 @@ impl SubsonicClient {
 
     /// Build the standard authentication parameters.
     ///
-    /// A fresh random salt — and therefore a fresh token — is generated on
+    /// A fresh random salt is generated on
     /// every call so that repeated requests are not replayable.
     fn auth_params(&self) -> Vec<(&'static str, String)> {
         let salt = random_ascii(12);
@@ -1234,7 +1234,7 @@ mod tests {
         SubsonicClient::new(&url, &user, &pass).expect("client construction must not fail")
     }
 
-    /// Live integration test — pings a real Subsonic server. Requires
+    /// Live integration test. Pings a real Subsonic server. Requires
     /// `SUBSONIC_URL`, `SUBSONIC_USER`, `SUBSONIC_PASS`. Run with:
     /// `cargo test -p ratune-subsonic ping_live_navidrome -- --ignored --nocapture`
     #[tokio::test]

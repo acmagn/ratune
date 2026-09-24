@@ -1,4 +1,4 @@
-//! Internet radio station picker (Shift+R) — play, browse, and manage stations.
+//! Internet radio station picker (Shift+R). Play, browse, and manage stations.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};

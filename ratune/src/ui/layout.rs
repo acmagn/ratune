@@ -341,7 +341,7 @@ impl Default for LayoutOptions {
 pub struct LayoutAreas {
     pub center: Rect,
     pub now_playing: Rect,
-    /// Tab indicator bar — height 1.
+    /// Tab indicator bar. Height 1.
     pub tab_bar: Rect,
     pub status_bar: Rect,
 }
@@ -413,7 +413,7 @@ fn boxed_np_footer_row_count(app: &App) -> u16 {
 }
 
 /// [`LayoutOptions`] for the current frame: when the Now Playing tab uses boxed layout, the bottom
-/// strip only holds optional footer chrome — reserve matching height (not the full row-mode size).
+/// strip only holds optional footer chrome. Reserve matching height (not the full row-mode size).
 pub fn layout_options_for_app(app: &App) -> LayoutOptions {
     let base = app.config.layout_options();
     if app

@@ -194,7 +194,7 @@ impl PlayHistory {
 // ── Path helper ───────────────────────────────────────────────────────────────
 
 /// Returns `~/.local/share/ratune/history.json`.
-/// Computed from `$HOME` (no `dirs` crate needed — it is not yet in Cargo.toml).
+/// Computed from `$HOME` (no `dirs` crate needed; it is not yet in Cargo.toml).
 pub fn history_path() -> std::path::PathBuf {
     if let Ok(home) = std::env::var("HOME") {
         std::path::PathBuf::from(home)

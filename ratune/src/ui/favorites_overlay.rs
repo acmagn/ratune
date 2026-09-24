@@ -1,4 +1,4 @@
-//! Favorites (starred) browser overlay — songs, albums, and artists from `getStarred2`.
+//! Favorites (starred) browser overlay. Songs, albums, and artists from `getStarred2`.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};

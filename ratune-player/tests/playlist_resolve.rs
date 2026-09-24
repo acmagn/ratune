@@ -32,7 +32,7 @@ fn spawn_player_plays_pls_playlist_url() {
     let _ = handle.join();
 
     if let Some(e) = err {
-        // PLS resolves to an AAC stream on this host — decode may fail, but not at playlist fetch.
+        // PLS resolves to an AAC stream on this host. Decode may fail, but not at playlist fetch.
         assert!(
             !e.contains("stream HTTP error for http://provisioning.streamtheworld.com"),
             "playlist URL itself should not 404: {e}"

@@ -46,7 +46,7 @@ fn fit_inside_scaled(w: u32, h: u32, max_w: u32, max_h: u32, allow_upscale: bool
 /// Terminal-cell [`Rect`] inside `inner` that **contain**-fits `img`, centered (integer cols/rows).
 ///
 /// Uses `font` so aspect ratio matches terminal **pixels** (cells are rarely square in px).
-/// Used so album art is drawn only in the cells the cover occupies — gutters stay unpainted.
+/// Used so album art is drawn only in the cells the cover occupies. Gutters stay unpainted.
 pub fn contain_fit_rect_in_cells(img: &DynamicImage, inner: Rect, font: FontSize) -> Rect {
     let (iw, ih) = (img.width(), img.height());
     if iw == 0 || ih == 0 || inner.width == 0 || inner.height == 0 {
@@ -69,7 +69,7 @@ pub fn contain_fit_rect_in_cells(img: &DynamicImage, inner: Rect, font: FontSize
     Rect::new(x, y, w, h)
 }
 
-/// Contain-fit into the pixel budget for `rect` — no letterbox canvas (bitmap matches fitted size).
+/// Contain-fit into the pixel budget for `rect`. No letterbox canvas (bitmap matches fitted size).
 pub fn prepare_art_image_for_rect_contain_fit(
     img: DynamicImage,
     rect: Rect,

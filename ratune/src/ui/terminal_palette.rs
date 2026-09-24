@@ -209,7 +209,7 @@ fn tmux_passthrough_wrap(inner: &str) -> String {
 
 #[cfg(unix)]
 fn query_osc4_indexed_rgb(index: u8, in_tmux: bool) -> Option<(u8, u8, u8)> {
-    // ESC ] 4 ; Ps ; ? BEL — xterm / many VTEs reply with OSC 4 ; Ps ; spec ST|BEL
+    // ESC ] 4 ; Ps ; ? BEL. Xterm / many VTEs reply with OSC 4 ; Ps ; spec ST|BEL
     let inner = format!("\x1b]4;{};?\x07", index);
     let q = if in_tmux {
         tmux_passthrough_wrap(&inner)

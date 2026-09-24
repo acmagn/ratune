@@ -90,7 +90,7 @@ fn placeholder_value(key: char, ctx: &NowPlayingContext<'_>) -> String {
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string(),
-        // Album artist — Subsonic `Song` has no separate field yet.
+        // Album artist. Subsonic `Song` has no separate field yet.
         'A' => String::new(),
         'c' | 'p' => String::new(),
         'q' => s.and_then(format_quality).unwrap_or_default(),

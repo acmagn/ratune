@@ -109,6 +109,8 @@ pub struct KeybindsSection {
     /// Jump to NowPlaying tab (default: '3')
     pub go_to_nowplaying: Option<String>,
     pub quit: Option<String>,
+    /// Quit the TUI and stop the playback daemon. Default: Ctrl+q (`""` disables).
+    pub quit_stop: Option<String>,
     /// Fuzzy track picker (metadata index). Default: Ctrl+f
     pub library_fzf: Option<String>,
     /// Force library index refresh. Default: Ctrl+g
@@ -277,7 +279,7 @@ impl LyricsSource {
     }
 }
 
-// ── [library] — metadata index + fzf picker ───────────────────────────────────
+// ── [library]: metadata index + fzf picker ───────────────────────────────────
 
 /// Fuzzy picker settings under `[library.fzf]`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -423,7 +425,7 @@ impl Default for LibrarySection {
     }
 }
 
-// ── [scrobble] — Last.fm / Libre.fm + Subsonic play counts ───────────────────
+// ── [scrobble]: Last.fm / Libre.fm + Subsonic play counts ───────────────────
 
 /// Local listen threshold (history + Subsonic). Defaults: 50%, 30 s cap.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1002,9 +1004,9 @@ pub struct ThemeSection {
     /// Pane outline style + optional edge glyphs. See [`ThemeBorderLinesSection`].
     #[serde(default)]
     pub border_lines: ThemeBorderLinesSection,
-    /// Legacy — prefer `[theme.border_lines].type`.
+    /// Legacy. Prefer `[theme.border_lines].type`.
     pub border_type: Option<String>,
-    /// Legacy — prefer `[theme.border_lines].top_left` (etc.).
+    /// Legacy. Prefer `[theme.border_lines].top_left` (etc.).
     pub border_top_left: Option<String>,
     pub border_top_right: Option<String>,
     pub border_bottom_left: Option<String>,
@@ -1094,9 +1096,9 @@ pub struct ThemeIconSection {
     pub offline: Option<String>,
     /// Radio live prefix glyph (default: `●`).
     pub live: Option<String>,
-    /// Legacy — prefer `[theme.border_lines].type`.
+    /// Legacy. Prefer `[theme.border_lines].type`.
     pub border_type: Option<String>,
-    /// Legacy — prefer `[theme.border_lines]` edge keys.
+    /// Legacy. Prefer `[theme.border_lines]` edge keys.
     pub border_top_left: Option<String>,
     pub border_top_right: Option<String>,
     pub border_bottom_left: Option<String>,
@@ -1204,6 +1206,11 @@ struct PlayerSection {
     /// When true, playback wraps to the first queue track after the last one ends.
     #[serde(default = "default_queue_loop")]
     queue_loop: bool,
+    /// When true (default on Unix), playback continues in a background daemon
+    /// after the TUI closes. Set false to restore in-process playback (music
+    /// stops when ratune exits). Ignored on non-Unix platforms.
+    #[serde(default = "default_daemon", alias = "background_playback")]
+    daemon: bool,
 }
 
 impl Default for PlayerSection {
@@ -1213,6 +1220,7 @@ impl Default for PlayerSection {
             max_bit_rate: 0,
             mpris: default_mpris(),
             queue_loop: default_queue_loop(),
+            daemon: default_daemon(),
         }
     }
 }
@@ -1222,16 +1230,16 @@ pub(crate) struct RatingsSection {
     /// Show ratings in the UI, allow rating keybinds, and export MPRIS UserRating.
     #[serde(default)]
     enabled: bool,
-    /// Legacy glyph — prefer `[theme.icon].rating_filled`. Default: ⭑
+    /// Legacy glyph. Prefer `[theme.icon].rating_filled`. Default: ⭑
     #[serde(default = "default_rating_star_filled")]
     star_filled: String,
-    /// Legacy glyph — prefer `[theme.icon].rating_empty`. Default: ⭒
+    /// Legacy glyph. Prefer `[theme.icon].rating_empty`. Default: ⭒
     #[serde(default = "default_rating_star_empty")]
     star_empty: String,
-    /// Legacy — prefer `[theme.icon].rating_bracket_open`. Default: `[`
+    /// Legacy. Prefer `[theme.icon].rating_bracket_open`. Default: `[`
     #[serde(default = "default_rating_bracket_open")]
     bracket_open: String,
-    /// Legacy — prefer `[theme.icon].rating_bracket_close`. Default: `]`
+    /// Legacy. Prefer `[theme.icon].rating_bracket_close`. Default: `]`
     #[serde(default = "default_rating_bracket_close")]
     bracket_close: String,
 }
@@ -1257,6 +1265,10 @@ fn default_mpris() -> bool {
 }
 
 fn default_queue_loop() -> bool {
+    true
+}
+
+fn default_daemon() -> bool {
     true
 }
 
@@ -1355,6 +1367,8 @@ pub struct Config {
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     pub queue_loop: bool,
+    /// Unix: keep a playback daemon so music continues after the TUI closes.
+    pub daemon_enabled: bool,
     /// When true, show ratings in the UI and allow rating keybinds / MPRIS UserRating (`[ratings].enabled`).
     pub ratings_enabled: bool,
     /// Star glyphs for rating display (`[theme.icon].rating_*`, legacy `[ratings].star_*`).
@@ -1363,9 +1377,9 @@ pub struct Config {
     pub radio_enabled: bool,
     /// When false, skip HTTP fetches to station homepages for Now Playing art.
     pub radio_fetch_station_icons: bool,
-    /// Raw keybind strings — parsed into `Keybinds` by `App::new`.
+    /// Raw keybind strings. Parsed into `Keybinds` by `App::new`.
     pub keybinds: KeybindsSection,
-    /// Raw theme colour strings — parsed into `Theme` by `App::new`.
+    /// Raw theme colour strings. Parsed into `Theme` by `App::new`.
     pub theme: ThemeSection,
     /// Whether to show the lyrics overlay on startup.
     pub lyrics_visible: bool,
@@ -1790,6 +1804,17 @@ impl Config {
             max_bit_rate: file_cfg.player.max_bit_rate,
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
+            daemon_enabled: {
+                #[cfg(unix)]
+                {
+                    file_cfg.player.daemon
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = file_cfg.player.daemon;
+                    false
+                }
+            },
             ratings_enabled: file_cfg.ratings.enabled,
             rating_stars: resolve_rating_stars(&file_cfg.theme.icon, &file_cfg.ratings),
             radio_enabled,
@@ -1920,7 +1945,7 @@ fn create_default(path: &PathBuf) -> Result<()> {
             .with_context(|| format!("creating config dir {}", parent.display()))?;
     }
     // Intentionally a small starter file (credentials + common toggles). Every key lives in
-    // `docs/sample-config.toml` in the source tree — copy from there when you want the full menu.
+    // `docs/sample-config.toml` in the source tree. Copy from there when you want the full menu.
     let default_toml = r##"[server]
 url = ""
 username = ""
@@ -1931,6 +1956,7 @@ default_volume = 70
 max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # mpris = true     # Linux: register on session D-Bus for media keys / playerctl (default: true)
 # queue_loop = true   # wrap to first track after the last queue item (default: true)
+# daemon = true       # Unix: keep playing after the TUI closes (`q` detaches, Ctrl+q / `ratune stop` quits)
 
 [ratings]
 # enabled = false     # show ratings in UI, enable Shift+1…5 keybinds, export MPRIS UserRating
@@ -1969,6 +1995,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # go_to_browser = "2"
 # go_to_nowplaying = "3"
 # quit          = "q"
+# quit_stop     = "Ctrl+q"    # quit TUI and stop daemon; "" disables
 # library_fzf     = "Ctrl+f"
 # library_refresh = "Ctrl+g"
 # library_index_append_queue = "Ctrl+a"   # append full index to queue (y/n); "" to disable
@@ -2740,6 +2767,25 @@ cache_enabled = false
     fn parses_queue_loop() {
         let fc: FileConfig = toml::from_str("[player]\nqueue_loop = false\n").expect("toml");
         assert!(!fc.player.queue_loop);
+    }
+
+    #[test]
+    fn daemon_defaults_true() {
+        let fc: FileConfig = toml::from_str("").expect("toml");
+        assert!(fc.player.daemon);
+    }
+
+    #[test]
+    fn parses_daemon() {
+        let fc: FileConfig = toml::from_str("[player]\ndaemon = false\n").expect("toml");
+        assert!(!fc.player.daemon);
+    }
+
+    #[test]
+    fn parses_daemon_alias_background_playback() {
+        let fc: FileConfig =
+            toml::from_str("[player]\nbackground_playback = false\n").expect("toml");
+        assert!(!fc.player.daemon);
     }
 
     #[test]

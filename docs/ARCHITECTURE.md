@@ -7,7 +7,7 @@ ratune is a Cargo workspace with four crates:
 | `ratune-subsonic` | Subsonic API client — authentication, endpoints, models |
 | `ratune-scrobble` | Last.fm / Libre.fm Audioscrobbler client, auth helpers, listen thresholds |
 | `ratune-player` | Audio engine — rodio-based playback on a dedicated thread, gapless transitions, sample tap for FFT |
-| `ratune` | Binary — TUI, event loop, state management, Kitty graphics, scrobble integration |
+| `ratune` | Binary — TUI, event loop, state management, Kitty graphics, scrobble integration, Unix playback daemon |
 
 ## Crate responsibilities
 
@@ -20,7 +20,9 @@ ratune is a Cargo workspace with four crates:
 - `PlayerCommand` (TUI → player): PlayUrl, EnqueueNext, Pause, Resume, Stop, SetVolume, Seek, Quit
 - `PlayerEvent` (player → TUI): TrackStarted, Progress, AboutToFinish, TrackAdvanced, TrackEnded, Error
 
-Progress events fire on a ~500ms tick. Gapless playback is handled via `EnqueueNext` — the TUI sends the next track's URL when it receives `AboutToFinish` (~10 seconds before the current track ends), and rodio's `Sink::append()` handles the seamless transition.
+Progress events fire on a ~500ms tick. Gapless playback is handled via `EnqueueNext` — the process that owns the player (the TUI in local mode, or the daemon when `[player] daemon` is on) sends the next track's URL when it receives `AboutToFinish` (~10 seconds before the current track ends), and rodio's `Sink::append()` handles the seamless transition.
+
+On Unix, `[player] daemon` (default true) runs a headless `ratune daemon` process that owns the audio engine, MPRIS, scrobbling, and cache prefetch. The TUI is a Unix-socket client: `q` detaches while a track is loaded, `Ctrl+q` / `ratune stop` shut the daemon down. Protocol: length-prefixed JSON on `$XDG_RUNTIME_DIR/ratune/ratune.sock`.
 
 A `SampleTap` wrapper copies decoded samples into a shared ring buffer for FFT analysis by the visualizer.
 
