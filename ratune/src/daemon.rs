@@ -5,6 +5,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -30,14 +31,20 @@ const CONNECT_WAIT: Duration = Duration::from_secs(8);
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
+fn ensure_private_dir(p: &Path) -> Result<()> {
+    fs::create_dir_all(p).with_context(|| format!("creating {}", p.display()))?;
+    let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o700));
+    Ok(())
+}
+
 fn runtime_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
         let p = PathBuf::from(dir).join("ratune");
-        fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
+        ensure_private_dir(&p)?;
         return Ok(p);
     }
     let p = std::env::temp_dir().join(format!("ratune-{}", rustix_uid()));
-    fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
+    ensure_private_dir(&p)?;
     Ok(p)
 }
 
@@ -275,7 +282,7 @@ pub fn stop() -> Result<bool> {
         }
         thread::sleep(Duration::from_millis(50));
     }
-    Ok(true)
+    bail!("daemon did not exit in time")
 }
 
 fn remove_stale_files() -> Result<()> {
@@ -511,8 +518,11 @@ fn bind_listener() -> Result<UnixListener> {
     }
     let listener =
         UnixListener::bind(&path).with_context(|| format!("binding {}", path.display()))?;
+    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
     let pid = std::process::id();
-    fs::write(pid_path()?, format!("{pid}\n")).with_context(|| "writing pid file")?;
+    let pid_file = pid_path()?;
+    fs::write(&pid_file, format!("{pid}\n")).with_context(|| "writing pid file")?;
+    let _ = fs::set_permissions(&pid_file, fs::Permissions::from_mode(0o600));
     Ok(listener)
 }
 
@@ -690,7 +700,7 @@ pub async fn run_daemon() -> Result<()> {
             let _ = crate::persist::save_state(&app);
         }
 
-        thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     broadcast.send_all(ServerMessage::Error("daemon stopping".into()));

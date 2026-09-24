@@ -3,6 +3,7 @@ mod app;
 mod cache;
 mod color;
 mod config;
+#[cfg(unix)]
 mod daemon;
 mod debug;
 mod desktop_notify;

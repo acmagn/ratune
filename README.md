@@ -32,7 +32,7 @@ Ratune was built to bring together a combination of features often missing from 
 
 ## Highlights
 
-- **Playback**: Gapless queue, seek, shuffle/unshuffle, and playlist management. A player daemon keeps music going after you close the TUI (`ratune stop` to quit).
+- **Playback**: Gapless queue, seek, shuffle/unshuffle, playlist management, and a player daemon.
 - **Internet radio**: Stations from your server
 - **Album Art**: Display using Kitty graphics and [ratatui-image](https://github.com/ratatui/ratatui-image) (see link for compatible terminals)
 - **Lyrics**: Synced lyrics via LRCLib (default), NetEase Cloud Music, or your Subsonic server. Optional on-disk cache for offline use
@@ -248,6 +248,7 @@ export SUBSONIC_PASS="your_password"
 default_volume = 70
 max_bit_rate = 0
 queue_loop = true
+# daemon = true
 
 [cache]
 enabled = true
@@ -401,16 +402,16 @@ Get `session_key` once with `ratune scrobble-auth` (prints the key for config un
 
 ## Player daemon
 
-On Linux and macOS, Ratune runs a playback daemon so music does not stop when you close the TUI.
+On Linux and macOS, a playback daemon is on by default so music does not stop when you close the TUI. MPRIS (media keys / `playerctl`) and scrobbling stay with the daemon.
 
-- **`q`** leaves the interface. If a track is loaded, playback continues (pause, next, and media keys still work via MPRIS).
-- **`Ctrl+q`** (`quit_stop`) leaves the interface and stops the daemon (same as `ratune stop`). Set `quit_stop = ""` in `[keybinds]` to disable it, or bind any other key.
-- Opening `ratune` again attaches to the same daemon.
-- **`ratune stop`** shuts the daemon down and stops the music.
-- **`ratune status`** shows whether the daemon is running.
-- Set `[player] daemon = false` in `config.toml` to restore the old in-process behaviour (music stops when the TUI exits).
+- **Close TUI:** `q`, closing the terminal, or Ctrl+C. If a track is loaded, playback continues.
+- **Quit and stop:** `Ctrl+q` (`quit_stop`) — same as `ratune stop`. Set `quit_stop = ""` in `[keybinds]` to disable, or bind another key.
+- **Reattach:** opening `ratune` again connects to the same daemon (queue and position are already there).
+- **Stop:** `ratune stop` shuts the daemon down and stops the music.
+- **Status:** `ratune status` shows whether the daemon is running.
+- **Disable:** `[player] daemon = false` in [`docs/sample-config.toml`](docs/sample-config.toml) restores in-process playback (music stops when the TUI exits).
 
-The daemon socket lives under `$XDG_RUNTIME_DIR/ratune/` (or a temp dir if that variable is unset). Logs go to `~/.local/state/ratune/daemon.log`.
+The socket lives under `$XDG_RUNTIME_DIR/ratune/` (or a per-user temp dir if that variable is unset). Logs go to `~/.local/state/ratune/daemon.log`.
 
 ---
 
@@ -539,7 +540,7 @@ This repository is a Cargo workspace with four crates:
 
 | Crate | Role |
 | --- | --- |
-| [`ratune`](ratune/) | TUI, event loop, state, art, fzf, MPRIS, scrobbling |
+| [`ratune`](ratune/) | TUI, event loop, state, art, fzf, MPRIS, scrobbling, playback daemon |
 | [`ratune-subsonic`](ratune-subsonic/) | Subsonic HTTP client and models |
 | [`ratune-scrobble`](ratune-scrobble/) | Last.fm / Libre.fm Audioscrobbler client and play thresholds |
 | [`ratune-player`](ratune-player/) | Audio (rodio), gapless, sample tap for the visualizer |
