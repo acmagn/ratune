@@ -382,8 +382,8 @@ mod macos {
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2::{AnyThread, ClassType, Message};
-    use objc2_app_kit::NSImage;
+    use objc2::{AnyThread, ClassType, MainThreadMarker, Message};
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSImage};
     use objc2_core_foundation::CGSize;
     use objc2_foundation::{
         NSDate, NSDictionary, NSMutableDictionary, NSNumber, NSRunLoop, NSString, NSURL,
@@ -428,7 +428,9 @@ mod macos {
         control: MprisControl,
         targets: &mut Vec<Retained<AnyObject>>,
     ) {
+        let label = format!("{control:?}");
         let handler = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
+            eprintln!("ratune: now-playing: remote {label}");
             let _ = ctrl_tx.send(control.clone());
             MPRemoteCommandHandlerStatus::Success
         });
@@ -477,6 +479,7 @@ mod macos {
     fn push_now_playing(
         snap: &MprisSnapshot,
         art_cache: &mut Option<(String, Retained<MPMediaItemArtwork>)>,
+        log: bool,
     ) {
         let center = unsafe { MPNowPlayingInfoCenter::defaultCenter() };
         if !snap.has_track {
@@ -484,6 +487,9 @@ mod macos {
             unsafe {
                 center.setNowPlayingInfo(None);
                 center.setPlaybackState(MPNowPlayingPlaybackState::Stopped);
+            }
+            if log {
+                eprintln!("ratune: now-playing: cleared (no track)");
             }
             return;
         }
@@ -543,6 +549,14 @@ mod macos {
             center.setNowPlayingInfo(Some(info));
             center.setPlaybackState(to_now_playing_state(snap.playback_status));
         }
+        if log {
+            eprintln!(
+                "ratune: now-playing: refresh title={:?} status={:?} pos_s={:.1}",
+                snap.title,
+                snap.playback_status,
+                snap.position_micros as f64 / 1_000_000.0
+            );
+        }
     }
 
     fn sync_command_availability(center: &MPRemoteCommandCenter, snap: &MprisSnapshot) {
@@ -574,6 +588,14 @@ mod macos {
         std::thread::Builder::new()
             .name("ratune-nowplaying".into())
             .spawn(move || {
+                // CLI/daemon processes need an NSApplication or Control Center /
+                // media keys never claim a Now Playing session.
+                // SAFETY: this dedicated thread owns the AppKit run loop for the process.
+                let mtm = unsafe { MainThreadMarker::new_unchecked() };
+                let ns_app = NSApplication::sharedApplication(mtm);
+                let ok = ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+                eprintln!("ratune: now-playing: NSApplication ready (accessory_policy={ok})");
+
                 let center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };
                 let mut targets: Vec<Retained<AnyObject>> = Vec::new();
 
@@ -625,6 +647,7 @@ mod macos {
                             return MPRemoteCommandHandlerStatus::CommandFailed;
                         };
                         let secs = unsafe { pos_event.positionTime() };
+                        eprintln!("ratune: now-playing: remote SetPosition secs={secs:.2}");
                         let track_path = snapshot
                             .read()
                             .map(|s| s.track_path.clone())
@@ -641,7 +664,10 @@ mod macos {
                     unsafe { set_enabled(cmd.as_super(), true) };
                 }
 
-                // Keep handlers alive for the thread lifetime.
+                eprintln!("ratune: now-playing: remote commands registered");
+
+                // Keep handlers + NSApplication alive for the thread lifetime.
+                let _ns_app = ns_app;
                 let _targets = targets;
                 let mut art_cache: Option<(String, Retained<MPMediaItemArtwork>)> = None;
 
@@ -651,12 +677,12 @@ mod macos {
                         Ok(MprisNotify::Shutdown) | Err(TryRecvError::Disconnected) => break,
                         Ok(MprisNotify::Refresh) => {
                             let snap = snapshot.read().map(|s| s.clone()).unwrap_or_default();
-                            push_now_playing(&snap, &mut art_cache);
+                            push_now_playing(&snap, &mut art_cache, true);
                             sync_command_availability(&center, &snap);
                         }
                         Ok(MprisNotify::Seeked { .. }) => {
                             let snap = snapshot.read().map(|s| s.clone()).unwrap_or_default();
-                            push_now_playing(&snap, &mut art_cache);
+                            push_now_playing(&snap, &mut art_cache, false);
                         }
                         Err(TryRecvError::Empty) => {
                             let until = NSDate::dateWithTimeIntervalSinceNow(0.05);
