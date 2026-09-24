@@ -382,6 +382,7 @@ mod macos {
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
+    use objc2::{AnyThread, Message};
     use objc2_app_kit::NSImage;
     use objc2_core_foundation::CGSize;
     use objc2_foundation::{
@@ -446,6 +447,7 @@ mod macos {
             }
         }
         let ns_url = NSURL::URLWithString(&NSString::from_str(url_str))?;
+        // `alloc` comes from the `AnyThread` trait (not `ClassType`).
         let image = NSImage::initWithContentsOfURL(NSImage::alloc(), &ns_url)?;
         let size = image.size();
         if size.width <= 0.0 || size.height <= 0.0 {
@@ -467,7 +469,7 @@ mod macos {
         Some(art)
     }
 
-    fn as_any_object<T: objc2::Message>(obj: &T) -> &AnyObject {
+    fn as_any_object<T: Message>(obj: &T) -> &AnyObject {
         // SAFETY: every Objective-C object is an AnyObject at runtime.
         unsafe { &*(std::ptr::from_ref(obj) as *const AnyObject) }
     }
@@ -487,50 +489,53 @@ mod macos {
         }
 
         let dict = NSMutableDictionary::<NSString, AnyObject>::new();
-        dict.insert(
-            MPMediaItemPropertyTitle,
-            as_any_object(&*NSString::from_str(&snap.title)),
-        );
-        if !snap.artist.is_empty() {
+        // MediaPlayer property keys are `extern static` — reading them is unsafe (E0133).
+        unsafe {
             dict.insert(
-                MPMediaItemPropertyArtist,
-                as_any_object(&*NSString::from_str(&snap.artist)),
+                MPMediaItemPropertyTitle,
+                as_any_object(&*NSString::from_str(&snap.title)),
             );
-        }
-        if !snap.album.is_empty() {
-            dict.insert(
-                MPMediaItemPropertyAlbumTitle,
-                as_any_object(&*NSString::from_str(&snap.album)),
-            );
-        }
-        if let Some(n) = snap.track_number {
-            dict.insert(
-                MPMediaItemPropertyAlbumTrackNumber,
-                as_any_object(&*NSNumber::new_u32(n)),
-            );
-        }
-        if snap.length_micros > 0 {
-            dict.insert(
-                MPMediaItemPropertyPlaybackDuration,
-                as_any_object(&*NSNumber::new_f64(snap.length_micros as f64 / 1_000_000.0)),
-            );
-        }
-        dict.insert(
-            MPNowPlayingInfoPropertyElapsedPlaybackTime,
-            as_any_object(&*NSNumber::new_f64(
-                snap.position_micros as f64 / 1_000_000.0,
-            )),
-        );
-        dict.insert(
-            MPNowPlayingInfoPropertyPlaybackRate,
-            as_any_object(&*NSNumber::new_f64(playback_rate(snap.playback_status))),
-        );
-        if let Some(ref url) = snap.art_url {
-            if let Some(art) = artwork_from_url(url, art_cache) {
-                dict.insert(MPMediaItemPropertyArtwork, as_any_object(&*art));
+            if !snap.artist.is_empty() {
+                dict.insert(
+                    MPMediaItemPropertyArtist,
+                    as_any_object(&*NSString::from_str(&snap.artist)),
+                );
             }
-        } else {
-            *art_cache = None;
+            if !snap.album.is_empty() {
+                dict.insert(
+                    MPMediaItemPropertyAlbumTitle,
+                    as_any_object(&*NSString::from_str(&snap.album)),
+                );
+            }
+            if let Some(n) = snap.track_number {
+                dict.insert(
+                    MPMediaItemPropertyAlbumTrackNumber,
+                    as_any_object(&*NSNumber::new_u32(n)),
+                );
+            }
+            if snap.length_micros > 0 {
+                dict.insert(
+                    MPMediaItemPropertyPlaybackDuration,
+                    as_any_object(&*NSNumber::new_f64(snap.length_micros as f64 / 1_000_000.0)),
+                );
+            }
+            dict.insert(
+                MPNowPlayingInfoPropertyElapsedPlaybackTime,
+                as_any_object(&*NSNumber::new_f64(
+                    snap.position_micros as f64 / 1_000_000.0,
+                )),
+            );
+            dict.insert(
+                MPNowPlayingInfoPropertyPlaybackRate,
+                as_any_object(&*NSNumber::new_f64(playback_rate(snap.playback_status))),
+            );
+            if let Some(ref url) = snap.art_url {
+                if let Some(art) = artwork_from_url(url, art_cache) {
+                    dict.insert(MPMediaItemPropertyArtwork, as_any_object(&*art));
+                }
+            } else {
+                *art_cache = None;
+            }
         }
 
         let info: &NSDictionary<NSString, AnyObject> = dict.as_ref();
@@ -542,16 +547,22 @@ mod macos {
 
     fn sync_command_availability(center: &MPRemoteCommandCenter, snap: &MprisSnapshot) {
         unsafe {
-            set_enabled(&center.playCommand(), snap.can_play);
-            set_enabled(&center.pauseCommand(), snap.can_pause);
+            set_enabled(center.playCommand().as_ref(), snap.can_play);
+            set_enabled(center.pauseCommand().as_ref(), snap.can_pause);
             set_enabled(
-                &center.togglePlayPauseCommand(),
+                center.togglePlayPauseCommand().as_ref(),
                 snap.can_play || snap.can_pause,
             );
-            set_enabled(&center.stopCommand(), snap.has_track || snap.can_pause);
-            set_enabled(&center.nextTrackCommand(), snap.can_go_next);
-            set_enabled(&center.previousTrackCommand(), snap.can_go_previous);
-            set_enabled(&center.changePlaybackPositionCommand(), snap.can_seek);
+            set_enabled(
+                center.stopCommand().as_ref(),
+                snap.has_track || snap.can_pause,
+            );
+            set_enabled(center.nextTrackCommand().as_ref(), snap.can_go_next);
+            set_enabled(center.previousTrackCommand().as_ref(), snap.can_go_previous);
+            set_enabled(
+                center.changePlaybackPositionCommand().as_super(),
+                snap.can_seek,
+            );
         }
     }
 
@@ -567,37 +578,37 @@ mod macos {
                 let mut targets: Vec<Retained<AnyObject>> = Vec::new();
 
                 register_simple(
-                    unsafe { &center.togglePlayPauseCommand() },
+                    unsafe { center.togglePlayPauseCommand().as_ref() },
                     ctrl_tx.clone(),
                     MprisControl::PlayPause,
                     &mut targets,
                 );
                 register_simple(
-                    unsafe { &center.playCommand() },
+                    unsafe { center.playCommand().as_ref() },
                     ctrl_tx.clone(),
                     MprisControl::Play,
                     &mut targets,
                 );
                 register_simple(
-                    unsafe { &center.pauseCommand() },
+                    unsafe { center.pauseCommand().as_ref() },
                     ctrl_tx.clone(),
                     MprisControl::Pause,
                     &mut targets,
                 );
                 register_simple(
-                    unsafe { &center.stopCommand() },
+                    unsafe { center.stopCommand().as_ref() },
                     ctrl_tx.clone(),
                     MprisControl::Stop,
                     &mut targets,
                 );
                 register_simple(
-                    unsafe { &center.nextTrackCommand() },
+                    unsafe { center.nextTrackCommand().as_ref() },
                     ctrl_tx.clone(),
                     MprisControl::Next,
                     &mut targets,
                 );
                 register_simple(
-                    unsafe { &center.previousTrackCommand() },
+                    unsafe { center.previousTrackCommand().as_ref() },
                     ctrl_tx.clone(),
                     MprisControl::Previous,
                     &mut targets,
@@ -625,9 +636,9 @@ mod macos {
                         MPRemoteCommandHandlerStatus::Success
                     });
                     let cmd = unsafe { center.changePlaybackPositionCommand() };
-                    let target = unsafe { cmd.addTargetWithHandler(&handler) };
+                    let target = unsafe { cmd.as_super().addTargetWithHandler(&handler) };
                     targets.push(target);
-                    unsafe { set_enabled(&cmd, true) };
+                    unsafe { set_enabled(cmd.as_super(), true) };
                 }
 
                 // Keep handlers alive for the thread lifetime.
@@ -658,13 +669,13 @@ mod macos {
                 unsafe {
                     info_center.setNowPlayingInfo(None);
                     info_center.setPlaybackState(MPNowPlayingPlaybackState::Stopped);
-                    set_enabled(&center.playCommand(), false);
-                    set_enabled(&center.pauseCommand(), false);
-                    set_enabled(&center.togglePlayPauseCommand(), false);
-                    set_enabled(&center.stopCommand(), false);
-                    set_enabled(&center.nextTrackCommand(), false);
-                    set_enabled(&center.previousTrackCommand(), false);
-                    set_enabled(&center.changePlaybackPositionCommand(), false);
+                    set_enabled(center.playCommand().as_ref(), false);
+                    set_enabled(center.pauseCommand().as_ref(), false);
+                    set_enabled(center.togglePlayPauseCommand().as_ref(), false);
+                    set_enabled(center.stopCommand().as_ref(), false);
+                    set_enabled(center.nextTrackCommand().as_ref(), false);
+                    set_enabled(center.previousTrackCommand().as_ref(), false);
+                    set_enabled(center.changePlaybackPositionCommand().as_super(), false);
                 }
             })
             .expect("spawn now-playing thread")
