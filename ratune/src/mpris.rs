@@ -382,7 +382,7 @@ mod macos {
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2::{AnyThread, Message};
+    use objc2::{AnyThread, ClassType, Message};
     use objc2_app_kit::NSImage;
     use objc2_core_foundation::CGSize;
     use objc2_foundation::{
