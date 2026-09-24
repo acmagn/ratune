@@ -769,7 +769,7 @@ pub struct App {
     pub accent_transition_start: Option<Instant>,
 
     /// Linux: MPRIS D-Bus session registration and shared playback snapshot.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub mpris: Option<crate::mpris::MprisLink>,
 
     /// Set after alternate screen when `album_art_backend = ratatui-image` and the probe succeeds.
@@ -1010,7 +1010,7 @@ impl App {
             home_strip_last_cells: HashMap::new(),
             home_strip_decoded: HashMap::new(),
             np_kitty_prepared: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             mpris: None,
         };
         app.load_persisted_favorites();
@@ -3442,7 +3442,7 @@ impl App {
                 self.art_cache_decoded = decoded.map(|img| (fp, img));
                 self.np_kitty_prepared = None;
                 self.apply_dynamic_accent(accent);
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 self.mpris_emit_props();
             }
             LibraryUpdate::StatusFlash { msg, secs } => {
@@ -3799,7 +3799,7 @@ impl App {
                         "Rating updated"
                     });
                     if kind == FavoriteKind::Song {
-                        #[cfg(target_os = "linux")]
+                        #[cfg(any(target_os = "linux", target_os = "macos"))]
                         self.mpris_emit_props();
                     }
                 }
@@ -4267,7 +4267,7 @@ impl App {
                 ));
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             if self.mpris.is_some() {
                 if progress_only {
@@ -4286,14 +4286,14 @@ impl App {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn mpris_touch_snapshot_only(&mut self) {
         if let Some(link) = &self.mpris {
             crate::mpris::write_snapshot(self, &link.snapshot);
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn mpris_emit_props(&mut self) {
         if let Some(link) = &self.mpris {
             crate::mpris::write_snapshot(self, &link.snapshot);
@@ -4302,12 +4302,12 @@ impl App {
     }
 
     /// Push current playback state to MPRIS (call after registering the link).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn mpris_sync_now(&mut self) {
         self.mpris_emit_props();
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn mpris_emit_seek(&mut self, pos: std::time::Duration) {
         if let Some(link) = &self.mpris {
             crate::mpris::write_snapshot(self, &link.snapshot);
@@ -4316,7 +4316,7 @@ impl App {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn mpris_after_action(&mut self, action: &Action) {
         use crate::action::Action::*;
         // Search dispatches per keystroke. Skip D-Bus work for those.
@@ -4347,8 +4347,8 @@ impl App {
         }
     }
 
-    /// Handle D-Bus MPRIS remote control (Linux).
-    #[cfg(target_os = "linux")]
+    /// Handle OS media remote control (Linux MPRIS / macOS Now Playing).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn handle_mpris_control(&mut self, c: crate::mpris::MprisControl) {
         use crate::mpris::MprisControl::*;
         match c {
@@ -4435,7 +4435,7 @@ impl App {
         self.mpris_emit_props();
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn handle_mpris_control(&mut self, _c: crate::mpris::MprisControl) {}
 
     /// Send a PlayUrl command for the song the queue cursor points at.
@@ -5825,7 +5825,7 @@ impl App {
                         let stored = if rating == 0 { None } else { Some(rating) };
                         self.set_item_rating(target.kind, &target.id, stored);
                         if target.kind == FavoriteKind::Song {
-                            #[cfg(target_os = "linux")]
+                            #[cfg(any(target_os = "linux", target_os = "macos"))]
                             self.mpris_emit_props();
                         }
                         self.spawn_set_rating(target.id.clone(), target.kind, rating);
@@ -6465,7 +6465,7 @@ impl App {
             }
             Action::None => {}
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.mpris_after_action(&mpris_action_hook);
     }
 

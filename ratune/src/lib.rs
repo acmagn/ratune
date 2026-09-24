@@ -255,7 +255,7 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mpris_ctrl_rx = if app.is_player_client() {
         None
     } else if let Some((link, rx)) = mpris::setup(app.config.mpris_enabled) {
@@ -265,12 +265,12 @@ pub async fn run() -> Result<()> {
     } else {
         None
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let mpris_ctrl_rx: Option<std::sync::mpsc::Receiver<crate::mpris::MprisControl>> = None;
 
     let result = run_loop(&mut terminal, &mut app, signal_quit, mpris_ctrl_rx).await;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(m) = app.mpris.take() {
         m.shutdown();
     }

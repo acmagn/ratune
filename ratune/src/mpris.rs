@@ -1,7 +1,11 @@
-//! MPRIS D-Bus integration for Linux (media keys, desktop widgets, `playerctl`).
+//! OS media-key / now-playing integration.
 //!
-//! On non-Linux targets this module exposes inert stubs so the rest of the app
-//! stays unconditional.
+//! - **Linux:** MPRIS D-Bus (media keys, desktop widgets, `playerctl`).
+//! - **macOS:** `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` (Control Center,
+//!   keyboard media keys).
+//!
+//! On other targets this module exposes inert stubs so the rest of the app stays
+//! unconditional.
 
 use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
@@ -29,34 +33,38 @@ pub enum MprisControl {
     Quit,
 }
 
+/// Shared playback status for OS media integrations (MPRIS / Now Playing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MediaPlaybackStatus {
+    Playing,
+    Paused,
+    #[default]
+    Stopped,
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::{MprisControl, MprisNotify, MprisSnapshot};
+    use super::{MediaPlaybackStatus, MprisControl, MprisNotify, MprisSnapshot};
     use mpris_server::zbus::{self, fdo};
     use mpris_server::{
         LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property,
         RootInterface, Server, Signal, Time, TrackId, Volume,
     };
+
+    fn to_mpris_status(s: MediaPlaybackStatus) -> PlaybackStatus {
+        match s {
+            MediaPlaybackStatus::Playing => PlaybackStatus::Playing,
+            MediaPlaybackStatus::Paused => PlaybackStatus::Paused,
+            MediaPlaybackStatus::Stopped => PlaybackStatus::Stopped,
+        }
+    }
     use std::sync::mpsc;
     use std::sync::{Arc, RwLock};
     use std::thread::JoinHandle;
     use tokio::sync::mpsc::UnboundedReceiver;
 
     pub(super) fn track_object_path(song_id: &str) -> String {
-        let safe: String = song_id
-            .chars()
-            .map(|c| match c {
-                'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => c,
-                '-' => '_',
-                _ => '_',
-            })
-            .collect();
-        let tail = if safe.is_empty() {
-            "unknown".into()
-        } else {
-            safe
-        };
-        format!("/net/ratune/track/{tail}")
+        super::dbus_track_path_for_song_id(song_id)
     }
 
     fn track_id_from_song_id(song_id: &str) -> TrackId {
@@ -93,7 +101,7 @@ mod linux {
 
     fn build_properties(s: &MprisSnapshot) -> Vec<Property> {
         vec![
-            Property::PlaybackStatus(s.playback_status),
+            Property::PlaybackStatus(to_mpris_status(s.playback_status)),
             Property::LoopStatus(LoopStatus::None),
             Property::Rate(PlaybackRate::default()),
             Property::Shuffle(false),
@@ -225,7 +233,7 @@ mod linux {
             Ok(self
                 .snapshot
                 .read()
-                .map(|s| s.playback_status)
+                .map(|s| to_mpris_status(s.playback_status))
                 .unwrap_or(PlaybackStatus::Stopped))
         }
 
@@ -368,7 +376,302 @@ mod linux {
     }
 }
 
-/// Snapshot of playback state read by the D-Bus thread (must stay cheap to clone for refresh).
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::{MediaPlaybackStatus, MprisControl, MprisNotify, MprisSnapshot};
+    use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::NSImage;
+    use objc2_core_foundation::CGSize;
+    use objc2_foundation::{
+        NSDate, NSDictionary, NSMutableDictionary, NSNumber, NSRunLoop, NSString, NSURL,
+    };
+    use objc2_media_player::{
+        MPChangePlaybackPositionCommandEvent, MPMediaItemArtwork, MPMediaItemPropertyAlbumTitle,
+        MPMediaItemPropertyAlbumTrackNumber, MPMediaItemPropertyArtist, MPMediaItemPropertyArtwork,
+        MPMediaItemPropertyPlaybackDuration, MPMediaItemPropertyTitle, MPNowPlayingInfoCenter,
+        MPNowPlayingInfoPropertyElapsedPlaybackTime, MPNowPlayingInfoPropertyPlaybackRate,
+        MPNowPlayingPlaybackState, MPRemoteCommand, MPRemoteCommandCenter, MPRemoteCommandEvent,
+        MPRemoteCommandHandlerStatus,
+    };
+    use std::ptr::NonNull;
+    use std::sync::mpsc;
+    use std::sync::{Arc, RwLock};
+    use std::thread::JoinHandle;
+    use tokio::sync::mpsc::error::TryRecvError;
+    use tokio::sync::mpsc::UnboundedReceiver;
+
+    fn to_now_playing_state(s: MediaPlaybackStatus) -> MPNowPlayingPlaybackState {
+        match s {
+            MediaPlaybackStatus::Playing => MPNowPlayingPlaybackState::Playing,
+            MediaPlaybackStatus::Paused => MPNowPlayingPlaybackState::Paused,
+            MediaPlaybackStatus::Stopped => MPNowPlayingPlaybackState::Stopped,
+        }
+    }
+
+    fn playback_rate(s: MediaPlaybackStatus) -> f64 {
+        match s {
+            MediaPlaybackStatus::Playing => 1.0,
+            MediaPlaybackStatus::Paused | MediaPlaybackStatus::Stopped => 0.0,
+        }
+    }
+
+    unsafe fn set_enabled(cmd: &MPRemoteCommand, enabled: bool) {
+        unsafe { cmd.setEnabled(enabled) };
+    }
+
+    fn register_simple(
+        cmd: &MPRemoteCommand,
+        ctrl_tx: mpsc::Sender<MprisControl>,
+        control: MprisControl,
+        targets: &mut Vec<Retained<AnyObject>>,
+    ) {
+        let handler = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
+            let _ = ctrl_tx.send(control.clone());
+            MPRemoteCommandHandlerStatus::Success
+        });
+        let target = unsafe { cmd.addTargetWithHandler(&handler) };
+        targets.push(target);
+        unsafe { set_enabled(cmd, true) };
+    }
+
+    fn artwork_from_url(
+        url_str: &str,
+        cache: &mut Option<(String, Retained<MPMediaItemArtwork>)>,
+    ) -> Option<Retained<MPMediaItemArtwork>> {
+        if let Some((cached_url, art)) = cache.as_ref() {
+            if cached_url == url_str {
+                return Some(art.clone());
+            }
+        }
+        let ns_url = NSURL::URLWithString(&NSString::from_str(url_str))?;
+        let image = NSImage::initWithContentsOfURL(NSImage::alloc(), &ns_url)?;
+        let size = image.size();
+        if size.width <= 0.0 || size.height <= 0.0 {
+            return None;
+        }
+        let bounds = CGSize::new(size.width, size.height);
+        let image_for_block = image.clone();
+        let handler = RcBlock::new(move |_request_size: CGSize| -> NonNull<NSImage> {
+            NonNull::from(&*image_for_block)
+        });
+        let art = unsafe {
+            MPMediaItemArtwork::initWithBoundsSize_requestHandler(
+                MPMediaItemArtwork::alloc(),
+                bounds,
+                &handler,
+            )
+        };
+        *cache = Some((url_str.to_string(), art.clone()));
+        Some(art)
+    }
+
+    fn as_any_object<T: objc2::Message>(obj: &T) -> &AnyObject {
+        // SAFETY: every Objective-C object is an AnyObject at runtime.
+        unsafe { &*(std::ptr::from_ref(obj) as *const AnyObject) }
+    }
+
+    fn push_now_playing(
+        snap: &MprisSnapshot,
+        art_cache: &mut Option<(String, Retained<MPMediaItemArtwork>)>,
+    ) {
+        let center = unsafe { MPNowPlayingInfoCenter::defaultCenter() };
+        if !snap.has_track {
+            *art_cache = None;
+            unsafe {
+                center.setNowPlayingInfo(None);
+                center.setPlaybackState(MPNowPlayingPlaybackState::Stopped);
+            }
+            return;
+        }
+
+        let dict = NSMutableDictionary::<NSString, AnyObject>::new();
+        dict.insert(
+            MPMediaItemPropertyTitle,
+            as_any_object(&*NSString::from_str(&snap.title)),
+        );
+        if !snap.artist.is_empty() {
+            dict.insert(
+                MPMediaItemPropertyArtist,
+                as_any_object(&*NSString::from_str(&snap.artist)),
+            );
+        }
+        if !snap.album.is_empty() {
+            dict.insert(
+                MPMediaItemPropertyAlbumTitle,
+                as_any_object(&*NSString::from_str(&snap.album)),
+            );
+        }
+        if let Some(n) = snap.track_number {
+            dict.insert(
+                MPMediaItemPropertyAlbumTrackNumber,
+                as_any_object(&*NSNumber::new_u32(n)),
+            );
+        }
+        if snap.length_micros > 0 {
+            dict.insert(
+                MPMediaItemPropertyPlaybackDuration,
+                as_any_object(&*NSNumber::new_f64(snap.length_micros as f64 / 1_000_000.0)),
+            );
+        }
+        dict.insert(
+            MPNowPlayingInfoPropertyElapsedPlaybackTime,
+            as_any_object(&*NSNumber::new_f64(
+                snap.position_micros as f64 / 1_000_000.0,
+            )),
+        );
+        dict.insert(
+            MPNowPlayingInfoPropertyPlaybackRate,
+            as_any_object(&*NSNumber::new_f64(playback_rate(snap.playback_status))),
+        );
+        if let Some(ref url) = snap.art_url {
+            if let Some(art) = artwork_from_url(url, art_cache) {
+                dict.insert(MPMediaItemPropertyArtwork, as_any_object(&*art));
+            }
+        } else {
+            *art_cache = None;
+        }
+
+        let info: &NSDictionary<NSString, AnyObject> = dict.as_ref();
+        unsafe {
+            center.setNowPlayingInfo(Some(info));
+            center.setPlaybackState(to_now_playing_state(snap.playback_status));
+        }
+    }
+
+    fn sync_command_availability(center: &MPRemoteCommandCenter, snap: &MprisSnapshot) {
+        unsafe {
+            set_enabled(&center.playCommand(), snap.can_play);
+            set_enabled(&center.pauseCommand(), snap.can_pause);
+            set_enabled(
+                &center.togglePlayPauseCommand(),
+                snap.can_play || snap.can_pause,
+            );
+            set_enabled(&center.stopCommand(), snap.has_track || snap.can_pause);
+            set_enabled(&center.nextTrackCommand(), snap.can_go_next);
+            set_enabled(&center.previousTrackCommand(), snap.can_go_previous);
+            set_enabled(&center.changePlaybackPositionCommand(), snap.can_seek);
+        }
+    }
+
+    pub(super) fn spawn_server(
+        snapshot: Arc<RwLock<MprisSnapshot>>,
+        ctrl_tx: mpsc::Sender<MprisControl>,
+        mut notify_rx: UnboundedReceiver<MprisNotify>,
+    ) -> JoinHandle<()> {
+        std::thread::Builder::new()
+            .name("ratune-nowplaying".into())
+            .spawn(move || {
+                let center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };
+                let mut targets: Vec<Retained<AnyObject>> = Vec::new();
+
+                register_simple(
+                    unsafe { &center.togglePlayPauseCommand() },
+                    ctrl_tx.clone(),
+                    MprisControl::PlayPause,
+                    &mut targets,
+                );
+                register_simple(
+                    unsafe { &center.playCommand() },
+                    ctrl_tx.clone(),
+                    MprisControl::Play,
+                    &mut targets,
+                );
+                register_simple(
+                    unsafe { &center.pauseCommand() },
+                    ctrl_tx.clone(),
+                    MprisControl::Pause,
+                    &mut targets,
+                );
+                register_simple(
+                    unsafe { &center.stopCommand() },
+                    ctrl_tx.clone(),
+                    MprisControl::Stop,
+                    &mut targets,
+                );
+                register_simple(
+                    unsafe { &center.nextTrackCommand() },
+                    ctrl_tx.clone(),
+                    MprisControl::Next,
+                    &mut targets,
+                );
+                register_simple(
+                    unsafe { &center.previousTrackCommand() },
+                    ctrl_tx.clone(),
+                    MprisControl::Previous,
+                    &mut targets,
+                );
+
+                {
+                    let ctrl_tx = ctrl_tx.clone();
+                    let snapshot = Arc::clone(&snapshot);
+                    let handler = RcBlock::new(move |event: NonNull<MPRemoteCommandEvent>| {
+                        let event_ref = unsafe { event.as_ref() };
+                        let Some(pos_event) =
+                            event_ref.downcast_ref::<MPChangePlaybackPositionCommandEvent>()
+                        else {
+                            return MPRemoteCommandHandlerStatus::CommandFailed;
+                        };
+                        let secs = unsafe { pos_event.positionTime() };
+                        let track_path = snapshot
+                            .read()
+                            .map(|s| s.track_path.clone())
+                            .unwrap_or_default();
+                        let _ = ctrl_tx.send(MprisControl::SetPosition {
+                            track_path,
+                            position_micros: (secs * 1_000_000.0).round() as i64,
+                        });
+                        MPRemoteCommandHandlerStatus::Success
+                    });
+                    let cmd = unsafe { center.changePlaybackPositionCommand() };
+                    let target = unsafe { cmd.addTargetWithHandler(&handler) };
+                    targets.push(target);
+                    unsafe { set_enabled(&cmd, true) };
+                }
+
+                // Keep handlers alive for the thread lifetime.
+                let _targets = targets;
+                let mut art_cache: Option<(String, Retained<MPMediaItemArtwork>)> = None;
+
+                let run_loop = NSRunLoop::currentRunLoop();
+                loop {
+                    match notify_rx.try_recv() {
+                        Ok(MprisNotify::Shutdown) | Err(TryRecvError::Disconnected) => break,
+                        Ok(MprisNotify::Refresh) => {
+                            let snap = snapshot.read().map(|s| s.clone()).unwrap_or_default();
+                            push_now_playing(&snap, &mut art_cache);
+                            sync_command_availability(&center, &snap);
+                        }
+                        Ok(MprisNotify::Seeked { .. }) => {
+                            let snap = snapshot.read().map(|s| s.clone()).unwrap_or_default();
+                            push_now_playing(&snap, &mut art_cache);
+                        }
+                        Err(TryRecvError::Empty) => {
+                            let until = NSDate::dateWithTimeIntervalSinceNow(0.05);
+                            run_loop.runUntilDate(&until);
+                        }
+                    }
+                }
+
+                let info_center = unsafe { MPNowPlayingInfoCenter::defaultCenter() };
+                unsafe {
+                    info_center.setNowPlayingInfo(None);
+                    info_center.setPlaybackState(MPNowPlayingPlaybackState::Stopped);
+                    set_enabled(&center.playCommand(), false);
+                    set_enabled(&center.pauseCommand(), false);
+                    set_enabled(&center.togglePlayPauseCommand(), false);
+                    set_enabled(&center.stopCommand(), false);
+                    set_enabled(&center.nextTrackCommand(), false);
+                    set_enabled(&center.previousTrackCommand(), false);
+                    set_enabled(&center.changePlaybackPositionCommand(), false);
+                }
+            })
+            .expect("spawn now-playing thread")
+    }
+}
+
+/// Snapshot of playback state read by the OS media thread (must stay cheap to clone for refresh).
 #[derive(Debug, Clone)]
 pub struct MprisSnapshot {
     pub song_id: String,
@@ -380,10 +683,9 @@ pub struct MprisSnapshot {
     pub length_micros: i64,
     pub position_micros: i64,
     pub volume: f64,
-    /// `mpris:artUrl` for the current cover image (usually `file:///…`).
+    /// Cover art as a `file:///…` URL (MPRIS artUrl / macOS artwork source).
     pub art_url: Option<String>,
-    #[cfg(target_os = "linux")]
-    pub playback_status: mpris_server::PlaybackStatus,
+    pub playback_status: MediaPlaybackStatus,
     pub can_go_next: bool,
     pub can_go_previous: bool,
     pub can_play: bool,
@@ -407,8 +709,7 @@ impl Default for MprisSnapshot {
             position_micros: 0,
             volume: 0.7,
             art_url: None,
-            #[cfg(target_os = "linux")]
-            playback_status: mpris_server::PlaybackStatus::Stopped,
+            playback_status: MediaPlaybackStatus::Stopped,
             can_go_next: false,
             can_go_previous: false,
             can_play: false,
@@ -451,7 +752,7 @@ impl MprisLink {
     }
 }
 
-/// Start MPRIS when `enabled` and the session bus is available.
+/// Start OS media-key integration when `enabled`.
 #[cfg(target_os = "linux")]
 pub fn setup(enabled: bool) -> Option<(MprisLink, mpsc::Receiver<MprisControl>)> {
     if !enabled {
@@ -471,12 +772,30 @@ pub fn setup(enabled: bool) -> Option<(MprisLink, mpsc::Receiver<MprisControl>)>
     Some((link, ctrl_rx))
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Start OS media-key integration when `enabled`.
+#[cfg(target_os = "macos")]
+pub fn setup(enabled: bool) -> Option<(MprisLink, mpsc::Receiver<MprisControl>)> {
+    if !enabled {
+        return None;
+    }
+    let (ctrl_tx, ctrl_rx) = mpsc::channel::<MprisControl>();
+    let (notify_tx, notify_rx) = tokio::sync::mpsc::unbounded_channel::<MprisNotify>();
+    let snapshot = Arc::new(RwLock::new(MprisSnapshot::default()));
+    let thread = macos::spawn_server(Arc::clone(&snapshot), ctrl_tx, notify_rx);
+    let link = MprisLink {
+        snapshot,
+        notify_tx,
+        thread: Some(thread),
+    };
+    Some((link, ctrl_rx))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn setup(_enabled: bool) -> Option<(MprisLink, mpsc::Receiver<MprisControl>)> {
     None
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod mpris_art {
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -567,16 +886,22 @@ mod mpris_art {
     }
 }
 
-/// D-Bus object path used as `mpris:trackid` for a Subsonic song id.
+/// Object path / track id used for seek-position matching (MPRIS trackid; reused on macOS).
 pub fn dbus_track_path_for_song_id(song_id: &str) -> String {
-    #[cfg(target_os = "linux")]
-    {
-        linux::track_object_path(song_id)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        String::new()
-    }
+    let safe: String = song_id
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => c,
+            '-' => '_',
+            _ => '_',
+        })
+        .collect();
+    let tail = if safe.is_empty() {
+        "unknown".into()
+    } else {
+        safe
+    };
+    format!("/net/ratune/track/{tail}")
 }
 
 /// Update the shared snapshot from app state (call before `notify_refresh`).
@@ -610,27 +935,23 @@ pub fn write_snapshot(app: &crate::app::App, snap: &RwLock<MprisSnapshot>) {
     s.can_seek = app.playback.player_loaded && app.playback.total.is_some();
 
     s.art_url = {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             mpris_art::cover_art_url(app)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             None
         }
     };
 
-    #[cfg(target_os = "linux")]
-    {
-        use mpris_server::PlaybackStatus;
-        s.playback_status = if song.is_none() || !app.playback.player_loaded {
-            PlaybackStatus::Stopped
-        } else if app.playback.paused {
-            PlaybackStatus::Paused
-        } else {
-            PlaybackStatus::Playing
-        };
-    }
+    s.playback_status = if song.is_none() || !app.playback.player_loaded {
+        MediaPlaybackStatus::Stopped
+    } else if app.playback.paused {
+        MediaPlaybackStatus::Paused
+    } else {
+        MediaPlaybackStatus::Playing
+    };
 
     if let Ok(mut w) = snap.write() {
         *w = s;
