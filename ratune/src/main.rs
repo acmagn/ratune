@@ -85,7 +85,14 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             "daemon" => {
-                return ratune::run_daemon().await;
+                #[cfg(target_os = "macos")]
+                {
+                    return ratune::run_daemon_macos();
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    return ratune::run_daemon().await;
+                }
             }
             other => {
                 eprintln!("{PKG_NAME}: unknown argument '{other}'");

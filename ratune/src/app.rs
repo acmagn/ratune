@@ -4407,9 +4407,11 @@ impl App {
                 let Some(song) = self.playback.current_song.as_ref() else {
                     return;
                 };
-                let expected = crate::mpris::dbus_track_path_for_song_id(&song.id);
-                if track_path != expected {
-                    return;
+                if !track_path.is_empty() {
+                    let expected = crate::mpris::dbus_track_path_for_song_id(&song.id);
+                    if track_path != expected {
+                        return;
+                    }
                 }
                 let mut new_pos = std::time::Duration::from_micros(position_micros.max(0) as u64);
                 if let Some(total) = self.playback.total {
