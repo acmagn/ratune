@@ -7,7 +7,7 @@
 //! Cache hits are read directly by the audio engine from disk.
 //! Writes use a temp file + rename so the index never points at a half-written file.
 //!
-//! All IO errors are soft-failed — the cache never crashes or interrupts playback.
+//! All IO errors are soft-failed. The cache never crashes or interrupts playback.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ pub struct CacheEntry {
     pub size_bytes: u64,
     /// Unix timestamp (seconds) when this track was last played. Used for LRU.
     pub last_played: u64,
-    /// Subsonic album ID — stored for potential future album-level eviction.
+    /// Subsonic album ID. Stored for potential future album-level eviction.
     pub album_id: String,
 }
 
@@ -137,7 +137,7 @@ impl TrackCache {
 
     /// Return `true` if `song_id` appears in the index with an existing file.
     ///
-    /// Non-mutating — does not remove stale entries. Use this when only a
+    /// Non-mutating. Does not remove stale entries. Use this when only a
     /// presence check is needed and you do not hold a `&mut` already.
     pub fn get_const(&self, song_id: &str) -> bool {
         if !self.enabled {
@@ -175,7 +175,7 @@ impl TrackCache {
             if entry.path.exists() {
                 return Some(entry.path.clone());
             }
-            // File disappeared — remove stale entry without saving (save on next write).
+            // File disappeared. Remove stale entry without saving (save on next write).
             self.entries.remove(song_id);
         }
         None
@@ -184,7 +184,7 @@ impl TrackCache {
     /// Write `data` to the cache for `song_id`.
     ///
     /// Updates the index, runs LRU eviction, then saves. Any IO error is
-    /// logged but does not propagate — cache failures must never affect playback.
+    /// logged but does not propagate. Cache failures must never affect playback.
     pub fn put(&mut self, song_id: &str, album_id: &str, data: &[u8]) -> anyhow::Result<()> {
         if !self.enabled {
             return Ok(());
@@ -249,7 +249,7 @@ impl TrackCache {
             return;
         }
 
-        // Sort by last_played ascending — oldest entries evicted first.
+        // Sort by last_played ascending. Oldest entries evicted first.
         let mut by_age: Vec<(String, u64)> = self
             .entries
             .iter()

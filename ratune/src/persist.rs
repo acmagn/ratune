@@ -103,7 +103,7 @@ pub fn save_state(app: &App) -> Result<()> {
 
 /// Restore previously saved state into `app`. Populates playback display state
 /// (current_song, total, paused=true) so the now-playing bar renders immediately,
-/// but does NOT send any command to the player engine — the track loads on first play.
+/// but does NOT send any command to the player engine. The track loads on first play.
 pub fn restore_state(app: &mut App) -> Result<()> {
     let path = state_path()?;
     if !path.exists() {
@@ -145,7 +145,7 @@ pub fn restore_state(app: &mut App) -> Result<()> {
     }
 
     // Populate display-only playback state so the now-playing bar shows the
-    // restored track immediately. `player_loaded` stays false — the engine gets
+    // restored track immediately. `player_loaded` stays false. The engine gets
     // the actual URL only when the user presses play for the first time.
     if let Some(song) = app.queue.current().cloned() {
         let duration = song
@@ -158,7 +158,7 @@ pub fn restore_state(app: &mut App) -> Result<()> {
         app.playback.current_song = Some(song);
         app.playback.total = duration;
         app.playback.paused = true;
-        // player_loaded remains false (default) — engine has no track yet.
+        // player_loaded remains false (default). Engine has no track yet.
     }
 
     Ok(())

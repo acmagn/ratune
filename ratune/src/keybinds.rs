@@ -221,7 +221,7 @@ pub struct Keybinds {
     pub home_section_next: KeySpec,
     pub home_section_prev: KeySpec,
     pub home_refresh: KeySpec,
-    /// `None` = disabled — folder toggle from keybinds
+    /// Folder browse toggle (`None` = disabled).
     pub toggle_folder_browse: Option<KeySpec>,
     /// Toggle favorite on focused or playing item (Subsonic star API).
     pub toggle_favorite: KeySpec,
@@ -505,7 +505,7 @@ impl Keybinds {
 fn parse_key(s: &str) -> Option<KeySpec> {
     let s = s.trim();
 
-    // "Shift+x" — lowercase letter + SHIFT (canonical; matches Ghostty / kitty protocols).
+    // "Shift+x" is a lowercase letter + SHIFT (canonical; matches Ghostty / kitty protocols).
     if let Some(rest) = s
         .strip_prefix("Shift+")
         .or_else(|| s.strip_prefix("shift+"))

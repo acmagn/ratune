@@ -39,7 +39,7 @@ const MIN_LIVE_BYTES: usize = 2 * 1024;
 /// Max time to wait for live prebuffer before failing.
 const LIVE_PREBUFFER_WAIT: Duration = Duration::from_secs(20);
 
-/// Longer wait for AAC — Icecast can be slow to deliver the first audio frame.
+/// Longer wait for AAC. Icecast can be slow to deliver the first audio frame.
 const LIVE_AAC_PREBUFFER_WAIT: Duration = Duration::from_secs(35);
 
 // ── Shared inner state ────────────────────────────────────────────────────────
@@ -338,7 +338,7 @@ fn sniff_format(buf: &[u8]) -> StreamFormatHint {
     if trimmed.starts_with(b"OggS") {
         return StreamFormatHint::Ogg;
     }
-    // Only inspect stream start — MP3 frames (`0xFF 0xFB`) share the ADTS prefix.
+    // Only inspect stream start. MP3 frames (`0xFF 0xFB`) share the ADTS prefix.
     if trimmed.len() >= 2 && is_adts_sync(trimmed[0], trimmed[1]) {
         return StreamFormatHint::Aac;
     }
@@ -516,7 +516,7 @@ fn live_http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
-            // Live streams never finish — only bound connect time, not total body read.
+            // Live streams never finish. Only bound connect time, not total body read.
             .connect_timeout(Duration::from_secs(15))
             .user_agent(concat!(
                 "Mozilla/5.0 (compatible; ratune/",
@@ -602,7 +602,7 @@ mod stream_tests {
 
     #[test]
     fn sniff_mp3_frame_not_aac() {
-        // Common Icecast MP3 frame header — old sniff misclassified this as ADTS.
+        // Common Icecast MP3 frame header. Old sniff misclassified this as ADTS.
         let buf = [0xFFu8, 0xFB, 0x90, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(sniff_format(&buf), StreamFormatHint::Mp3);
         assert!(find_adts_sync_offset(&buf).is_none());

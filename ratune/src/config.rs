@@ -279,7 +279,7 @@ impl LyricsSource {
     }
 }
 
-// ── [library] — metadata index + fzf picker ───────────────────────────────────
+// ── [library]: metadata index + fzf picker ───────────────────────────────────
 
 /// Fuzzy picker settings under `[library.fzf]`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -425,7 +425,7 @@ impl Default for LibrarySection {
     }
 }
 
-// ── [scrobble] — Last.fm / Libre.fm + Subsonic play counts ───────────────────
+// ── [scrobble]: Last.fm / Libre.fm + Subsonic play counts ───────────────────
 
 /// Local listen threshold (history + Subsonic). Defaults: 50%, 30 s cap.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1004,9 +1004,9 @@ pub struct ThemeSection {
     /// Pane outline style + optional edge glyphs. See [`ThemeBorderLinesSection`].
     #[serde(default)]
     pub border_lines: ThemeBorderLinesSection,
-    /// Legacy — prefer `[theme.border_lines].type`.
+    /// Legacy. Prefer `[theme.border_lines].type`.
     pub border_type: Option<String>,
-    /// Legacy — prefer `[theme.border_lines].top_left` (etc.).
+    /// Legacy. Prefer `[theme.border_lines].top_left` (etc.).
     pub border_top_left: Option<String>,
     pub border_top_right: Option<String>,
     pub border_bottom_left: Option<String>,
@@ -1096,9 +1096,9 @@ pub struct ThemeIconSection {
     pub offline: Option<String>,
     /// Radio live prefix glyph (default: `●`).
     pub live: Option<String>,
-    /// Legacy — prefer `[theme.border_lines].type`.
+    /// Legacy. Prefer `[theme.border_lines].type`.
     pub border_type: Option<String>,
-    /// Legacy — prefer `[theme.border_lines]` edge keys.
+    /// Legacy. Prefer `[theme.border_lines]` edge keys.
     pub border_top_left: Option<String>,
     pub border_top_right: Option<String>,
     pub border_bottom_left: Option<String>,
@@ -1230,16 +1230,16 @@ pub(crate) struct RatingsSection {
     /// Show ratings in the UI, allow rating keybinds, and export MPRIS UserRating.
     #[serde(default)]
     enabled: bool,
-    /// Legacy glyph — prefer `[theme.icon].rating_filled`. Default: ⭑
+    /// Legacy glyph. Prefer `[theme.icon].rating_filled`. Default: ⭑
     #[serde(default = "default_rating_star_filled")]
     star_filled: String,
-    /// Legacy glyph — prefer `[theme.icon].rating_empty`. Default: ⭒
+    /// Legacy glyph. Prefer `[theme.icon].rating_empty`. Default: ⭒
     #[serde(default = "default_rating_star_empty")]
     star_empty: String,
-    /// Legacy — prefer `[theme.icon].rating_bracket_open`. Default: `[`
+    /// Legacy. Prefer `[theme.icon].rating_bracket_open`. Default: `[`
     #[serde(default = "default_rating_bracket_open")]
     bracket_open: String,
-    /// Legacy — prefer `[theme.icon].rating_bracket_close`. Default: `]`
+    /// Legacy. Prefer `[theme.icon].rating_bracket_close`. Default: `]`
     #[serde(default = "default_rating_bracket_close")]
     bracket_close: String,
 }
@@ -1377,9 +1377,9 @@ pub struct Config {
     pub radio_enabled: bool,
     /// When false, skip HTTP fetches to station homepages for Now Playing art.
     pub radio_fetch_station_icons: bool,
-    /// Raw keybind strings — parsed into `Keybinds` by `App::new`.
+    /// Raw keybind strings. Parsed into `Keybinds` by `App::new`.
     pub keybinds: KeybindsSection,
-    /// Raw theme colour strings — parsed into `Theme` by `App::new`.
+    /// Raw theme colour strings. Parsed into `Theme` by `App::new`.
     pub theme: ThemeSection,
     /// Whether to show the lyrics overlay on startup.
     pub lyrics_visible: bool,
@@ -1945,7 +1945,7 @@ fn create_default(path: &PathBuf) -> Result<()> {
             .with_context(|| format!("creating config dir {}", parent.display()))?;
     }
     // Intentionally a small starter file (credentials + common toggles). Every key lives in
-    // `docs/sample-config.toml` in the source tree — copy from there when you want the full menu.
+    // `docs/sample-config.toml` in the source tree. Copy from there when you want the full menu.
     let default_toml = r##"[server]
 url = ""
 username = ""

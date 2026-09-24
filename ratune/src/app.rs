@@ -307,7 +307,7 @@ pub struct HomeState {
     pub selected_index: usize,
 }
 
-// ── LibraryUpdate — messages sent back from background fetch tasks ─────────────
+// ── LibraryUpdate: messages sent back from background fetch tasks ─────────────
 
 #[derive(Debug)]
 pub enum LibraryUpdate {
@@ -354,7 +354,7 @@ pub enum LibraryUpdate {
         album_id: String,
         bytes: Vec<u8>,
     },
-    /// Home strip cover fetch failed — release loading slot so more fetches can run.
+    /// Home strip cover fetch failed. Release loading slot so more fetches can run.
     HomeArtFetchFailed {
         album_id: String,
     },
@@ -452,11 +452,11 @@ pub enum LibraryUpdate {
     },
     /// Initial startup `ping` succeeded (non-blocking startup path).
     StartupPingOk,
-    /// Initial startup `ping` failed with Subsonic auth error — quit after TUI teardown.
+    /// Initial startup `ping` failed with Subsonic auth error. Quit after TUI teardown.
     StartupPingAuthFailed {
         detail: String,
     },
-    /// Initial startup `ping` failed for non-auth reasons — enter offline mode.
+    /// Initial startup `ping` failed for non-auth reasons. Enter offline mode.
     StartupPingUnreachable {
         detail: String,
     },
@@ -517,7 +517,7 @@ pub struct PlaylistPicker {
     pub playlists: Vec<ratune_subsonic::Playlist>,
     pub selected_index: usize,
     /// Song IDs to append (may be empty when `album_id` is set and tracks are
-    /// still loading — resolved on confirm).
+    /// still loading; resolved on confirm).
     pub song_ids: Vec<String>,
     /// When set and `song_ids` is empty at confirm time, fetch this album and
     /// append all of its tracks.
@@ -600,9 +600,9 @@ pub struct App {
     /// Cached cover art: `(cover_art_id, raw_image_bytes)`.
     /// Updated whenever a new track starts with a different cover ID.
     pub art_cache: Option<(String, Vec<u8>)>,
-    /// FNV digest of `art_cache` bytes — stable across tracks that share the same image.
+    /// FNV digest of `art_cache` bytes. Stable across tracks that share the same image.
     pub art_cache_fingerprint: Option<u64>,
-    /// Decoded `art_cache` image for the current fingerprint — avoids JPEG decode on every resize.
+    /// Decoded `art_cache` image for the current fingerprint. Avoids JPEG decode on every resize.
     pub art_cache_decoded: Option<(u64, DynamicImage)>,
     /// Home tab album art cache: `album_id → raw image bytes`.
     pub home_art_cache: HashMap<String, Vec<u8>>,
@@ -624,7 +624,7 @@ pub struct App {
     library_index_by_id: HashMap<String, ratune_subsonic::Song>,
     /// Unix seconds when the index was last fully refreshed, if known.
     pub library_index_refreshed_at: Option<u64>,
-    /// Full-library browse tree from the index — used for online Browse (and offline when
+    /// Full-library browse tree from the index. Used for online Browse (and offline when
     /// audio cache filtering is not needed).
     index_browse: Option<std::sync::Arc<crate::library_index::BrowseSnapshot>>,
     /// Cache-filtered browse hierarchy for offline artist/album/track columns when caching
@@ -696,7 +696,7 @@ pub struct App {
     pub waveform: Vec<f32>,
     /// Whether the spectrum visualizer overlay is currently visible.
     pub visualizer_visible: bool,
-    /// FFT planner — cached across frames for efficiency.
+    /// FFT planner. Cached across frames for efficiency.
     pub fft_planner: rustfft::FftPlanner<f32>,
     /// Last time we updated spectrum/waveform (FPS throttling).
     pub visualizer_last_tick: Option<Instant>,
@@ -758,7 +758,7 @@ pub struct App {
     /// Dominant colour extracted from the current track's album art.
     /// `None` = no art / no suitable colour found.
     pub dynamic_accent: Option<Color>,
-    /// Currently displayed accent — interpolates toward `dynamic_accent` over 400 ms.
+    /// Currently displayed accent. Interpolates toward `dynamic_accent` over 400 ms.
     /// Initialised to `theme.accent`; updated each render tick.
     pub accent_current: Color,
     /// Accent value at the start of the current transition.
@@ -774,18 +774,18 @@ pub struct App {
 
     /// Set after alternate screen when `album_art_backend = ratatui-image` and the probe succeeds.
     pub art_picker: Option<ratatui_image::picker::Picker>,
-    /// Now Playing album art — encode runs on `ratatui_resize` worker thread (`ThreadProtocol`).
+    /// Now Playing album art. Encode runs on `ratatui_resize` worker thread (`ThreadProtocol`).
     pub np_art_state: Option<ThreadProtocol>,
     /// Worker queue for `ResizeRequest` (Now Playing only; home strip stays on-thread for now).
     pub ratatui_resize_tx: Option<Sender<ResizeRequest>>,
     pub ratatui_resize_rx: Option<Receiver<Result<ResizeResponse, ratatui_image::errors::Errors>>>,
-    /// `(bytes_digest, inner_w, inner_h)` — rebuild when pixels or art `Rect` change.
+    /// `(bytes_digest, inner_w, inner_h)`. Rebuild when pixels or art `Rect` change.
     pub np_art_prep_key: Option<(u64, u16, u16)>,
     /// Home art strip: one protocol state per `album_id`.
     pub home_strip_art: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
-    /// Last thumbnail cell size per album — rebuild strip slot when layout resizes.
+    /// Last thumbnail cell size per album. Rebuild strip slot when layout resizes.
     pub home_strip_last_cells: HashMap<String, (u16, u16)>,
-    /// Decoded home strip covers — avoids JPEG decode on every ratatui frame (Sixel path).
+    /// Decoded home strip covers. Avoids JPEG decode on every ratatui frame (Sixel path).
     pub home_strip_decoded: HashMap<String, DynamicImage>,
     /// Cached resize + zlib for Now Playing Kitty APC (built once per cover + placement).
     pub np_kitty_prepared: Option<crate::ui::kitty_art::NpKittyPrepared>,
@@ -1246,7 +1246,7 @@ impl App {
             && self.art_picker.is_some()
     }
 
-    /// Picker chose Kitty graphics — use the same post-draw APC path as `kitty_art`, not `StatefulImage`.
+    /// Picker chose Kitty graphics. Use the same post-draw APC path as `kitty_art`, not `StatefulImage`.
     ///
     /// ratatui-image's in-buffer Kitty backend can re-encode pathologically; our hand-rolled APC is
     /// battle-tested for this app.
@@ -1263,10 +1263,10 @@ impl App {
         self.kitty_apc_graphics_ready() || self.ratatui_uses_kitty_apc()
     }
 
-    /// `Resize` mode for `ratatui-image` [`StatefulImage`] (Sixel / halfblocks / iTerm2 — not Kitty APC).
+    /// `Resize` mode for `ratatui-image` [`StatefulImage`] (Sixel / halfblocks / iTerm2, not Kitty APC).
     ///
     /// [`Resize::Fit`] caps the raster to the **source** pixel size, then pads the cell area with the
-    /// background colour — common Sixel symptom: empty bands on the bottom/right. [`Resize::Scale`]
+    /// background colour. Common Sixel symptom: empty bands on the bottom/right. [`Resize::Scale`]
     /// upscales after our `art_prepare` budget so the image fills the allocated cells (still
     /// letterboxed if aspect ratios differ, but much less dead space).
     pub fn ratatui_stateful_resize(&self) -> Resize {
@@ -1474,7 +1474,7 @@ impl App {
     /// Returns `accent_current` (the OKLab-interpolated value) when dynamic
     /// mode is on, otherwise the static configured accent.
     pub fn accent(&self) -> Color {
-        // Pass `accent_current` as the dynamic value — `effective_accent`
+        // Pass `accent_current` as the dynamic value. `effective_accent`
         // uses it when `theme.dynamic` is true, else falls back to static accent.
         self.theme.effective_accent(if self.theme.dynamic {
             Some(self.accent_current)
@@ -1595,7 +1595,7 @@ impl App {
 
         let album_strip_unchanged = old_album_ids == new_album_ids;
         if album_strip_unchanged {
-            // Same albums in the same order — keep scroll/selection and the Kitty
+            // Same albums in the same order. Keep scroll/selection and the Kitty
             // strip CPU cache (`home_strip_thumb_prepared`). Tab switches still clear
             // terminal placements, but redraw reuses zlib without re-decoding covers.
             let max_idx = self.home.recent_albums.len().saturating_sub(1);
@@ -2320,7 +2320,7 @@ impl App {
                 match client.ping().await {
                     Ok(()) => LibraryUpdate::StartupPingOk,
                     Err(e) if is_auth_failure(e.as_ref()) => LibraryUpdate::StartupPingAuthFailed {
-                        // Auth errors are Subsonic status payloads — safe to show.
+                        // Auth errors are Subsonic status payloads. Safe to show.
                         detail: format!("{e:#}"),
                     },
                     Err(_) => LibraryUpdate::StartupPingUnreachable {
@@ -3102,7 +3102,7 @@ impl App {
     /// Spawn a task to fetch lyrics from the configured source.
     ///
     /// No network request is made when lyrics are disabled or the pane is hidden.
-    /// Checks the on-disk cache first. Soft-fails silently — on any error an
+    /// Checks the on-disk cache first. Soft-fails silently. On any error an
     /// empty `lines` vec is delivered so the UI shows "No lyrics available".
     pub fn fetch_lyrics(&mut self, song_id: String, artist: String, title: String, album: String) {
         if !self.config.lyrics_enabled || !self.lyrics_visible {
@@ -3347,7 +3347,7 @@ impl App {
                                 prefetch_tracks = Some(album_id);
                             }
                         }
-                        // Non-selected artists: cache albums only — do not cascade track fetches.
+                        // Non-selected artists: cache albums only. Do not cascade track fetches.
                         LoadingState::Loaded(albums)
                     }
                     Ok(albums) => LoadingState::Loaded(albums),
@@ -3467,7 +3467,7 @@ impl App {
                 self.home_strip_last_cells.remove(&album_id);
                 self.home_strip_decoded.remove(&album_id);
                 self.home_art_cache.insert(album_id, bytes);
-                // A fetch slot opened up — check if more albums need fetching.
+                // A fetch slot opened up. Check if more albums need fetching.
                 self.spawn_pending_home_art_fetches();
                 if self.active_tab == Tab::Home {
                     if self.in_tmux {
@@ -3480,7 +3480,7 @@ impl App {
                             self.home_art_needs_redraw = true;
                         }
                     } else {
-                        // Outside tmux: redraw each arrival — decode/zlib is cached in
+                        // Outside tmux: redraw each arrival. Decode/zlib is cached in
                         // `home_strip_thumb_prepared` so this is mostly base64 + Kitty I/O.
                         self.home_art_needs_redraw = true;
                     }
@@ -4259,7 +4259,7 @@ impl App {
                 }
             }
             PlayerEvent::Error(e) => {
-                // Never eprintln here — stderr draws over the alternate-screen TUI.
+                // Never eprintln here. Stderr draws over the alternate-screen TUI.
                 self.playback.player_loaded = false;
                 self.status_flash = Some((
                     humanize_playback_error(&e),
@@ -4274,7 +4274,7 @@ impl App {
                     self.mpris_touch_snapshot_only();
                     // Spec: `Position` must not emit PropertiesChanged on tick. Many shells
                     // and widgets never poll `Get(Position)` and only resync on `Seeked` or
-                    // `PlaybackStatus` — emit `Seeked` on each progress update (~500 ms) so
+                    // `PlaybackStatus`. Emit `Seeked` on each progress update (~500 ms) so
                     // the displayed time advances while playing.
                     if let Some(link) = &self.mpris {
                         link.notify_seeked(self.playback.elapsed);
@@ -4319,7 +4319,7 @@ impl App {
     #[cfg(target_os = "linux")]
     fn mpris_after_action(&mut self, action: &Action) {
         use crate::action::Action::*;
-        // Search dispatches per keystroke — skip D-Bus work for those.
+        // Search dispatches per keystroke. Skip D-Bus work for those.
         if matches!(
             action,
             SearchStart
@@ -4627,7 +4627,7 @@ impl App {
         self.play_gen += 1;
         self.prefetch_gen.fetch_add(1, Ordering::Release);
         let song = Self::song_from_radio_station(station);
-        // Set now-playing metadata before spawning art fetch — otherwise a fast favicon
+        // Set now-playing metadata before spawning art fetch. Otherwise a fast favicon
         // response can arrive before `current_song` is set and be discarded as stale.
         self.playback.current_song = Some(song);
         self.np_pane_focus = NowPlayingPaneFocus::Radio;
@@ -5778,10 +5778,10 @@ impl App {
                 if self.active_tab == Tab::Home {
                     if self.kitty_apc_overlay_active() {
                         if !was_visible && self.help_visible {
-                            // Opening help — clear Kitty strip so it doesn't bleed through.
+                            // Opening help. Clear Kitty strip so it doesn't bleed through.
                             let _ = crate::ui::kitty_art::clear_art_strip(self.in_tmux);
                         } else if was_visible && !self.help_visible {
-                            // Closing help — post-draw strip redraw.
+                            // Closing help. Post-draw strip redraw.
                             self.home_art_needs_redraw = true;
                         }
                     }
@@ -6054,7 +6054,7 @@ impl App {
                         self.send_player(PlayerCommand::Pause);
                     }
                 } else if !self.playback.player_loaded && self.queue.current().is_some() {
-                    // Restored queue: engine has no track yet — load and start playing.
+                    // Restored queue: engine has no track yet. Load and start playing.
                     self.play_current();
                 } else if self.playback.paused {
                     self.playback.paused = false;
@@ -6228,7 +6228,7 @@ impl App {
             Action::HomeRefresh => {
                 if self.active_tab == Tab::Home {
                     // Preserve the active section so the user stays in Rediscover
-                    // after pressing r — the re-roll is visible immediately.
+                    // after pressing r. The re-roll is visible immediately.
                     let saved_section = self.home.active_section;
                     self.refresh_home_data();
                     self.home.active_section = saved_section;
@@ -6490,9 +6490,9 @@ impl App {
                         self.fetch_albums(artist_id);
                     }
                 }
-                // If artist not found, pending was taken (cleared) — switch Browser normally.
+                // If artist not found, pending was taken (cleared). Switch Browser normally.
             }
-            // If artists not yet loaded, pending was taken — no-op.
+            // If artists not yet loaded, pending was taken. No-op.
         }
     }
 
@@ -6741,7 +6741,7 @@ impl App {
         match self.browser_focus {
             BrowserColumn::Artists => {
                 let result = if let LoadingState::Loaded(artists) = &self.library.artists {
-                    // Build navigable index set — filtered or full.
+                    // Build navigable index set. Filtered or full.
                     let indices: Vec<usize> =
                         if let Some(q) = self.browser_column_filter(BrowserColumn::Artists) {
                             artists

@@ -41,7 +41,7 @@ pub enum Action {
     AddAllToQueueReplaceAlbum,
     /// Browser: replace queue with **all tracks for the current artist** (API fetch) and play.
     AddAllToQueueReplaceArtist,
-    /// Browser: add all tracks — insert at the front of the queue.
+    /// Browser: add all tracks. Insert at the front of the queue.
     AddAllToQueuePrepend,
     PlayPause,
     NextTrack,

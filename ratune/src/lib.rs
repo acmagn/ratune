@@ -169,7 +169,7 @@ pub async fn run() -> Result<()> {
         app.prepare_index_browse();
     }
 
-    // `refresh_home_data()` only ran when navigating to Home — not on cold start. If we restore
+    // `refresh_home_data()` only ran when navigating to Home. If we restore
     // or default to Home, populate lists and kick art fetches before the first frame.
     if app.active_tab == Tab::Home {
         app.refresh_home_data();
@@ -320,7 +320,7 @@ pub async fn run() -> Result<()> {
     } else {
         // Send Quit so the thread stops playback and releases the audio device.
         // Then join with a 1-second timeout; if the thread is stuck on a network
-        // fetch (blocking download), detach it — the OS will clean it up on exit.
+        // fetch (blocking download), detach it.
         let _ = app.player_tx.send(ratune_player::PlayerCommand::Quit);
         if let Some(handle) = app.player_join.take() {
             let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -466,12 +466,12 @@ async fn run_loop(
     signal_quit: Arc<AtomicBool>,
     mpris_ctrl_rx: Option<std::sync::mpsc::Receiver<crate::mpris::MprisControl>>,
 ) -> Result<()> {
-    // `last_rendered_art` — the (bytes_digest, rect) of the last full image
+    // `last_rendered_art` is the (bytes_digest, rect) of the last full image
     // transmission.  Kept across tab switches so we can detect whether a
     // re-transmit is actually needed (digest matches identical pixels even if
     // `cover_id` differs per track).
     //
-    // `art_displayed` — whether the image is currently visible on screen.
+    // `art_displayed` is whether the image is currently visible on screen.
     // Set to false when switching away (ratatui overwrites those cells) but we
     // deliberately do NOT clear the image from the terminal's store, so we can
     // redisplay it instantly with `a=p,i=1` when switching back.
@@ -592,7 +592,7 @@ async fn run_loop(
                 }
 
                 if app.help_visible {
-                    // Popup is open — clear any displayed art so the Kitty
+                    // Popup is open. Clear any displayed art so the Kitty
                     // image doesn't paint over the ratatui popup layer.
                     if art_displayed {
                         let _ = ui::kitty_art::clear_image(app.in_tmux);
@@ -690,7 +690,7 @@ async fn run_loop(
                                         .unwrap_or(false);
 
                                     if stored_matches && art_displayed {
-                                        // Image is already visible — nothing to do.
+                                        // Image is already visible.
                                     } else {
                                         let prepared =
                                             app.ensure_np_kitty_prepared(placement, font).cloned();
@@ -720,7 +720,7 @@ async fn run_loop(
                                     }
                                 }
                             } else if art_displayed {
-                                // Art column hidden — clear Kitty overlay.
+                                // Art column hidden. Clear Kitty overlay.
                                 let _ = ui::kitty_art::clear_image(app.in_tmux);
                                 last_rendered_art = None;
                                 art_displayed = false;
@@ -734,7 +734,7 @@ async fn run_loop(
                     }
                 }
             } else if last_tab != app.active_tab {
-                // Switched away from any tab — clear any visible Kitty
+                // Switched away from any tab. Clear any visible Kitty
                 // placement so it doesn't float above the new tab's content.
                 if art_displayed {
                     let _ = ui::kitty_art::clear_image(app.in_tmux);
@@ -795,7 +795,7 @@ async fn run_loop(
                             // double-firing on terminals that send all event kinds (e.g. Kitty).
                             if key.kind == KeyEventKind::Press => {
                                 if app.playlist_picker.is_some() && !app.help_visible {
-                                    // Picker is open: highest priority — swallow all keys.
+                                    // Picker is open: highest priority. Swallow all keys.
                                     let action = map_picker_key(
                                         key.code,
                                         key.modifiers,
@@ -880,7 +880,7 @@ async fn run_loop(
                                     );
                                     // Quit key in Normal mode closes the overlay only;
                                     // the user must press q again (overlay closed) to quit.
-                                    // In text-input modes q is a typed character — don't intercept.
+                                    // In text-input modes q is a typed character. Don't intercept.
                                     let is_quit_stop = matches_quit_stop(
                                         &app.keybinds,
                                         key.code,
@@ -1031,22 +1031,22 @@ async fn run_loop(
                         }
                         Event::Resize(_, _) => {
                             // Invalidate cached art geometry; re-encode on the next draw.
-                            // Avoid clear_image here — clearing on every resize tick while
+                            // Avoid clear_image here. Clearing on every resize tick while
                             // dragging a window causes visible flicker (especially Kitty APC).
                             if app.kitty_apc_overlay_active() && art_displayed {
                                 art_displayed = false;
                                 last_rendered_art = None;
                             }
-                            // Now Playing ratatui art — must rebuild for new layout.
+                            // Now Playing ratatui art. Must rebuild for new layout.
                             if app.ratatui_art_ready() && !app.ratatui_uses_kitty_apc() {
                                 app.clear_np_ratatui_art_state();
                             }
-                            // Home strip: debounced — avoids re-encoding sixel/Kitt strip on every resize tick.
+                            // Home strip: debounced. Avoids re-encoding sixel/Kitt strip on every resize tick.
                             app.schedule_home_strip_resize_invalidate();
                         }
                         // tmux focus events (requires `focus-events on` in tmux.conf).
                         // Crossterm also reports WM focus (another app focused) when
-                        // `EnableFocusChange` is on — do not treat that like a tmux pane
+                        // `EnableFocusChange` is on. Do not treat that like a tmux pane
                         // switch: the alternate-screen buffer is unchanged, so clearing
                         // ratatui-image state would re-encode Sixel on every refocus.
                         //
@@ -1054,7 +1054,7 @@ async fn run_loop(
                         //              graphics don't bleed into another pane.
                         // FocusGained → Kitty APC: always force re-transmit (terminal may
                         //              have evicted the stored image). Ratatui: same as
-                        //              FocusLost — only under tmux.
+                        //              FocusLost, only under tmux.
                         //
                         Event::FocusLost => {
                             if app.kitty_apc_overlay_active() && app.in_tmux {
@@ -1071,7 +1071,7 @@ async fn run_loop(
                         }
                         Event::FocusGained => {
                             if app.kitty_apc_overlay_active() {
-                                // Force a full art re-transmit on the next frame — same
+                                // Force a full art re-transmit on the next frame. Same
                                 // mechanism as tab return (last_rendered_art = None makes
                                 // stored_matches false, taking the re-encode path).
                                 art_displayed = false;
@@ -1773,7 +1773,7 @@ fn map_key(
     }
 
     // ── Always-on / non-configurable ─────────────────────────────────────────
-    // G: jump to bottom — not exposed in config. Top is `gg` (handled via pending_gg).
+    // G: jump to bottom. Top is `gg` (handled via pending_gg).
     // Terminals usually send Shift+G as `Char('G')` with SHIFT set, not bare `G`.
     if code == KeyCode::Char('G')
         && !modifiers.intersects(
@@ -1782,7 +1782,7 @@ fn map_key(
     {
         return Action::Navigate(Direction::Bottom);
     }
-    // Enter / Esc — not configurable
+    // Enter / Esc are not configurable.
     if code == KeyCode::Enter {
         return Action::Select;
     }
@@ -2366,11 +2366,11 @@ fn handle_nowplaying_wheel(x: u16, y: u16, dir: Direction, app: &mut App, center
 // ─────────────────────────────────────────────────
 // Render uses build_layout() for ALL three tabs (center | now_playing | tab_bar | status_bar).
 // Previously this function used build_browser() / build_nowplaying() for the Browser /
-// NowPlaying tabs — those layouts omit the tab_bar row, so their `now_playing` started 1
+// NowPlaying tabs. Those layouts omit the tab_bar row, so their `now_playing` started 1
 // row lower and their `center` was 1 row taller than what was actually drawn on screen.
 //
-// Consequence 1 — no tab-bar click handler existed at all.
-// Consequence 2 — the coordinate mismatch meant clicks on the rendered now-playing bar
+// Consequence 1: no tab-bar click handler existed at all.
+// Consequence 2: the coordinate mismatch meant clicks on the rendered now-playing bar
 //   rows 0 and 1 could silently fall through rather than hitting the controls check.
 //
 // The freeze itself came from render_art_strip() being called on *every* ratatui frame

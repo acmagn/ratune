@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::lastfm::{api_sig, ScrobbleService};
 
-/// Application credentials only — no session key yet.
+/// Application credentials only. No session key yet.
 #[derive(Debug, Clone)]
 pub struct AuthClient {
     http: Client,

@@ -2,7 +2,7 @@
 //! calls per keystroke.
 //!
 //! Stored as JSON under `~/.cache/ratune/library_index.json` by default (see
-//! config). Text only — no art or audio.
+//! config). Text only. No art or audio.
 
 use std::fs;
 use std::io::Write;
@@ -240,7 +240,7 @@ pub fn index_by_id(tracks: &[Song]) -> std::collections::HashMap<String, Song> {
     tracks.iter().cloned().map(|s| (s.id.clone(), s)).collect()
 }
 
-/// Artist/album/track hierarchy derived from a flat library index — used to drive the
+/// Artist/album/track hierarchy derived from a flat library index. Used to drive the
 /// Browse tab from local data (online when the index is available, and offline).
 #[derive(Debug, Clone)]
 pub struct BrowseSnapshot {
@@ -274,7 +274,7 @@ fn offline_album_id(song: &Song) -> String {
     })
 }
 
-/// Artist id/name used for Browse columns — prefers album artist so compilations match
+/// Artist id/name used for Browse columns. Prefers album artist so compilations match
 /// server `getArtists` (not per-track guest/feature artists).
 ///
 /// Returns **all** album artists when OpenSubsonic `albumArtists` lists several (classical
