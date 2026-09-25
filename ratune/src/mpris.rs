@@ -438,7 +438,9 @@ mod macos {
     ) {
         let label = format!("{control:?}");
         let handler = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
-            eprintln!("ratune: now-playing: remote {label}");
+            if crate::debug::enabled() {
+                crate::debug::log(format!("now-playing: remote {label}"));
+            }
             let _ = ctrl_tx.send(control.clone());
             MPRemoteCommandHandlerStatus::Success
         });
@@ -483,7 +485,7 @@ mod macos {
         unsafe { &*(std::ptr::from_ref(obj) as *const AnyObject) }
     }
 
-    fn push_now_playing(snap: &MprisSnapshot, log: bool) {
+    fn push_now_playing(snap: &MprisSnapshot, log_refresh: bool) {
         ART_CACHE.with(|cell| {
             let mut art_cache = cell.borrow_mut();
             let center = unsafe { MPNowPlayingInfoCenter::defaultCenter() };
@@ -493,8 +495,8 @@ mod macos {
                     center.setNowPlayingInfo(None);
                     center.setPlaybackState(MPNowPlayingPlaybackState::Stopped);
                 }
-                if log {
-                    eprintln!("ratune: now-playing: cleared (no track)");
+                if log_refresh {
+                    crate::debug::log("now-playing: cleared (no track)");
                 }
                 return;
             }
@@ -560,13 +562,13 @@ mod macos {
                 center.setNowPlayingInfo(Some(info));
                 center.setPlaybackState(to_now_playing_state(snap.playback_status));
             }
-            if log {
-                eprintln!(
-                    "ratune: now-playing: refresh title={:?} status={:?} pos_s={:.1}",
+            if log_refresh && crate::debug::enabled() {
+                crate::debug::log(format!(
+                    "now-playing: refresh title={:?} status={:?} pos_s={:.1}",
                     snap.title,
                     snap.playback_status,
                     snap.position_micros as f64 / 1_000_000.0
-                );
+                ));
             }
         });
     }
@@ -644,7 +646,9 @@ mod macos {
                     return MPRemoteCommandHandlerStatus::CommandFailed;
                 };
                 let secs = unsafe { pos_event.positionTime() };
-                eprintln!("ratune: now-playing: remote SetPosition secs={secs:.2}");
+                if crate::debug::enabled() {
+                    crate::debug::log(format!("now-playing: remote SetPosition secs={secs:.2}"));
+                }
                 let _ = ctrl_tx.send(MprisControl::SetPosition {
                     track_path: String::new(),
                     position_micros: (secs * 1_000_000.0).round() as i64,
@@ -659,7 +663,7 @@ mod macos {
 
         // Keep handler targets alive for process lifetime.
         std::mem::forget(targets);
-        eprintln!("ratune: now-playing: remote commands registered (main thread)");
+        crate::debug::log("now-playing: remote commands registered (main thread)");
     }
 
     /// Must run on the OS main thread before the tokio runtime takes it over.
@@ -671,19 +675,21 @@ mod macos {
         let ns_app = NSApplication::sharedApplication(mtm);
         let ok = ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         ns_app.finishLaunching();
-        let bundle_id = NSBundle::mainBundle()
-            .bundleIdentifier()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "<none>".into());
-        eprintln!(
-            "ratune: now-playing: NSApplication ready (accessory_policy={ok}, bundle_id={bundle_id})"
-        );
+        if crate::debug::enabled() {
+            let bundle_id = NSBundle::mainBundle()
+                .bundleIdentifier()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "<none>".into());
+            crate::debug::log(format!(
+                "now-playing: NSApplication ready (accessory_policy={ok}, bundle_id={bundle_id})"
+            ));
+        }
         // Keep the shared app alive.
         std::mem::forget(ns_app);
     }
 
     pub(super) fn run_main_loop() {
-        eprintln!("ratune: now-playing: entering main NSRunLoop");
+        crate::debug::log("now-playing: entering main NSRunLoop");
         // Blocks until `stop_main_loop` (daemon exit).
         NSRunLoop::mainRunLoop().run();
     }
@@ -742,7 +748,7 @@ mod macos {
                         set_enabled(center.previousTrackCommand().as_ref(), false);
                         set_enabled(center.changePlaybackPositionCommand().as_super(), false);
                     }
-                    eprintln!("ratune: now-playing: shutdown");
+                    crate::debug::log("now-playing: shutdown");
                 });
             })
             .expect("spawn now-playing thread")
