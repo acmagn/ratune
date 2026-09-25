@@ -439,27 +439,6 @@ enabled = true
 visible = false
 location = "right"
 
-# -----------------------------------------------------------------------------
-# [lyrics] — lyrics fetch source
-# -----------------------------------------------------------------------------
-#
-# source — one provider or an ordered fallback list. Default: "lrclib"
-#   Example: source = ["lrclib", "subsonic", "netease"]
-#   The first provider returning lyrics wins; empty/error/timeout tries the next.
-#   lrclib   — query LRCLib (public API; requests only when the lyrics pane is open)
-#   netease  — query NetEase Cloud Music by title and artist (no login required)
-#   subsonic — query your Subsonic server (getLyricsBySongId / getLyrics; no third party)
-# lrclib_url — LRCLib base URL when source = "lrclib". Default: https://lrclib.net
-# cache_enabled — store lyrics under ~/.cache/ratune/lyrics/ for offline use. Default: true
-
-[lyrics]
-source = "lrclib"
-# lrclib_url = "https://lrclib.net"
-# cache_enabled = false
-# source = "netease"
-# source = "subsonic"
-# source = ["lrclib", "subsonic", "netease"]
-
 # [ui.nptab.visualizer_pane]
 # enabled — If false, visualizer cannot be opened. Default: true.
 # visible — Start visible. Default: false.
@@ -504,6 +483,27 @@ colors = ["#00aaff", "#00ff99", "#ffee55", "#ff3355"]
 # box_include_progress = false
 # progress_style = "██░"
 # lines = ["$b$1%t$/b$9", "$2%a$9", "$3%b$9"]
+
+# -----------------------------------------------------------------------------
+# [lyrics] — lyrics fetch source
+# -----------------------------------------------------------------------------
+#
+# source — one provider or an ordered fallback list. Default: "lrclib"
+#   Example: source = ["lrclib", "subsonic", "netease"]
+#   The first provider returning lyrics wins; empty/error/timeout tries the next.
+#   lrclib   — query LRCLib (public API; requests only when the lyrics pane is open)
+#   netease  — query NetEase Cloud Music by title and artist (no login required)
+#   subsonic — query your Subsonic server (getLyricsBySongId / getLyrics; no third party)
+# lrclib_url — LRCLib base URL when source = "lrclib". Default: https://lrclib.net
+# cache_enabled — store lyrics under ~/.cache/ratune/lyrics/ for offline use. Default: true
+
+[lyrics]
+source = "lrclib"
+# lrclib_url = "https://lrclib.net"
+# cache_enabled = false
+# source = "netease"
+# source = "subsonic"
+# source = ["lrclib", "subsonic", "netease"]
 
 # -----------------------------------------------------------------------------
 # [library] — on-disk metadata index + fzf picker
@@ -633,6 +633,16 @@ cache_starred_parallelism = 2
 #                      local listen threshold (min(50%, 30 s)), independent of
 #                      Last.fm's min(50%, 4 min) rule.
 
+[scrobble]
+enabled = false
+service = "lastfm"
+# api_key = ""
+# api_secret = ""            # plaintext here is supported
+# session_key = ""           # from `ratune scrobble-auth`
+# api_secret_command = ""    # optional; checked if api_secret is empty
+# session_key_command = ""   # optional; checked if session_key is empty
+scrobble_to_server = true
+
 # [radio] — Internet radio
 #
 # enabled             — Show radio picker (Shift+R) and Now Playing radio pane (default: true)
@@ -643,13 +653,3 @@ cache_starred_parallelism = 2
 # [radio]
 # enabled = true
 # fetch_station_icons = true
-
-[scrobble]
-enabled = false
-service = "lastfm"
-# api_key = ""
-# api_secret = ""            # plaintext here is supported
-# session_key = ""           # from `ratune scrobble-auth`
-# api_secret_command = ""    # optional; checked if api_secret is empty
-# session_key_command = ""   # optional; checked if session_key is empty
-scrobble_to_server = true
