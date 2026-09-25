@@ -574,7 +574,7 @@ pub async fn run_daemon() -> Result<()> {
         Err(e) => eprintln!("warn: could not load history: {e}"),
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mpris_ctrl_rx = if let Some((link, rx)) = crate::mpris::setup(app.config.mpris_enabled) {
         app.mpris = Some(link);
         app.mpris_sync_now();
@@ -582,7 +582,7 @@ pub async fn run_daemon() -> Result<()> {
     } else {
         None
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let mpris_ctrl_rx: Option<std::sync::mpsc::Receiver<crate::mpris::MprisControl>> = None;
 
     app.spawn_startup_ping();
@@ -708,7 +708,7 @@ pub async fn run_daemon() -> Result<()> {
     let _ = app.history.save(&history_path);
     app.persist_scrobble_queue();
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(m) = app.mpris.take() {
         m.shutdown();
     }
@@ -790,14 +790,14 @@ fn handle_client_message(app: &mut App, msg: ClientMessage, broadcast: &Broadcas
         ClientMessage::Pause => {
             app.playback.paused = true;
             let _ = app.player_tx.send(ratune_player::PlayerCommand::Pause);
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             app.mpris_emit_props();
             broadcast.send_all(ServerMessage::Snapshot(SessionSnapshot::from_app(app)));
         }
         ClientMessage::Resume => {
             app.playback.paused = false;
             let _ = app.player_tx.send(ratune_player::PlayerCommand::Resume);
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             app.mpris_emit_props();
             broadcast.send_all(ServerMessage::Snapshot(SessionSnapshot::from_app(app)));
         }
@@ -806,7 +806,7 @@ fn handle_client_message(app: &mut App, msg: ClientMessage, broadcast: &Broadcas
             app.playback.player_loaded = false;
             app.playback.elapsed = Duration::ZERO;
             app.playback.paused = false;
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             app.mpris_emit_props();
             broadcast.send_all(ServerMessage::Snapshot(SessionSnapshot::from_app(app)));
         }
@@ -814,7 +814,7 @@ fn handle_client_message(app: &mut App, msg: ClientMessage, broadcast: &Broadcas
             let pos = Duration::from_millis(ms);
             let _ = app.player_tx.send(ratune_player::PlayerCommand::Seek(pos));
             app.playback.elapsed = pos;
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             app.mpris_emit_seek(pos);
             broadcast.send_all(ServerMessage::Snapshot(SessionSnapshot::from_app(app)));
         }
@@ -823,7 +823,7 @@ fn handle_client_message(app: &mut App, msg: ClientMessage, broadcast: &Broadcas
             let _ = app.player_tx.send(ratune_player::PlayerCommand::SetVolume(
                 app.config.default_volume as f32 / 100.0,
             ));
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             app.mpris_emit_props();
             broadcast.send_all(ServerMessage::Snapshot(SessionSnapshot::from_app(app)));
         }

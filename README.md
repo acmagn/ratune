@@ -42,7 +42,7 @@ Ratune was built to bring together a combination of features often missing from 
 - **Folder navigation**: Optional Browse layout that follows server music folders for servers that provide it.
 - **Customization**: Keybinds, theme, layout, now-playing lines, queue row template inspired by ncmpcpp.
 - **Mouse support**: Click tabs, transport controls, the seek bar, queue rows, and browse/home lists.
-- **Integration**: Linux MPRIS (media keys, `playerctl`).
+- **Integration**: Linux MPRIS and macOS Now Playing (media keys, `playerctl` / Control Center).
 - **Scrobbling**: Last.fm and Libre.fm (Audioscrobbler), plus optional Subsonic `/scrobble` for Navidrome play counts.
 
 ---
@@ -402,7 +402,7 @@ Get `session_key` once with `ratune scrobble-auth` (prints the key for config un
 
 ## Player daemon
 
-On Linux and macOS, a playback daemon is on by default so music does not stop when you close the TUI. MPRIS (media keys / `playerctl`) and scrobbling stay with the daemon.
+On Linux and macOS, a playback daemon is on by default so music does not stop when you close the TUI. OS media controls (Linux MPRIS / macOS Now Playing) and scrobbling stay with the daemon.
 
 - **Close TUI:** `q`, closing the terminal, or Ctrl+C. If a track is loaded, playback continues.
 - **Quit and stop:** `Ctrl+q` (`quit_stop`) — same as `ratune stop`. Set `quit_stop = ""` in `[keybinds]` to disable, or bind another key.
@@ -540,7 +540,7 @@ This repository is a Cargo workspace with four crates:
 
 | Crate | Role |
 | --- | --- |
-| [`ratune`](ratune/) | TUI, event loop, state, art, fzf, MPRIS, scrobbling, playback daemon |
+| [`ratune`](ratune/) | TUI, event loop, state, art, fzf, OS media keys (MPRIS / Now Playing), scrobbling, playback daemon |
 | [`ratune-subsonic`](ratune-subsonic/) | Subsonic HTTP client and models |
 | [`ratune-scrobble`](ratune-scrobble/) | Last.fm / Libre.fm Audioscrobbler client and play thresholds |
 | [`ratune-player`](ratune-player/) | Audio (rodio), gapless, sample tap for the visualizer |

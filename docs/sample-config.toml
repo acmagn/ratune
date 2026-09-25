@@ -78,8 +78,9 @@ password = ""
 #
 # default_volume — Initial UI/player volume after connect (0–100). Default: 70.
 # max_bit_rate   — Cap streaming bitrate in kbps. 0 = unlimited (server decides).
-# mpris          — Linux only: register an MPRIS player on the session bus so
-#                  media keys / playerctl work. Default: true.
+# mpris          — Linux: MPRIS on the session bus (media keys / playerctl).
+#                  macOS: Now Playing / Control Center media keys.
+#                  Default: true.
 # queue_loop     — When true, playback wraps to the first queue track after the
 #                  last one ends. Default: true. Toggle at runtime with R / ↻.
 # daemon         — Unix only: keep a background playback process so music

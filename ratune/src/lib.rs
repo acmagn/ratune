@@ -64,6 +64,33 @@ pub async fn run_daemon() -> Result<()> {
     }
 }
 
+/// macOS daemon entry: AppKit/Now Playing must own the OS main thread.
+///
+/// Call this instead of [`run_daemon`] from `main` on macOS so Control Center
+/// and media keys can attach to the process.
+#[cfg(all(unix, target_os = "macos"))]
+pub fn run_daemon_macos() -> Result<()> {
+    mpris::macos_prepare_appkit();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<Result<()>>();
+    std::thread::Builder::new()
+        .name("ratune-daemon-async".into())
+        .spawn(move || {
+            let result = (|| {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()?;
+                rt.block_on(daemon::run_daemon())
+            })();
+            mpris::macos_stop_main_loop();
+            let _ = done_tx.send(result);
+        })
+        .expect("spawn daemon async thread");
+    mpris::macos_run_main_loop();
+    done_rx
+        .recv()
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("daemon thread ended without a result")))
+}
+
 /// Stop a running playback daemon (`ratune stop`).
 pub fn stop_daemon() -> Result<bool> {
     #[cfg(unix)]
@@ -255,7 +282,7 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mpris_ctrl_rx = if app.is_player_client() {
         None
     } else if let Some((link, rx)) = mpris::setup(app.config.mpris_enabled) {
@@ -265,12 +292,12 @@ pub async fn run() -> Result<()> {
     } else {
         None
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let mpris_ctrl_rx: Option<std::sync::mpsc::Receiver<crate::mpris::MprisControl>> = None;
 
     let result = run_loop(&mut terminal, &mut app, signal_quit, mpris_ctrl_rx).await;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(m) = app.mpris.take() {
         m.shutdown();
     }

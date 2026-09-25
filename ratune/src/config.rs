@@ -1200,7 +1200,7 @@ struct PlayerSection {
     default_volume: u8,
     #[serde(default)]
     max_bit_rate: u32,
-    /// Register on the session D-Bus as an MPRIS player (Linux media keys, etc.).
+    /// Register OS media controls (Linux MPRIS / macOS Now Playing).
     #[serde(default = "default_mpris")]
     mpris: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
@@ -1363,7 +1363,7 @@ pub struct Config {
     pub connection_check_interval_secs: u64,
     pub default_volume: u8,
     pub max_bit_rate: u32,
-    /// Linux: register MPRIS on the session bus (media keys, `playerctl`).
+    /// Linux/macOS: OS media keys (`playerctl` / Control Center).
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     pub queue_loop: bool,
@@ -1954,7 +1954,7 @@ password = ""
 [player]
 default_volume = 70
 max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
-# mpris = true     # Linux: register on session D-Bus for media keys / playerctl (default: true)
+# mpris = true     # Linux MPRIS / macOS Now Playing for media keys (default: true)
 # queue_loop = true   # wrap to first track after the last queue item (default: true)
 # daemon = true       # Unix: keep playing after the TUI closes (`q` detaches, Ctrl+q / `ratune stop` quits)
 
