@@ -340,6 +340,7 @@ pub enum LibraryUpdate {
     },
     /// Lyrics fetched for a song; `lines` is empty when the track has no lyrics.
     Lyrics {
+        request_id: u64,
         song_id: String,
         lines: Vec<LyricLine>,
     },
@@ -472,6 +473,22 @@ pub enum LibraryUpdate {
     RadioStations(Result<Vec<InternetRadioStation>, String>),
     /// Create / update / delete internet radio station finished.
     RadioMutation(Result<(), String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LyricsRequest {
+    id: u64,
+    song_id: String,
+}
+
+impl LyricsRequest {
+    fn is_for_song(&self, song_id: &str) -> bool {
+        self.song_id == song_id
+    }
+
+    fn matches_completion(&self, request_id: u64, song_id: &str) -> bool {
+        self.id == request_id && self.song_id == song_id
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -685,6 +702,9 @@ pub struct App {
     pub lyrics_scroll: usize,
     /// True while an async lyrics fetch is in flight.
     pub lyrics_loading: bool,
+    /// Monotonic request generation plus song ID for the active lyrics fetch.
+    lyrics_request_gen: u64,
+    lyrics_request: Option<LyricsRequest>,
 
     // ── Visualizer (Phase 7) ──────────────────────────────────────────────────
     /// Shared ring buffer of the latest decoded f32 audio samples (max 4096).
@@ -990,6 +1010,8 @@ impl App {
             lyrics_cache: None,
             lyrics_scroll: 0,
             lyrics_loading: false,
+            lyrics_request_gen: 0,
+            lyrics_request: None,
             sample_buffer,
             spectrum_bands: vec![0.0; 32],
             waveform: Vec::new(),
@@ -3099,11 +3121,11 @@ impl App {
         stations.iter().find(|s| s.id == station_id)
     }
 
-    /// Spawn a task to fetch lyrics from the configured source.
+    /// Spawn a task to fetch lyrics from the configured provider chain.
     ///
     /// No network request is made when lyrics are disabled or the pane is hidden.
-    /// Checks the on-disk cache first. Soft-fails silently. On any error an
-    /// empty `lines` vec is delivered so the UI shows "No lyrics available".
+    /// Positive on-disk cache hits across the provider chain are preferred before
+    /// any network attempt. Errors and empty results advance to the next provider.
     pub fn fetch_lyrics(&mut self, song_id: String, artist: String, title: String, album: String) {
         if !self.config.lyrics_enabled || !self.lyrics_visible {
             return;
@@ -3118,26 +3140,23 @@ impl App {
             return;
         }
 
-        let source_key = self.config.lyrics_source.cache_dir_name();
-        if self.config.lyrics_cache_enabled {
-            if let Some(lines) = self.lyrics_disk_cache.get(source_key, &song_id) {
-                self.lyrics_loading = false;
-                self.lyrics_scroll = 0;
-                self.lyrics_cache = Some((song_id, lines));
-                return;
-            }
-        }
-
-        if !self.remote_available() {
-            self.lyrics_loading = false;
-            self.lyrics_scroll = 0;
-            self.lyrics_cache = Some((song_id, Vec::new()));
+        if self
+            .lyrics_request
+            .as_ref()
+            .is_some_and(|request| request.is_for_song(&song_id))
+        {
             return;
         }
 
+        self.lyrics_request_gen = self.lyrics_request_gen.wrapping_add(1);
+        let request_id = self.lyrics_request_gen;
+        self.lyrics_request = Some(LyricsRequest {
+            id: request_id,
+            song_id: song_id.clone(),
+        });
         self.lyrics_loading = true;
         self.lyrics_scroll = 0;
-        let source = self.config.lyrics_source;
+        let sources = self.config.lyrics_sources.clone();
         let lrclib_url = self.config.lyrics_lrclib_url.clone();
         let duration_secs = self
             .queue
@@ -3146,14 +3165,18 @@ impl App {
             .find(|song| song.id == song_id)
             .and_then(|song| song.duration);
         let cache_enabled = self.config.lyrics_cache_enabled;
+        let network_available = self.remote_available();
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
-        let lyrics_dir = self.lyrics_disk_cache.cache_dir_for(source_key);
+        let disk_cache = self.lyrics_disk_cache.clone();
         tokio::spawn(async move {
             let lines = crate::lyrics::fetch_lyrics(
-                source,
+                &sources,
                 &lrclib_url,
                 &client,
+                &disk_cache,
+                cache_enabled,
+                network_available,
                 crate::lyrics::LyricsTrack {
                     song_id: &song_id,
                     artist: &artist,
@@ -3163,10 +3186,13 @@ impl App {
                 },
             )
             .await;
-            if cache_enabled {
-                crate::lyrics_cache::LyricsDiskCache::put_at(&lyrics_dir, &song_id, &lines);
-            }
-            let _ = tx.send(LibraryUpdate::Lyrics { song_id, lines }).await;
+            let _ = tx
+                .send(LibraryUpdate::Lyrics {
+                    request_id,
+                    song_id,
+                    lines,
+                })
+                .await;
         });
     }
 
@@ -3448,10 +3474,28 @@ impl App {
             LibraryUpdate::StatusFlash { msg, secs } => {
                 self.flash_status_secs(msg, secs);
             }
-            LibraryUpdate::Lyrics { song_id, lines } => {
-                self.lyrics_loading = false;
-                self.lyrics_cache = Some((song_id, lines));
-                self.lyrics_scroll = 0;
+            LibraryUpdate::Lyrics {
+                request_id,
+                song_id,
+                lines,
+            } => {
+                let is_active = self
+                    .lyrics_request
+                    .as_ref()
+                    .is_some_and(|request| request.matches_completion(request_id, &song_id));
+                if is_active {
+                    self.lyrics_request = None;
+                    self.lyrics_loading = false;
+                    let is_current_song = self
+                        .playback
+                        .current_song
+                        .as_ref()
+                        .is_some_and(|song| song.id == song_id);
+                    if is_current_song {
+                        self.lyrics_cache = Some((song_id, lines));
+                        self.lyrics_scroll = 0;
+                    }
+                }
             }
             LibraryUpdate::CacheTrack {
                 song_id,
@@ -8771,4 +8815,30 @@ fn sorted_album_song_ids(songs: &[ratune_subsonic::Song]) -> Vec<String> {
         .into_iter()
         .map(|(_, _, id)| id.to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LyricsRequest;
+
+    #[test]
+    fn lyrics_request_suppresses_only_the_same_song() {
+        let request = LyricsRequest {
+            id: 7,
+            song_id: "song-a".into(),
+        };
+        assert!(request.is_for_song("song-a"));
+        assert!(!request.is_for_song("song-b"));
+    }
+
+    #[test]
+    fn lyrics_request_accepts_only_matching_completions() {
+        let request = LyricsRequest {
+            id: 7,
+            song_id: "song-a".into(),
+        };
+        assert!(request.matches_completion(7, "song-a"));
+        assert!(!request.matches_completion(6, "song-a"));
+        assert!(!request.matches_completion(7, "song-b"));
+    }
 }

@@ -443,7 +443,9 @@ location = "right"
 # [lyrics] — lyrics fetch source
 # -----------------------------------------------------------------------------
 #
-# source — "lrclib" (default) | "netease" | "subsonic"
+# source — one provider or an ordered fallback list. Default: "lrclib"
+#   Example: source = ["lrclib", "subsonic", "netease"]
+#   The first provider returning lyrics wins; empty/error/timeout tries the next.
 #   lrclib   — query LRCLib (public API; requests only when the lyrics pane is open)
 #   netease  — query NetEase Cloud Music by title and artist (no login required)
 #   subsonic — query your Subsonic server (getLyricsBySongId / getLyrics; no third party)
@@ -456,6 +458,7 @@ source = "lrclib"
 # cache_enabled = false
 # source = "netease"
 # source = "subsonic"
+# source = ["lrclib", "subsonic", "netease"]
 
 # [ui.nptab.visualizer_pane]
 # enabled — If false, visualizer cannot be opened. Default: true.

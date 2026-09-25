@@ -214,9 +214,12 @@ impl Default for CacheSection {
 /// Lyrics fetch settings from config.toml.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LyricsSection {
-    /// Where to fetch lyrics: `lrclib` (default), `netease`, or `subsonic`.
-    #[serde(default = "default_lyrics_source")]
-    pub source: String,
+    /// Ordered lyrics providers. Accepts one string or an array of strings.
+    #[serde(
+        default = "default_lyrics_sources",
+        deserialize_with = "deserialize_lyrics_sources"
+    )]
+    pub source: Vec<String>,
     /// LRCLib server base URL (used when `source = "lrclib"`). Default: https://lrclib.net
     #[serde(default = "default_lrclib_url")]
     pub lrclib_url: String,
@@ -225,8 +228,25 @@ pub struct LyricsSection {
     pub cache_enabled: bool,
 }
 
-fn default_lyrics_source() -> String {
-    "lrclib".into()
+fn default_lyrics_sources() -> Vec<String> {
+    vec!["lrclib".into()]
+}
+
+fn deserialize_lyrics_sources<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(source) => vec![source],
+        OneOrMany::Many(sources) => sources,
+    })
 }
 
 fn default_lrclib_url() -> String {
@@ -240,7 +260,7 @@ fn default_lyrics_cache_enabled() -> bool {
 impl Default for LyricsSection {
     fn default() -> Self {
         Self {
-            source: default_lyrics_source(),
+            source: default_lyrics_sources(),
             lrclib_url: default_lrclib_url(),
             cache_enabled: default_lyrics_cache_enabled(),
         }
@@ -277,6 +297,21 @@ impl LyricsSource {
             Self::Subsonic => "subsonic",
         }
     }
+}
+
+fn resolve_lyrics_sources(raw: &[String]) -> Vec<LyricsSource> {
+    let mut resolved = Vec::new();
+    for source in raw {
+        match LyricsSource::parse(source) {
+            Some(s) if !resolved.contains(&s) => resolved.push(s),
+            Some(_) => {} // duplicate, skip
+            None => eprintln!("ratune: unknown lyrics source {source:?}, skipping"),
+        }
+    }
+    if resolved.is_empty() {
+        resolved.push(LyricsSource::LrcLib);
+    }
+    resolved
 }
 
 // ── [library]: metadata index + fzf picker ───────────────────────────────────
@@ -1452,9 +1487,9 @@ pub struct Config {
     pub cache_starred_albums: bool,
     /// Concurrent downloads when prefetching favorite tracks.
     pub cache_starred_parallelism: usize,
-    /// Where to fetch lyrics (`lrclib`, `netease`, or `subsonic`).
-    pub lyrics_source: LyricsSource,
-    /// LRCLib base URL when `lyrics_source` is `LrcLib`.
+    /// Ordered lyrics providers (`lrclib`, `netease`, or `subsonic`).
+    pub lyrics_sources: Vec<LyricsSource>,
+    /// LRCLib base URL when `lyrics_sources` contains `LrcLib`.
     pub lyrics_lrclib_url: String,
     /// Whether to cache lyrics on disk under `~/.cache/ratune/lyrics/`.
     pub lyrics_cache_enabled: bool,
@@ -1858,8 +1893,7 @@ impl Config {
             cache_starred: file_cfg.cache.cache_starred,
             cache_starred_albums: file_cfg.cache.cache_starred_albums,
             cache_starred_parallelism: file_cfg.cache.cache_starred_parallelism.max(1),
-            lyrics_source: LyricsSource::parse(&file_cfg.lyrics.source)
-                .unwrap_or(LyricsSource::LrcLib),
+            lyrics_sources: resolve_lyrics_sources(&file_cfg.lyrics.source),
             lyrics_lrclib_url: file_cfg.lyrics.lrclib_url,
             lyrics_cache_enabled: file_cfg.lyrics.cache_enabled,
             library_index_enabled: library.enabled,
@@ -2117,7 +2151,9 @@ enabled     = true
 max_size_gb = 2   # maximum total cache size in gigabytes
 
 [lyrics]
-# source — "lrclib" (default) | "netease" | "subsonic"
+# source — one provider or an ordered fallback list. Default: "lrclib"
+#   Example: source = ["lrclib", "subsonic", "netease"]
+#   The first provider returning lyrics wins; empty/error/timeout tries the next.
 source = "lrclib"
 # lrclib_url — LRCLib base URL when source = "lrclib". Default: https://lrclib.net
 # lrclib_url = "https://lrclib.net"
@@ -2746,9 +2782,47 @@ lrclib_url = "https://example.com"
 cache_enabled = false
 "#;
         let fc: FileConfig = toml::from_str(text).expect("toml");
-        assert_eq!(fc.lyrics.source, "subsonic");
+        assert_eq!(fc.lyrics.source, vec!["subsonic"]);
         assert_eq!(fc.lyrics.lrclib_url, "https://example.com");
         assert!(!fc.lyrics.cache_enabled);
+    }
+
+    #[test]
+    fn parses_ordered_lyrics_sources() {
+        let fc: FileConfig =
+            toml::from_str("[lyrics]\nsource = [\"subsonic\", \"lrclib\", \"netease\"]\n")
+                .expect("toml");
+        assert_eq!(fc.lyrics.source, vec!["subsonic", "lrclib", "netease"]);
+    }
+
+    #[test]
+    fn resolves_lyrics_sources_with_defaults_and_stable_deduplication() {
+        let raw = vec![
+            "subsonic".to_string(),
+            "bogus".to_string(),
+            "lrc".to_string(),
+            "netease".to_string(),
+            "server".to_string(),
+        ];
+        assert_eq!(
+            resolve_lyrics_sources(&raw),
+            vec![
+                LyricsSource::Subsonic,
+                LyricsSource::LrcLib,
+                LyricsSource::Netease
+            ]
+        );
+        // Unknown names are skipped (not silently rewritten to LRCLib).
+        assert_eq!(
+            resolve_lyrics_sources(&["subsonic".into(), "bogus".into()]),
+            vec![LyricsSource::Subsonic]
+        );
+        // Empty / all-unknown still falls back to the default provider.
+        assert_eq!(resolve_lyrics_sources(&[]), vec![LyricsSource::LrcLib]);
+        assert_eq!(
+            resolve_lyrics_sources(&["bogus".into()]),
+            vec![LyricsSource::LrcLib]
+        );
     }
 
     #[test]
