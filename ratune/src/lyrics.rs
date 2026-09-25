@@ -1,7 +1,8 @@
-//! Lyrics fetcher — LRCLib, NetEase, or Subsonic, selected in `[lyrics].source`.
+//! Lyrics fetcher. LRCLib, NetEase, or Subsonic, selected in `[lyrics].source`.
 //!
-//! All errors are soft-failed — callers always receive a `Vec`, possibly empty.
+//! All errors are soft-failed. Callers always receive a `Vec`, possibly empty.
 
+use std::future::Future;
 use std::time::Duration;
 
 use ratune_subsonic::{LyricLine, SubsonicClient};
@@ -12,8 +13,12 @@ const NETEASE_SEARCH_URL: &str = "https://music.163.com/api/search/get";
 const NETEASE_LYRIC_URL: &str = "https://music.163.com/api/song/lyric";
 const NETEASE_REFERER: &str = "https://music.163.com/";
 const NETEASE_USER_AGENT: &str = concat!("ratune/", env!("CARGO_PKG_VERSION"));
+type LyricsError = Box<dyn std::error::Error + Send + Sync>;
 
 use crate::config::LyricsSource;
+use crate::lyrics_cache::LyricsDiskCache;
+
+const PROVIDER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +57,7 @@ struct NeteaseLyrics {
     lyric: Option<String>,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct LyricsTrack<'a> {
     pub song_id: &'a str,
     pub artist: &'a str,
@@ -61,23 +67,123 @@ pub(crate) struct LyricsTrack<'a> {
     pub duration_secs: Option<u32>,
 }
 
-/// Fetch lyrics using the configured source.
+/// Fetch lyrics from the configured providers in priority order.
 pub async fn fetch_lyrics(
+    sources: &[LyricsSource],
+    lrclib_url: &str,
+    client: &SubsonicClient,
+    disk_cache: &LyricsDiskCache,
+    cache_enabled: bool,
+    network_available: bool,
+    track: LyricsTrack<'_>,
+) -> Vec<LyricLine> {
+    // Check every provider's cache first so a later hit isn't blocked by an
+    // earlier provider that would need a network round-trip.
+    if cache_enabled {
+        for &source in sources {
+            let source_key = source.cache_dir_name();
+            if let Some(lines) = disk_cache.get(source_key, track.song_id) {
+                if !lines.is_empty() {
+                    crate::debug::log(format!(
+                        "lyrics[{}]: {source_key} cache hit ({} lines)",
+                        track.song_id,
+                        lines.len()
+                    ));
+                    return lines;
+                }
+            }
+        }
+    }
+
+    first_available(
+        sources,
+        PROVIDER_TIMEOUT,
+        track.song_id,
+        |source| async move {
+            let source_key = source.cache_dir_name();
+
+            if !network_available {
+                crate::debug::log(format!(
+                    "lyrics[{}]: {source_key} network fetch skipped (offline)",
+                    track.song_id
+                ));
+                return Ok::<_, LyricsError>(Vec::new());
+            }
+
+            crate::debug::log(format!(
+                "lyrics[{}]: fetching from {source_key}",
+                track.song_id
+            ));
+            let lines = fetch_lyrics_from_source(source, lrclib_url, client, track).await?;
+            if cache_enabled && !lines.is_empty() {
+                disk_cache.put(source_key, track.song_id, &lines);
+                crate::debug::log(format!(
+                    "lyrics[{}]: cached {} {source_key} lines",
+                    track.song_id,
+                    lines.len()
+                ));
+            }
+            Ok(lines)
+        },
+    )
+    .await
+}
+
+async fn first_available<F, Fut, E>(
+    sources: &[LyricsSource],
+    timeout: Duration,
+    song_id: &str,
+    mut attempt: F,
+) -> Vec<LyricLine>
+where
+    F: FnMut(LyricsSource) -> Fut,
+    Fut: Future<Output = Result<Vec<LyricLine>, E>>,
+{
+    for &source in sources {
+        let source_key = source.cache_dir_name();
+        crate::debug::log(format!("lyrics[{song_id}]: trying {source_key}"));
+        match tokio::time::timeout(timeout, attempt(source)).await {
+            Ok(Ok(lines)) if !lines.is_empty() => {
+                crate::debug::log(format!(
+                    "lyrics[{song_id}]: selected {source_key} ({} lines)",
+                    lines.len()
+                ));
+                return lines;
+            }
+            Ok(Ok(_)) => crate::debug::log(format!(
+                "lyrics[{song_id}]: {source_key} returned no lyrics; falling back"
+            )),
+            Ok(Err(_)) => crate::debug::log(format!(
+                "lyrics[{song_id}]: {source_key} request failed; falling back"
+            )),
+            Err(_) => crate::debug::log(format!(
+                "lyrics[{song_id}]: {source_key} timed out after {:.1}s; falling back",
+                timeout.as_secs_f64()
+            )),
+        }
+    }
+    crate::debug::log(format!(
+        "lyrics[{song_id}]: provider chain exhausted; no lyrics available"
+    ));
+    Vec::new()
+}
+
+async fn fetch_lyrics_from_source(
     source: LyricsSource,
     lrclib_url: &str,
     client: &SubsonicClient,
     track: LyricsTrack<'_>,
-) -> Vec<LyricLine> {
+) -> Result<Vec<LyricLine>, LyricsError> {
     match source {
-        LyricsSource::LrcLib => fetch_lrclib(lrclib_url, track.artist, track.title, track.album)
-            .await
-            .unwrap_or_default(),
-        LyricsSource::Netease => fetch_netease(track.artist, track.title, track.duration_secs)
-            .await
-            .unwrap_or_default(),
-        LyricsSource::Subsonic => fetch_subsonic(client, track.song_id, track.artist, track.title)
-            .await
-            .unwrap_or_default(),
+        LyricsSource::LrcLib => {
+            fetch_lrclib(lrclib_url, track.artist, track.title, track.album).await
+        }
+        LyricsSource::Netease => {
+            fetch_netease(track.artist, track.title, track.duration_secs).await
+        }
+        LyricsSource::Subsonic => {
+            fetch_subsonic(client, track.song_id, track.artist, track.title).await
+        }
     }
 }
 
@@ -452,5 +558,142 @@ mod tests {
         let lines = parse_lyrics_text(text);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].time, Some(Duration::from_millis(2000)));
+    }
+
+    #[tokio::test]
+    async fn ordered_sources_stop_at_first_non_empty_result() {
+        use std::sync::{Arc, Mutex};
+
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&attempts);
+        let lines = first_available(
+            &[
+                LyricsSource::LrcLib,
+                LyricsSource::Subsonic,
+                LyricsSource::Netease,
+            ],
+            Duration::from_secs(1),
+            "test-song",
+            move |source| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.lock().expect("attempts").push(source);
+                    let lines = match source {
+                        LyricsSource::LrcLib => Vec::new(),
+                        LyricsSource::Subsonic => vec![LyricLine {
+                            time: None,
+                            text: "server lyrics".into(),
+                        }],
+                        LyricsSource::Netease => panic!("fallback should have stopped"),
+                    };
+                    Ok::<_, &'static str>(lines)
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(lines[0].text, "server lyrics");
+        assert_eq!(
+            *attempts.lock().expect("attempts"),
+            vec![LyricsSource::LrcLib, LyricsSource::Subsonic]
+        );
+    }
+
+    #[tokio::test]
+    async fn ordered_sources_fall_back_after_errors_and_timeouts() {
+        use std::sync::{Arc, Mutex};
+
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&attempts);
+        let lines = first_available(
+            &[
+                LyricsSource::LrcLib,
+                LyricsSource::Subsonic,
+                LyricsSource::Netease,
+            ],
+            Duration::from_millis(10),
+            "test-song",
+            move |source| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.lock().expect("attempts").push(source);
+                    match source {
+                        LyricsSource::LrcLib => Err("test provider error"),
+                        LyricsSource::Subsonic => {
+                            std::future::pending::<()>().await;
+                            Ok(Vec::new())
+                        }
+                        LyricsSource::Netease => Ok(vec![LyricLine {
+                            time: None,
+                            text: "fallback lyrics".into(),
+                        }]),
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(lines[0].text, "fallback lyrics");
+        assert_eq!(
+            *attempts.lock().expect("attempts"),
+            vec![
+                LyricsSource::LrcLib,
+                LyricsSource::Subsonic,
+                LyricsSource::Netease
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_sources_use_first_positive_cache_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "ratune-lyrics-ordered-cache-{}",
+            std::process::id()
+        ));
+        let cache = LyricsDiskCache::from_dir(dir.clone());
+        let empty_dir = cache.cache_dir_for("lrclib");
+        LyricsDiskCache::put_at(&empty_dir, "song-1", &[]);
+        cache.put(
+            "subsonic",
+            "song-1",
+            &[LyricLine {
+                time: None,
+                text: "cached server lyrics".into(),
+            }],
+        );
+        cache.put(
+            "netease",
+            "song-1",
+            &[LyricLine {
+                time: None,
+                text: "later cached lyrics".into(),
+            }],
+        );
+        let client =
+            SubsonicClient::new("http://localhost:4533", "user", "pass").expect("subsonic client");
+
+        let lines = fetch_lyrics(
+            &[
+                LyricsSource::LrcLib,
+                LyricsSource::Subsonic,
+                LyricsSource::Netease,
+            ],
+            "https://lrclib.net",
+            &client,
+            &cache,
+            true,
+            false,
+            LyricsTrack {
+                song_id: "song-1",
+                artist: "Artist",
+                title: "Title",
+                album: "Album",
+                duration_secs: Some(180),
+            },
+        )
+        .await;
+
+        assert_eq!(lines[0].text, "cached server lyrics");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -109,6 +109,8 @@ pub struct KeybindsSection {
     /// Jump to NowPlaying tab (default: '3')
     pub go_to_nowplaying: Option<String>,
     pub quit: Option<String>,
+    /// Quit the TUI and stop the playback daemon. Default: Ctrl+q (`""` disables).
+    pub quit_stop: Option<String>,
     /// Fuzzy track picker (metadata index). Default: Ctrl+f
     pub library_fzf: Option<String>,
     /// Force library index refresh. Default: Ctrl+g
@@ -212,9 +214,12 @@ impl Default for CacheSection {
 /// Lyrics fetch settings from config.toml.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LyricsSection {
-    /// Where to fetch lyrics: `lrclib` (default), `netease`, or `subsonic`.
-    #[serde(default = "default_lyrics_source")]
-    pub source: String,
+    /// Ordered lyrics providers. Accepts one string or an array of strings.
+    #[serde(
+        default = "default_lyrics_sources",
+        deserialize_with = "deserialize_lyrics_sources"
+    )]
+    pub source: Vec<String>,
     /// LRCLib server base URL (used when `source = "lrclib"`). Default: https://lrclib.net
     #[serde(default = "default_lrclib_url")]
     pub lrclib_url: String,
@@ -223,8 +228,25 @@ pub struct LyricsSection {
     pub cache_enabled: bool,
 }
 
-fn default_lyrics_source() -> String {
-    "lrclib".into()
+fn default_lyrics_sources() -> Vec<String> {
+    vec!["lrclib".into()]
+}
+
+fn deserialize_lyrics_sources<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(source) => vec![source],
+        OneOrMany::Many(sources) => sources,
+    })
 }
 
 fn default_lrclib_url() -> String {
@@ -238,7 +260,7 @@ fn default_lyrics_cache_enabled() -> bool {
 impl Default for LyricsSection {
     fn default() -> Self {
         Self {
-            source: default_lyrics_source(),
+            source: default_lyrics_sources(),
             lrclib_url: default_lrclib_url(),
             cache_enabled: default_lyrics_cache_enabled(),
         }
@@ -277,7 +299,22 @@ impl LyricsSource {
     }
 }
 
-// ── [library] — metadata index + fzf picker ───────────────────────────────────
+fn resolve_lyrics_sources(raw: &[String]) -> Vec<LyricsSource> {
+    let mut resolved = Vec::new();
+    for source in raw {
+        match LyricsSource::parse(source) {
+            Some(s) if !resolved.contains(&s) => resolved.push(s),
+            Some(_) => {} // duplicate, skip
+            None => eprintln!("ratune: unknown lyrics source {source:?}, skipping"),
+        }
+    }
+    if resolved.is_empty() {
+        resolved.push(LyricsSource::LrcLib);
+    }
+    resolved
+}
+
+// ── [library]: metadata index + fzf picker ───────────────────────────────────
 
 /// Fuzzy picker settings under `[library.fzf]`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -423,7 +460,7 @@ impl Default for LibrarySection {
     }
 }
 
-// ── [scrobble] — Last.fm / Libre.fm + Subsonic play counts ───────────────────
+// ── [scrobble]: Last.fm / Libre.fm + Subsonic play counts ───────────────────
 
 /// Local listen threshold (history + Subsonic). Defaults: 50%, 30 s cap.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1002,9 +1039,9 @@ pub struct ThemeSection {
     /// Pane outline style + optional edge glyphs. See [`ThemeBorderLinesSection`].
     #[serde(default)]
     pub border_lines: ThemeBorderLinesSection,
-    /// Legacy — prefer `[theme.border_lines].type`.
+    /// Legacy. Prefer `[theme.border_lines].type`.
     pub border_type: Option<String>,
-    /// Legacy — prefer `[theme.border_lines].top_left` (etc.).
+    /// Legacy. Prefer `[theme.border_lines].top_left` (etc.).
     pub border_top_left: Option<String>,
     pub border_top_right: Option<String>,
     pub border_bottom_left: Option<String>,
@@ -1094,9 +1131,9 @@ pub struct ThemeIconSection {
     pub offline: Option<String>,
     /// Radio live prefix glyph (default: `●`).
     pub live: Option<String>,
-    /// Legacy — prefer `[theme.border_lines].type`.
+    /// Legacy. Prefer `[theme.border_lines].type`.
     pub border_type: Option<String>,
-    /// Legacy — prefer `[theme.border_lines]` edge keys.
+    /// Legacy. Prefer `[theme.border_lines]` edge keys.
     pub border_top_left: Option<String>,
     pub border_top_right: Option<String>,
     pub border_bottom_left: Option<String>,
@@ -1198,12 +1235,17 @@ struct PlayerSection {
     default_volume: u8,
     #[serde(default)]
     max_bit_rate: u32,
-    /// Register on the session D-Bus as an MPRIS player (Linux media keys, etc.).
+    /// Register OS media controls (Linux MPRIS / macOS Now Playing).
     #[serde(default = "default_mpris")]
     mpris: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     #[serde(default = "default_queue_loop")]
     queue_loop: bool,
+    /// When true (default on Unix), playback continues in a background daemon
+    /// after the TUI closes. Set false to restore in-process playback (music
+    /// stops when ratune exits). Ignored on non-Unix platforms.
+    #[serde(default = "default_daemon", alias = "background_playback")]
+    daemon: bool,
 }
 
 impl Default for PlayerSection {
@@ -1213,6 +1255,7 @@ impl Default for PlayerSection {
             max_bit_rate: 0,
             mpris: default_mpris(),
             queue_loop: default_queue_loop(),
+            daemon: default_daemon(),
         }
     }
 }
@@ -1222,16 +1265,16 @@ pub(crate) struct RatingsSection {
     /// Show ratings in the UI, allow rating keybinds, and export MPRIS UserRating.
     #[serde(default)]
     enabled: bool,
-    /// Legacy glyph — prefer `[theme.icon].rating_filled`. Default: ⭑
+    /// Legacy glyph. Prefer `[theme.icon].rating_filled`. Default: ⭑
     #[serde(default = "default_rating_star_filled")]
     star_filled: String,
-    /// Legacy glyph — prefer `[theme.icon].rating_empty`. Default: ⭒
+    /// Legacy glyph. Prefer `[theme.icon].rating_empty`. Default: ⭒
     #[serde(default = "default_rating_star_empty")]
     star_empty: String,
-    /// Legacy — prefer `[theme.icon].rating_bracket_open`. Default: `[`
+    /// Legacy. Prefer `[theme.icon].rating_bracket_open`. Default: `[`
     #[serde(default = "default_rating_bracket_open")]
     bracket_open: String,
-    /// Legacy — prefer `[theme.icon].rating_bracket_close`. Default: `]`
+    /// Legacy. Prefer `[theme.icon].rating_bracket_close`. Default: `]`
     #[serde(default = "default_rating_bracket_close")]
     bracket_close: String,
 }
@@ -1257,6 +1300,10 @@ fn default_mpris() -> bool {
 }
 
 fn default_queue_loop() -> bool {
+    true
+}
+
+fn default_daemon() -> bool {
     true
 }
 
@@ -1351,10 +1398,12 @@ pub struct Config {
     pub connection_check_interval_secs: u64,
     pub default_volume: u8,
     pub max_bit_rate: u32,
-    /// Linux: register MPRIS on the session bus (media keys, `playerctl`).
+    /// Linux/macOS: OS media keys (`playerctl` / Control Center).
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     pub queue_loop: bool,
+    /// Unix: keep a playback daemon so music continues after the TUI closes.
+    pub daemon_enabled: bool,
     /// When true, show ratings in the UI and allow rating keybinds / MPRIS UserRating (`[ratings].enabled`).
     pub ratings_enabled: bool,
     /// Star glyphs for rating display (`[theme.icon].rating_*`, legacy `[ratings].star_*`).
@@ -1363,9 +1412,9 @@ pub struct Config {
     pub radio_enabled: bool,
     /// When false, skip HTTP fetches to station homepages for Now Playing art.
     pub radio_fetch_station_icons: bool,
-    /// Raw keybind strings — parsed into `Keybinds` by `App::new`.
+    /// Raw keybind strings. Parsed into `Keybinds` by `App::new`.
     pub keybinds: KeybindsSection,
-    /// Raw theme colour strings — parsed into `Theme` by `App::new`.
+    /// Raw theme colour strings. Parsed into `Theme` by `App::new`.
     pub theme: ThemeSection,
     /// Whether to show the lyrics overlay on startup.
     pub lyrics_visible: bool,
@@ -1438,9 +1487,9 @@ pub struct Config {
     pub cache_starred_albums: bool,
     /// Concurrent downloads when prefetching favorite tracks.
     pub cache_starred_parallelism: usize,
-    /// Where to fetch lyrics (`lrclib`, `netease`, or `subsonic`).
-    pub lyrics_source: LyricsSource,
-    /// LRCLib base URL when `lyrics_source` is `LrcLib`.
+    /// Ordered lyrics providers (`lrclib`, `netease`, or `subsonic`).
+    pub lyrics_sources: Vec<LyricsSource>,
+    /// LRCLib base URL when `lyrics_sources` contains `LrcLib`.
     pub lyrics_lrclib_url: String,
     /// Whether to cache lyrics on disk under `~/.cache/ratune/lyrics/`.
     pub lyrics_cache_enabled: bool,
@@ -1790,6 +1839,17 @@ impl Config {
             max_bit_rate: file_cfg.player.max_bit_rate,
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
+            daemon_enabled: {
+                #[cfg(unix)]
+                {
+                    file_cfg.player.daemon
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = file_cfg.player.daemon;
+                    false
+                }
+            },
             ratings_enabled: file_cfg.ratings.enabled,
             rating_stars: resolve_rating_stars(&file_cfg.theme.icon, &file_cfg.ratings),
             radio_enabled,
@@ -1833,8 +1893,7 @@ impl Config {
             cache_starred: file_cfg.cache.cache_starred,
             cache_starred_albums: file_cfg.cache.cache_starred_albums,
             cache_starred_parallelism: file_cfg.cache.cache_starred_parallelism.max(1),
-            lyrics_source: LyricsSource::parse(&file_cfg.lyrics.source)
-                .unwrap_or(LyricsSource::LrcLib),
+            lyrics_sources: resolve_lyrics_sources(&file_cfg.lyrics.source),
             lyrics_lrclib_url: file_cfg.lyrics.lrclib_url,
             lyrics_cache_enabled: file_cfg.lyrics.cache_enabled,
             library_index_enabled: library.enabled,
@@ -1920,7 +1979,7 @@ fn create_default(path: &PathBuf) -> Result<()> {
             .with_context(|| format!("creating config dir {}", parent.display()))?;
     }
     // Intentionally a small starter file (credentials + common toggles). Every key lives in
-    // `docs/sample-config.toml` in the source tree — copy from there when you want the full menu.
+    // `docs/sample-config.toml` in the source tree. Copy from there when you want the full menu.
     let default_toml = r##"[server]
 url = ""
 username = ""
@@ -1929,8 +1988,9 @@ password = ""
 [player]
 default_volume = 70
 max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
-# mpris = true     # Linux: register on session D-Bus for media keys / playerctl (default: true)
+# mpris = true     # Linux MPRIS / macOS Now Playing for media keys (default: true)
 # queue_loop = true   # wrap to first track after the last queue item (default: true)
+# daemon = true       # Unix: keep playing after the TUI closes (`q` detaches, Ctrl+q / `ratune stop` quits)
 
 [ratings]
 # enabled = false     # show ratings in UI, enable Shift+1…5 keybinds, export MPRIS UserRating
@@ -1969,6 +2029,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # go_to_browser = "2"
 # go_to_nowplaying = "3"
 # quit          = "q"
+# quit_stop     = "Ctrl+q"    # quit TUI and stop daemon; "" disables
 # library_fzf     = "Ctrl+f"
 # library_refresh = "Ctrl+g"
 # library_index_append_queue = "Ctrl+a"   # append full index to queue (y/n); "" to disable
@@ -2090,7 +2151,9 @@ enabled     = true
 max_size_gb = 2   # maximum total cache size in gigabytes
 
 [lyrics]
-# source — "lrclib" (default) | "netease" | "subsonic"
+# source — one provider or an ordered fallback list. Default: "lrclib"
+#   Example: source = ["lrclib", "subsonic", "netease"]
+#   The first provider returning lyrics wins; empty/error/timeout tries the next.
 source = "lrclib"
 # lrclib_url — LRCLib base URL when source = "lrclib". Default: https://lrclib.net
 # lrclib_url = "https://lrclib.net"
@@ -2719,9 +2782,47 @@ lrclib_url = "https://example.com"
 cache_enabled = false
 "#;
         let fc: FileConfig = toml::from_str(text).expect("toml");
-        assert_eq!(fc.lyrics.source, "subsonic");
+        assert_eq!(fc.lyrics.source, vec!["subsonic"]);
         assert_eq!(fc.lyrics.lrclib_url, "https://example.com");
         assert!(!fc.lyrics.cache_enabled);
+    }
+
+    #[test]
+    fn parses_ordered_lyrics_sources() {
+        let fc: FileConfig =
+            toml::from_str("[lyrics]\nsource = [\"subsonic\", \"lrclib\", \"netease\"]\n")
+                .expect("toml");
+        assert_eq!(fc.lyrics.source, vec!["subsonic", "lrclib", "netease"]);
+    }
+
+    #[test]
+    fn resolves_lyrics_sources_with_defaults_and_stable_deduplication() {
+        let raw = vec![
+            "subsonic".to_string(),
+            "bogus".to_string(),
+            "lrc".to_string(),
+            "netease".to_string(),
+            "server".to_string(),
+        ];
+        assert_eq!(
+            resolve_lyrics_sources(&raw),
+            vec![
+                LyricsSource::Subsonic,
+                LyricsSource::LrcLib,
+                LyricsSource::Netease
+            ]
+        );
+        // Unknown names are skipped (not silently rewritten to LRCLib).
+        assert_eq!(
+            resolve_lyrics_sources(&["subsonic".into(), "bogus".into()]),
+            vec![LyricsSource::Subsonic]
+        );
+        // Empty / all-unknown still falls back to the default provider.
+        assert_eq!(resolve_lyrics_sources(&[]), vec![LyricsSource::LrcLib]);
+        assert_eq!(
+            resolve_lyrics_sources(&["bogus".into()]),
+            vec![LyricsSource::LrcLib]
+        );
     }
 
     #[test]
@@ -2740,6 +2841,25 @@ cache_enabled = false
     fn parses_queue_loop() {
         let fc: FileConfig = toml::from_str("[player]\nqueue_loop = false\n").expect("toml");
         assert!(!fc.player.queue_loop);
+    }
+
+    #[test]
+    fn daemon_defaults_true() {
+        let fc: FileConfig = toml::from_str("").expect("toml");
+        assert!(fc.player.daemon);
+    }
+
+    #[test]
+    fn parses_daemon() {
+        let fc: FileConfig = toml::from_str("[player]\ndaemon = false\n").expect("toml");
+        assert!(!fc.player.daemon);
+    }
+
+    #[test]
+    fn parses_daemon_alias_background_playback() {
+        let fc: FileConfig =
+            toml::from_str("[player]\nbackground_playback = false\n").expect("toml");
+        assert!(!fc.player.daemon);
     }
 
     #[test]

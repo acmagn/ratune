@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Metadata sent to Audioscrobbler-compatible services.
 #[derive(Debug, Clone)]
 pub struct TrackInfo {
-    /// Subsonic song id — used for server-side scrobbling, not sent to Last.fm.
+    /// Subsonic song id. Used for server-side scrobbling, not sent to Last.fm.
     pub song_id: String,
     pub artist: String,
     pub title: String,

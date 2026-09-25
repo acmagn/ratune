@@ -28,6 +28,11 @@ pub struct LyricsDiskCache {
 }
 
 impl LyricsDiskCache {
+    #[cfg(test)]
+    pub(crate) fn from_dir(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
     /// Open the lyrics cache directory, creating it when possible.
     pub fn load() -> Self {
         let dir = ratune_cache_dir()
@@ -54,6 +59,15 @@ impl LyricsDiskCache {
         let json = std::fs::read_to_string(path).ok()?;
         let cached: CachedLyrics = serde_json::from_str(&json).ok()?;
         Some(cached.lines.into_iter().map(line_from_cached).collect())
+    }
+
+    /// Write non-empty lyrics under their provider key.
+    pub fn put(&self, source: &str, song_id: &str, lines: &[LyricLine]) {
+        if lines.is_empty() {
+            return;
+        }
+        let dir = self.cache_dir_for(source);
+        Self::put_at(&dir, song_id, lines);
     }
 
     /// Write lyrics to a source-specific directory (for async fetch tasks).
@@ -144,6 +158,16 @@ mod tests {
         let cache = LyricsDiskCache { dir };
         let loaded = cache.get("subsonic", "no-lyrics").expect("cached empty");
         assert!(loaded.is_empty());
+        let _ = std::fs::remove_dir_all(cache.dir);
+    }
+
+    #[test]
+    fn positive_only_put_ignores_empty_lines() {
+        let dir =
+            std::env::temp_dir().join(format!("ratune-lyrics-positive-{}", std::process::id()));
+        let cache = LyricsDiskCache { dir };
+        cache.put("lrclib", "no-lyrics", &[]);
+        assert!(cache.get("lrclib", "no-lyrics").is_none());
         let _ = std::fs::remove_dir_all(cache.dir);
     }
 

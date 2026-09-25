@@ -544,7 +544,7 @@ pub fn render_art_strip_text_fallback(
         return;
     }
 
-    // Row 0: horizontal album list — each album name truncated to fit.
+    // Row 0: horizontal album list. Each album name truncated to fit.
     let visible = (area.width as usize / 16).max(1);
     let mut spans: Vec<Span> = Vec::new();
     for (i, album) in albums.iter().enumerate().take(visible) {

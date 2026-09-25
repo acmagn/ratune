@@ -28,7 +28,7 @@ pub fn compute_bands(
     let available = samples.len().min(n);
 
     if available < 16 {
-        // Not enough samples yet — return silence.
+        // Not enough samples yet. Return silence.
         return vec![0.0; num_bands];
     }
 

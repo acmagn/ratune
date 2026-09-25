@@ -1,9 +1,11 @@
 //! Install platform credential stores for [`keyring_core`] and build entries for a chosen backend.
 //! See the [keyring ecosystem docs](https://github.com/open-source-cooperative/keyring-rs/wiki/Keyring).
 
+#[cfg(target_os = "linux")]
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{bail, Result};
+#[cfg(target_os = "linux")]
 use keyring_core::api::CredentialStoreApi;
 use keyring_core::{Entry, Error as KeyringError};
 

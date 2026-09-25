@@ -52,7 +52,7 @@ pub struct Artist {
     /// User rating 1–5 from Subsonic `userRating`.
     #[serde(default)]
     pub user_rating: Option<u8>,
-    /// Album stubs — populated only by `getArtist`, empty from `getArtists`.
+    /// Album stubs. Populated only by `getArtist`, empty from `getArtists`.
     #[serde(default)]
     pub album: Vec<Album>,
 }
@@ -120,14 +120,14 @@ pub struct Song {
     pub artist: Option<String>,
     pub album_id: Option<String>,
     pub artist_id: Option<String>,
-    /// Album artist name — used for Browse column grouping (matches server `getArtists`).
+    /// Album artist name. Used for Browse column grouping (matches server `getArtists`).
     /// Populated from OpenSubsonic `albumArtist` when present, or stamped during library index walks.
     #[serde(default)]
     pub album_artist: Option<String>,
     /// Album artist id for Browse grouping (OpenSubsonic / stamped from `getAlbum`).
     #[serde(default)]
     pub album_artist_id: Option<String>,
-    /// All album artists (OpenSubsonic `albumArtists`) — classical releases often list
+    /// All album artists (OpenSubsonic `albumArtists`). Classical releases often list
     /// composer + performer separately; Browse should show the album under each.
     #[serde(default)]
     pub album_artists: Vec<ArtistRef>,
@@ -247,7 +247,7 @@ pub struct Album {
     /// User rating 1–5 from Subsonic `userRating`.
     #[serde(default)]
     pub user_rating: Option<u8>,
-    /// Tracks — populated only by `getAlbum`, empty for search results.
+    /// Tracks. Populated only by `getAlbum`, empty for search results.
     #[serde(default)]
     pub song: Vec<Song>,
 }
@@ -272,7 +272,7 @@ pub struct PlaylistDetail {
     pub name: String,
     pub song_count: Option<u32>,
     pub duration: Option<u64>,
-    /// Track entries — the Subsonic API uses the key `entry` for these.
+    /// Track entries. The Subsonic API uses the key `entry` for these.
     #[serde(default, rename = "entry")]
     pub songs: Vec<Song>,
 }
@@ -285,7 +285,7 @@ pub struct InternetRadioStation {
     pub name: String,
     pub stream_url: String,
     pub home_page_url: Option<String>,
-    /// OpenSubsonic / Navidrome uploaded image — pass to `getCoverArt`.
+    /// OpenSubsonic / Navidrome uploaded image. Pass to `getCoverArt`.
     pub cover_art: Option<String>,
 }
 

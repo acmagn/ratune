@@ -41,7 +41,7 @@ pub enum Action {
     AddAllToQueueReplaceAlbum,
     /// Browser: replace queue with **all tracks for the current artist** (API fetch) and play.
     AddAllToQueueReplaceArtist,
-    /// Browser: add all tracks — insert at the front of the queue.
+    /// Browser: add all tracks. Insert at the front of the queue.
     AddAllToQueuePrepend,
     PlayPause,
     NextTrack,
@@ -191,5 +191,7 @@ pub enum Action {
     /// Check server connectivity now (optional keybind; periodic check uses `[server].connection_check_interval_secs`).
     CheckConnection,
     Quit,
+    /// Quit the TUI and stop the playback daemon (`quit_stop`; default Ctrl+q).
+    QuitStop,
     None,
 }
