@@ -1,6 +1,6 @@
 //! Audio playback engine.
 //!
-//! Runs entirely on a dedicated `std::thread` — no tokio inside this module.
+//! Runs entirely on a dedicated `std::thread`. No tokio inside this module.
 //! The TUI communicates via two `std::sync::mpsc` channels:
 //!
 //! - `PlayerCommand` (TUI → engine): play a URL, pause, resume, stop, set volume.
@@ -136,7 +136,7 @@ fn player_thread(
             return;
         }
     };
-    // Suppress the default stderr message on drop — we control shutdown explicitly.
+    // Suppress the default stderr message on drop. We control shutdown explicitly.
     device.log_on_drop(false);
 
     let player = Player::connect_new(device.mixer());
@@ -301,7 +301,7 @@ enum PlayPayload {
 
 /// Handle [`PlayerCommand::PlayUrl`] / [`PlayerCommand::PlayCached`] with skip-generation cancellation.
 ///
-/// Before loading, drains any further play commands already queued — turning N rapid
+/// Before loading, drains any further play commands already queued, turning N rapid
 /// skips into one fetch/read. After the blocking load, drains again; if a newer play
 /// command arrived mid-load, discards the decoder and recurses.
 #[allow(clippy::too_many_arguments)]
@@ -648,7 +648,7 @@ fn handle_command(
             *prev_elapsed = pos;
         }
         PlayerCommand::Quit => {
-            // Handled by the 'outer break in player_thread — should not reach here.
+            // Handled by the 'outer break in player_thread.
             unreachable!("Quit must be handled in the outer command-drain loop");
         }
     }

@@ -1,4 +1,4 @@
-//! Spectrum visualizer — braille dot renderer.
+//! Spectrum visualizer. Braille dot renderer.
 //!
 //! Uses Unicode braille characters (U+2800–U+28FF) to render frequency bars
 //! with 4× the vertical resolution of block characters.  Each terminal cell
@@ -136,7 +136,7 @@ pub fn render_visualizer_ex(
             )));
         }
         for _ in 0..full_cells {
-            // U+2847 — all four left-column dots filled
+            // U+2847. All four left-column dots filled
             lines.push(Line::from(Span::styled(
                 "\u{2847}",
                 Style::default().fg(color_for_row(

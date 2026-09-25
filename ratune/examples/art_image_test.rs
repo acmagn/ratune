@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use image::imageops::FilterType;
 
-/// Default panel surface (#161616) — same order of magnitude as ratune's default theme.
+/// Default panel surface (#161616). Same order of magnitude as ratune's default theme.
 const SURFACE: Rgba<u8> = Rgba([22, 22, 22, 255]);
 
 fn fit_image_for_test_harness(img: DynamicImage, max_w: u32, max_h: u32) -> DynamicImage {

@@ -1,1 +1,1 @@
-// Queue struct, ordering, add/remove/move — Phase 1
+// Queue struct, ordering, add/remove/move. Phase 1

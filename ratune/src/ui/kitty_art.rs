@@ -63,7 +63,7 @@ pub fn detect_kitty_support() -> bool {
         let mut byte = [0u8; 1];
         while let Ok(1) = tty_read.read(&mut byte) {
             response.push(byte[0]);
-            // DA1 response format: \x1b[?{digits}c  — stop on 'c' after \x1b[?
+            // DA1 response format: \x1b[?{digits}c. Stop on 'c' after \x1b[?
             if byte[0] == b'c' && response.windows(3).any(|w| w == b"\x1b[?") {
                 break;
             }
@@ -411,7 +411,7 @@ const ROW_DIACRITICS: &[char] = &[
 /// Each cell is U+10EEEE (the Kitty placeholder codepoint) with the foreground
 /// colour encoding the image ID as 24-bit RGB.  The first cell of each row also
 /// carries the combining row-diacritic so the terminal knows which image row to
-/// sample.  Subsequent cells in the same row omit the diacritic — the terminal
+/// sample.  Subsequent cells in the same row omit the diacritic. The terminal
 /// infers the column from the cell's horizontal position.
 fn placeholder_row(cols: u16, image_id: u32, row_index: usize) -> String {
     let r = ((image_id >> 16) & 0xFF) as u8;
@@ -432,7 +432,7 @@ fn placeholder_row(cols: u16, image_id: u32, row_index: usize) -> String {
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-/// Bordered shell for the Now Playing art column (no title — set at render time).
+/// Bordered shell for the Now Playing art column (no title. Set at render time).
 pub fn album_art_block(border_set: border::Set) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
@@ -455,7 +455,7 @@ pub struct NpKittyPrepared {
     pub art_rows: u16,
     pub img_w: u32,
     pub img_h: u32,
-    /// Base64 of zlib-compressed RGBA — built once per cover + placement geometry.
+    /// Base64 of zlib-compressed RGBA. Built once per cover + placement geometry.
     pub b64: String,
 }
 
@@ -595,8 +595,8 @@ pub fn transmit_np_image(
 
 /// Delete the NowPlaying Kitty image (ID=1).
 ///
-/// Non-tmux: `a=d,d=A` (delete all) — same as before.
-/// tmux: `a=d,d=i,i=1` — delete virtual placement for ID=1 specifically.
+/// Non-tmux: `a=d,d=A` (delete all).
+/// tmux: `a=d,d=i,i=1`. Delete virtual placement for ID=1 specifically.
 pub fn clear_image(in_tmux: bool) -> Result<()> {
     let mut out = io::stdout().lock();
     if in_tmux {
@@ -634,7 +634,7 @@ pub fn query_cell_pixel_size() -> Option<(u16, u16)> {
         return None;
     }
 
-    // CSI 16 t — terminal responds with \x1b[6;{height};{width}t
+    // CSI 16 t. Terminal responds with \x1b[6;{height};{width}t
     let write_ok = tty.write_all(b"\x1b[16t").is_ok() && tty.flush().is_ok();
     if !write_ok {
         let _ = crossterm::terminal::disable_raw_mode();
@@ -775,7 +775,7 @@ pub fn strip_layout_key(inner: ratatui::layout::Rect, layout: &ArtStripLayout) -
     h.wrapping_mul(31).wrapping_add(layout.per_row as u64)
 }
 
-/// Smaller thumb cells so more columns fit — used when [`pick_best_strip_dimensions`] yields fewer than 4 slots.
+/// Smaller thumb cells so more columns fit. Used when [`pick_best_strip_dimensions`] yields fewer than 4 slots.
 fn pick_compact_thumbnail_strip_dimensions(inner_w: u16, inner_h: u16) -> (u16, u16, u16) {
     let mut best: Option<(u16, u16, u16, usize)> = None;
 
@@ -842,7 +842,7 @@ fn pick_best_strip_dimensions(inner_w: u16, inner_h: u16) -> (u16, u16, u16) {
                 }
                 let pad_x = inner_w.saturating_sub(used_w) / 2;
                 let slots = per_row * (grid_rows as usize);
-                // Total character cells used by all thumbnails — prefers two rows when that uses
+                // Total character cells used by all thumbnails. Prefers two rows when that uses
                 // the panel better than one oversized row (fixes “full screen but tiny second row”).
                 let total_thumb_cells = (tc as i64) * (tr as i64) * (slots as i64);
                 let mut score = total_thumb_cells * 1000 - (pad_x as i64) * 120;
@@ -970,7 +970,7 @@ pub struct StripThumbPrepared {
     pub art_rows: u16,
     pub img_w: u32,
     pub img_h: u32,
-    /// Base64 of zlib-compressed RGBA — built once so tab redraws skip re-encoding.
+    /// Base64 of zlib-compressed RGBA. Built once so tab redraws skip re-encoding.
     pub b64: String,
 }
 
@@ -1096,7 +1096,7 @@ pub fn render_art_strip(
 
             let mut out = io::stdout().lock();
 
-            // Transmit image in chunks (same for both paths — a=t: store only).
+            // Transmit image in chunks (same for both paths; a=t: store only).
             const CHUNK: usize = 4096;
             let b64_bytes = prep.b64.as_bytes();
             let n_chunks = b64_bytes.len().div_ceil(CHUNK);
@@ -1153,15 +1153,15 @@ pub fn render_art_strip(
             let _ = out.flush();
             prepared.insert(album_id.clone(), prep);
         }
-        // If bytes are NOT in cache, leave the cells blank — ratatui has already
+        // If bytes are NOT in cache, leave the cells blank. Ratatui has already
         // drawn the placeholder character(s) via the text fallback path in home_tab.rs.
     }
 }
 
 /// Delete all Kitty art-strip images/placements (IDs `KITTY_STRIP_ID_BASE` … + max slots).
 ///
-/// Non-tmux: `a=d,d=I` — deletes image data and all placements.
-/// tmux: `a=d,d=i` — deletes virtual placements; image data freed separately.
+/// Non-tmux: `a=d,d=I`. Deletes image data and all placements.
+/// tmux: `a=d,d=i`. Deletes virtual placements; image data freed separately.
 /// Call on tab departure or terminal resize.
 pub fn clear_art_strip(in_tmux: bool) -> Result<()> {
     let mut out = io::stdout().lock();

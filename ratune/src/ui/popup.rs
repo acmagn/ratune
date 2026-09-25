@@ -96,7 +96,11 @@ fn sections(
         ),
         (
             "App",
-            vec![("i", "Toggle this help"), ("q", "Quit (or close help)")],
+            vec![
+                ("i", "Toggle this help"),
+                ("q", "Close TUI (playback keeps going if a track is loaded)"),
+                ("Ctrl+q", "Quit TUI and stop the playback daemon"),
+            ],
         ),
     ];
 

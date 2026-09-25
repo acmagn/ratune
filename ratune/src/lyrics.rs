@@ -1,6 +1,6 @@
-//! Lyrics fetcher — LRCLib, NetEase, or Subsonic, selected in `[lyrics].source`.
+//! Lyrics fetcher. LRCLib, NetEase, or Subsonic, selected in `[lyrics].source`.
 //!
-//! All errors are soft-failed — callers always receive a `Vec`, possibly empty.
+//! All errors are soft-failed. Callers always receive a `Vec`, possibly empty.
 
 use std::future::Future;
 use std::time::Duration;

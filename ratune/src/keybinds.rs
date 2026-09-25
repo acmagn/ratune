@@ -197,6 +197,8 @@ pub struct Keybinds {
     /// Jump to NowPlaying tab (default: '3')
     pub go_to_nowplaying: KeySpec,
     pub quit: KeySpec,
+    /// Quit the TUI and stop the playback daemon (`None` = disabled). Default: Ctrl+q.
+    pub quit_stop: Option<KeySpec>,
     /// Fuzzy library picker (`None` = disabled).
     pub library_fzf: Option<KeySpec>,
     /// Force library index refresh (`None` = disabled).
@@ -219,7 +221,7 @@ pub struct Keybinds {
     pub home_section_next: KeySpec,
     pub home_section_prev: KeySpec,
     pub home_refresh: KeySpec,
-    /// `None` = disabled — folder toggle from keybinds
+    /// Folder browse toggle (`None` = disabled).
     pub toggle_folder_browse: Option<KeySpec>,
     /// Toggle favorite on focused or playing item (Subsonic star API).
     pub toggle_favorite: KeySpec,
@@ -412,6 +414,13 @@ impl Keybinds {
                 KeySpec::new(KeyCode::Char('3')),
             ),
             quit: resolve(sec.quit.as_deref(), KeySpec::new(KeyCode::Char('q'))),
+            quit_stop: resolve_opt(
+                sec.quit_stop.as_deref(),
+                Some(KeySpec {
+                    code: KeyCode::Char('q'),
+                    modifiers: KeyModifiers::CONTROL,
+                }),
+            ),
             library_fzf,
             library_refresh,
             connection_check,
@@ -496,7 +505,7 @@ impl Keybinds {
 fn parse_key(s: &str) -> Option<KeySpec> {
     let s = s.trim();
 
-    // "Shift+x" — lowercase letter + SHIFT (canonical; matches Ghostty / kitty protocols).
+    // "Shift+x" is a lowercase letter + SHIFT (canonical; matches Ghostty / kitty protocols).
     if let Some(rest) = s
         .strip_prefix("Shift+")
         .or_else(|| s.strip_prefix("shift+"))
@@ -625,5 +634,26 @@ mod tests {
         assert!(p.matches(KeyCode::Char('n'), KeyModifiers::SHIFT));
         assert!(p.matches(KeyCode::Char('N'), KeyModifiers::empty()));
         assert!(!p.matches(KeyCode::Char('n'), KeyModifiers::empty()));
+    }
+
+    #[test]
+    fn quit_stop_defaults_to_ctrl_q() {
+        let kb = Keybinds::from_section(&KeybindsSection::default());
+        let spec = kb.quit_stop.expect("default quit_stop");
+        assert!(spec.matches(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        assert!(!spec.matches(KeyCode::Char('q'), KeyModifiers::SHIFT));
+        assert!(kb
+            .toggle_queue_loop
+            .matches(KeyCode::Char('q'), KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn quit_stop_empty_disables() {
+        let sec = KeybindsSection {
+            quit_stop: Some(String::new()),
+            ..Default::default()
+        };
+        let kb = Keybinds::from_section(&sec);
+        assert!(kb.quit_stop.is_none());
     }
 }

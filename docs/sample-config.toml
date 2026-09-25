@@ -78,16 +78,23 @@ password = ""
 #
 # default_volume — Initial UI/player volume after connect (0–100). Default: 70.
 # max_bit_rate   — Cap streaming bitrate in kbps. 0 = unlimited (server decides).
-# mpris          — Linux only: register an MPRIS player on the session bus so
-#                  media keys / playerctl work. Default: true.
+# mpris          — Linux: MPRIS on the session bus (media keys / playerctl).
+#                  macOS: Now Playing / Control Center media keys.
+#                  Default: true.
 # queue_loop     — When true, playback wraps to the first queue track after the
 #                  last one ends. Default: true. Toggle at runtime with R / ↻.
+# daemon         — Unix only: keep a background playback process so music
+#                  continues after the TUI closes (`q` detaches, Ctrl+q /
+#                  `ratune stop` quits the daemon). Default: true.
+#                  Set false to restore in-process playback (music stops when
+#                  ratune exits). Alias: background_playback.
 
 [player]
 default_volume = 70
 max_bit_rate = 0
 mpris = true
 queue_loop = true
+# daemon = true
 
 # -----------------------------------------------------------------------------
 # [ratings] — per-user song ratings (Subsonic setRating)
@@ -147,7 +154,8 @@ queue_loop = true
 # go_to_home          = "1"
 # go_to_browser       = "2"
 # go_to_nowplaying    = "3"
-# quit                = "q"
+# quit                = "q"           # close TUI; playback continues if a track is loaded
+# quit_stop           = "Ctrl+q"      # quit TUI and stop the playback daemon; "" disables
 # library_fzf         = "Ctrl+f"      # "" disables fuzzy picker
 # library_refresh     = "Ctrl+g"      # "" disables; forced refresh if still Ctrl+g
 #                       # If you set library_refresh to Ctrl+r while album replace is also Ctrl+r,

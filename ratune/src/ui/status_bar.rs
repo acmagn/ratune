@@ -9,7 +9,7 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::theme::style_with_bg;
 
-/// Braille spinner — advances every ~80 ms for a visible “still working” cue.
+/// Braille spinner. Advances every ~80 ms for a visible “still working” cue.
 const LIB_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 fn library_index_refresh_status_text(app: &App) -> String {

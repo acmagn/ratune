@@ -17,7 +17,7 @@ use crate::state::{
 use crate::theme::style_with_bg;
 use crate::theme::Theme;
 
-/// Bottom 40% of the browser content area — matches overlay render geometry.
+/// Bottom 40% of the browser content area. Matches overlay render geometry.
 pub fn overlay_area(parent: Rect) -> Rect {
     Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).split(parent)[1]
 }
