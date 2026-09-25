@@ -300,9 +300,10 @@ impl LyricsSource {
 fn resolve_lyrics_sources(raw: &[String]) -> Vec<LyricsSource> {
     let mut resolved = Vec::new();
     for source in raw {
-        let source = LyricsSource::parse(source).unwrap_or(LyricsSource::LrcLib);
-        if !resolved.contains(&source) {
-            resolved.push(source);
+        match LyricsSource::parse(source) {
+            Some(s) if !resolved.contains(&s) => resolved.push(s),
+            Some(_) => {} // duplicate, skip
+            None => eprintln!("ratune: unknown lyrics source {source:?}, skipping"),
         }
     }
     if resolved.is_empty() {
@@ -2784,7 +2785,17 @@ cache_enabled = false
                 LyricsSource::Netease
             ]
         );
+        // Unknown names are skipped (not silently rewritten to LRCLib).
+        assert_eq!(
+            resolve_lyrics_sources(&["subsonic".into(), "bogus".into()]),
+            vec![LyricsSource::Subsonic]
+        );
+        // Empty / all-unknown still falls back to the default provider.
         assert_eq!(resolve_lyrics_sources(&[]), vec![LyricsSource::LrcLib]);
+        assert_eq!(
+            resolve_lyrics_sources(&["bogus".into()]),
+            vec![LyricsSource::LrcLib]
+        );
     }
 
     #[test]

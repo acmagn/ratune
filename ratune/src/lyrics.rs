@@ -77,38 +77,30 @@ pub async fn fetch_lyrics(
     network_available: bool,
     track: LyricsTrack<'_>,
 ) -> Vec<LyricLine> {
+    // Check every provider's cache first so a later hit isn't blocked by an
+    // earlier provider that would need a network round-trip.
+    if cache_enabled {
+        for &source in sources {
+            let source_key = source.cache_dir_name();
+            if let Some(lines) = disk_cache.get(source_key, track.song_id) {
+                if !lines.is_empty() {
+                    crate::debug::log(format!(
+                        "lyrics[{}]: {source_key} cache hit ({} lines)",
+                        track.song_id,
+                        lines.len()
+                    ));
+                    return lines;
+                }
+            }
+        }
+    }
+
     first_available(
         sources,
         PROVIDER_TIMEOUT,
         track.song_id,
         |source| async move {
             let source_key = source.cache_dir_name();
-            if cache_enabled {
-                if let Some(lines) = disk_cache.get(source_key, track.song_id) {
-                    if !lines.is_empty() {
-                        crate::debug::log(format!(
-                            "lyrics[{}]: {source_key} cache hit ({} lines)",
-                            track.song_id,
-                            lines.len()
-                        ));
-                        return Ok::<_, LyricsError>(lines);
-                    }
-                    crate::debug::log(format!(
-                        "lyrics[{}]: {source_key} cache entry is empty; ignoring",
-                        track.song_id
-                    ));
-                } else {
-                    crate::debug::log(format!(
-                        "lyrics[{}]: {source_key} cache miss",
-                        track.song_id
-                    ));
-                }
-            } else {
-                crate::debug::log(format!(
-                    "lyrics[{}]: {source_key} cache disabled",
-                    track.song_id
-                ));
-            }
 
             if !network_available {
                 crate::debug::log(format!(
