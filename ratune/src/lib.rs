@@ -1412,6 +1412,50 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
                 }
             }
         }
+        HomePanel::RecentlyAdded | HomePanel::RecentlyReleased => {
+            let released = panel == HomePanel::RecentlyReleased;
+            let section = if released {
+                app::HomeSection::RecentlyReleased
+            } else {
+                app::HomeSection::RecentlyAdded
+            };
+            let inner_y = area.y + 1;
+            let inner_h = area.height.saturating_sub(2);
+            if y < inner_y || y >= inner_y + inner_h {
+                return;
+            }
+            let list_len = if released {
+                app.home.recently_released.len()
+            } else {
+                app.home.recently_added.len()
+            };
+            // Match the renderer's selection-following window (only offset when active).
+            let start = if app.home.active_section == section {
+                crate::ui::home_tab::list_window_start(app.home.selected_index, inner_h as usize)
+            } else {
+                0
+            };
+            let row = start + (y - inner_y) as usize;
+            if row >= list_len {
+                return;
+            }
+            let target = if released {
+                mouse_click::MouseClickTarget::HomeRecentlyReleased(row)
+            } else {
+                mouse_click::MouseClickTarget::HomeRecentlyAdded(row)
+            };
+            if mouse_click::is_double_click(app, target) {
+                let album_id = if released {
+                    app.home.recently_released[row].album_id.clone()
+                } else {
+                    app.home.recently_added[row].album_id.clone()
+                };
+                app.fetch_and_append_album_to_queue(album_id);
+            } else {
+                app.home.active_section = section;
+                app.home.selected_index = row;
+            }
+        }
     }
 }
 

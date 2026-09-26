@@ -471,6 +471,7 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
                 genre: album_acc.genre,
                 starred: None,
                 user_rating: album_acc.user_rating,
+                release_date: None,
                 song: Vec::new(),
             })
             .collect();

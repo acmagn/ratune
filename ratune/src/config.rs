@@ -756,7 +756,8 @@ pub struct UiHomeLayoutSection {
     #[serde(default)]
     pub top_height_percent: Option<u8>,
     /// Which panel sits where: `[top, bottom_left, bottom_right]`.
-    /// Each value is `recent_albums`, `recent_tracks`, or `rediscover` (must be a permutation).
+    /// Each value is one of `recent_albums`, `recent_tracks`, `rediscover`,
+    /// `recently_added`, or `recently_released` (three distinct values).
     #[serde(default)]
     pub panels: Option<Vec<String>>,
 }
@@ -922,6 +923,10 @@ pub enum HomePanel {
     RecentAlbums,
     RecentTracks,
     Rediscover,
+    /// Newest additions to the library (server `getAlbumList2 type=newest`).
+    RecentlyAdded,
+    /// Newest releases by release date/year (server `getAlbumList2 type=byYear`, reversed).
+    RecentlyReleased,
 }
 
 impl HomePanel {
@@ -930,6 +935,8 @@ impl HomePanel {
             "recent_albums" | "albums" => Some(Self::RecentAlbums),
             "recent_tracks" | "tracks" => Some(Self::RecentTracks),
             "rediscover" => Some(Self::Rediscover),
+            "recently_added" | "added" | "newest" => Some(Self::RecentlyAdded),
+            "recently_released" | "released" => Some(Self::RecentlyReleased),
             _ => None,
         }
     }
@@ -2091,6 +2098,7 @@ show_art = true
 
 [ui.hometab.layout]
 top_height_percent = 50
+# Pick any three of: recent_albums, recent_tracks, rediscover, recently_added, recently_released
 panels = ["recent_albums", "recent_tracks", "rediscover"]
 
 [ui.browsetab]
@@ -3056,5 +3064,38 @@ fzf_binary = "sk"
 "#;
         let fc: FileConfig = toml::from_str(text).expect("toml");
         assert_eq!(fc.library.resolve_fzf().binary, "sk");
+    }
+
+    #[test]
+    fn home_panels_parse_new_names_and_synonyms() {
+        let p = parse_home_panels(Some(vec![
+            "newest".into(),
+            "released".into(),
+            "rediscover".into(),
+        ]));
+        assert_eq!(
+            p,
+            [
+                HomePanel::RecentlyAdded,
+                HomePanel::RecentlyReleased,
+                HomePanel::Rediscover
+            ]
+        );
+        assert_eq!(
+            HomePanel::parse(" Recently_Added "),
+            Some(HomePanel::RecentlyAdded)
+        );
+        assert_eq!(HomePanel::parse("added"), Some(HomePanel::RecentlyAdded));
+        assert_eq!(
+            HomePanel::parse("recently_released"),
+            Some(HomePanel::RecentlyReleased)
+        );
+        assert_eq!(HomePanel::parse("bogus"), None);
+    }
+
+    #[test]
+    fn home_panels_duplicate_synonym_falls_back_to_default() {
+        let p = parse_home_panels(Some(vec!["added".into(), "newest".into(), "tracks".into()]));
+        assert_eq!(p, default_home_panels());
     }
 }

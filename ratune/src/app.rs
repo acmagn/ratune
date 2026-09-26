@@ -258,6 +258,28 @@ pub struct RecentAlbum {
     pub artist_name: String,
 }
 
+/// A server-side album list entry (Recently Added / Recently Released panels).
+#[derive(Debug, Clone)]
+pub struct HomeServerAlbum {
+    pub album_id: String,
+    pub album_name: String,
+    pub artist_name: String,
+    pub year: Option<u32>,
+}
+
+/// Chronological sort key for the Recently Released panel: OpenSubsonic
+/// `releaseDate` when tagged, otherwise the album year.
+fn release_sort_key(a: &ratune_subsonic::Album) -> ratune_subsonic::ItemDate {
+    match a.release_date {
+        Some(d) if d.year.is_some_and(|y| y > 0) => d,
+        _ => ratune_subsonic::ItemDate {
+            year: a.year.map(|y| y as i32),
+            month: None,
+            day: None,
+        },
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HomeSection {
     #[default]
@@ -266,26 +288,8 @@ pub enum HomeSection {
     #[allow(dead_code)]
     TopArtists,
     Rediscover,
-}
-
-impl HomeSection {
-    pub fn next(self) -> Self {
-        match self {
-            HomeSection::RecentAlbums => HomeSection::RecentTracks,
-            HomeSection::RecentTracks => HomeSection::Rediscover,
-            HomeSection::TopArtists => HomeSection::Rediscover,
-            HomeSection::Rediscover => HomeSection::RecentAlbums,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            HomeSection::RecentAlbums => HomeSection::Rediscover,
-            HomeSection::RecentTracks => HomeSection::RecentAlbums,
-            HomeSection::TopArtists => HomeSection::RecentAlbums,
-            HomeSection::Rediscover => HomeSection::RecentTracks,
-        }
-    }
+    RecentlyAdded,
+    RecentlyReleased,
 }
 
 #[derive(Debug, Default)]
@@ -303,6 +307,10 @@ pub struct HomeState {
     pub top_artists: Vec<(String, String, u64)>,
     /// Rediscover suggestions: (artist_id, artist_name).
     pub rediscover: Vec<(String, String)>,
+    /// Recently added albums from the server (`getAlbumList2 type=newest`).
+    pub recently_added: Vec<HomeServerAlbum>,
+    /// Recently released albums from the server (release date / year, newest first).
+    pub recently_released: Vec<HomeServerAlbum>,
     /// Cursor within the active section.
     pub selected_index: usize,
 }
@@ -358,6 +366,11 @@ pub enum LibraryUpdate {
     /// Home strip cover fetch failed. Release loading slot so more fetches can run.
     HomeArtFetchFailed {
         album_id: String,
+    },
+    /// Server album list for a Home panel (`released` selects which one).
+    HomeAlbumList {
+        released: bool,
+        albums: Vec<ratune_subsonic::Album>,
     },
     /// All playlists fetched from `getPlaylists`.
     Playlists(Vec<ratune_subsonic::Playlist>),
@@ -1665,7 +1678,7 @@ impl App {
 
         if !album_strip_unchanged {
             self.home.selected_index = 0;
-            self.home.active_section = HomeSection::RecentAlbums;
+            self.home.active_section = self.home_sections()[0];
         } else {
             // Lists from history may have changed length while section stayed the same.
             match self.home.active_section {
@@ -1693,12 +1706,131 @@ impl App {
                         self.home.selected_index = self.home.selected_index.min(m);
                     }
                 }
-                HomeSection::RecentAlbums => {}
+                HomeSection::RecentAlbums
+                | HomeSection::RecentlyAdded
+                | HomeSection::RecentlyReleased => {}
             }
+        }
+
+        // Keep the active section within the configured panels.
+        let sections = self.home_sections();
+        if !sections.contains(&self.home.active_section) {
+            self.home.active_section = sections[0];
+            self.home.selected_index = 0;
         }
 
         // Kick off art fetches for any album not yet cached.
         self.spawn_pending_home_art_fetches();
+        // Server album lists load on connect. Retry here only when one is still empty.
+        if self.home_server_lists_missing() {
+            self.spawn_home_album_list_fetches();
+        }
+    }
+
+    /// True when a configured server-list panel has no albums yet.
+    fn home_server_lists_missing(&self) -> bool {
+        self.config.home_panels.iter().any(|p| match p {
+            crate::config::HomePanel::RecentlyAdded => self.home.recently_added.is_empty(),
+            crate::config::HomePanel::RecentlyReleased => self.home.recently_released.is_empty(),
+            _ => false,
+        })
+    }
+
+    /// Sections corresponding to the configured Home panels, in display order.
+    pub fn home_sections(&self) -> [HomeSection; 3] {
+        self.config
+            .home_panels
+            .map(crate::ui::home_tab::home_panel_to_section)
+    }
+
+    /// The section before/after the active one, cycling through configured panels.
+    pub fn home_section_step(&self, forward: bool) -> HomeSection {
+        let sections = self.home_sections();
+        let cur = sections
+            .iter()
+            .position(|s| *s == self.home.active_section)
+            .unwrap_or(0);
+        let n = sections.len();
+        let idx = if forward {
+            (cur + 1) % n
+        } else {
+            (cur + n - 1) % n
+        };
+        sections[idx]
+    }
+
+    /// Album id under the cursor in whichever album-list Home section is active.
+    fn home_selected_album_id(&self) -> Option<String> {
+        match self.home.active_section {
+            HomeSection::RecentAlbums => self
+                .home
+                .recent_albums
+                .get(self.home.album_selected_index)
+                .map(|a| a.album_id.clone()),
+            HomeSection::RecentlyAdded => self
+                .home
+                .recently_added
+                .get(self.home.selected_index)
+                .map(|a| a.album_id.clone()),
+            HomeSection::RecentlyReleased => self
+                .home
+                .recently_released
+                .get(self.home.selected_index)
+                .map(|a| a.album_id.clone()),
+            _ => None,
+        }
+    }
+
+    /// Stop playback, clear the queue, and fetch+play `album_id`.
+    fn play_album_replacing_queue(&mut self, album_id: String) {
+        self.queue.songs.clear();
+        self.queue.cursor = 0;
+        self.queue.scroll = 0;
+        self.queue.clear_shuffle_state();
+        self.send_player(PlayerCommand::Stop);
+        self.playback.current_song = None;
+        self.playback.elapsed = std::time::Duration::ZERO;
+        self.playback.paused = false;
+        self.playback.player_loaded = false;
+        self.fetch_and_replace_queue_with_album(album_id, true);
+    }
+
+    /// Fetch `getAlbumList2` lists for the Recently Added / Recently Released panels.
+    fn spawn_home_album_list_fetches(&mut self) {
+        if self.is_player_daemon() || !self.remote_available() {
+            return;
+        }
+        const LIST_SIZE: u32 = 50;
+        for panel in self.config.home_panels {
+            let released = match panel {
+                crate::config::HomePanel::RecentlyAdded => false,
+                crate::config::HomePanel::RecentlyReleased => true,
+                _ => continue,
+            };
+            let client = self.subsonic.clone();
+            let tx = self.library_tx.clone();
+            tokio::spawn(async move {
+                let res = if released {
+                    // Reversed byYear range = newest year first (Subsonic API).
+                    client
+                        .get_album_list2("byYear", LIST_SIZE, 0, Some(3000), Some(1))
+                        .await
+                } else {
+                    client
+                        .get_album_list2("newest", LIST_SIZE, 0, None, None)
+                        .await
+                };
+                match res {
+                    Ok(albums) => {
+                        let _ = tx
+                            .send(LibraryUpdate::HomeAlbumList { released, albums })
+                            .await;
+                    }
+                    // Keep the old list. Do not print: reqwest error text holds the auth token.
+                    Err(_) => {}
+                }
+            });
+        }
     }
 
     /// Spawn home art fetch tasks for albums not yet cached or loading,
@@ -2321,6 +2453,7 @@ impl App {
         }
         self.spawn_library_index_refresh(false);
         self.fetch_starred();
+        self.spawn_home_album_list_fetches();
     }
 
     /// Non-blocking startup Subsonic `ping`. Reachability / auth are applied via
@@ -2400,6 +2533,7 @@ impl App {
         }
         self.spawn_library_index_refresh(false);
         self.fetch_starred();
+        self.spawn_home_album_list_fetches();
     }
 
     /// Re-kick albums/tracks left in `Loading` while startup ping was pending.
@@ -3534,6 +3668,45 @@ impl App {
                 self.home_art_loading.remove(&album_id);
                 self.spawn_pending_home_art_fetches();
                 self.maybe_probe_connectivity();
+            }
+            LibraryUpdate::HomeAlbumList { released, albums } => {
+                let mut albums = albums;
+                if released {
+                    // byYear only orders by year; refine with OpenSubsonic releaseDate.
+                    // Newest first. Only reorders the fetched page.
+                    albums.sort_by_key(|a| std::cmp::Reverse(release_sort_key(a)));
+                }
+                let list: Vec<HomeServerAlbum> = albums
+                    .iter()
+                    .map(|a| HomeServerAlbum {
+                        album_id: a.id.clone(),
+                        album_name: a.name.clone(),
+                        artist_name: a
+                            .artist
+                            .clone()
+                            .unwrap_or_else(|| "Unknown Artist".to_string()),
+                        year: a
+                            .release_date
+                            .and_then(|d| d.year)
+                            .filter(|&y| y > 0)
+                            .map(|y| y as u32)
+                            .or(a.year),
+                    })
+                    .collect();
+                let section = if released {
+                    HomeSection::RecentlyReleased
+                } else {
+                    HomeSection::RecentlyAdded
+                };
+                let len = list.len();
+                if released {
+                    self.home.recently_released = list;
+                } else {
+                    self.home.recently_added = list;
+                }
+                if self.home.active_section == section {
+                    self.home.selected_index = self.home.selected_index.min(len.saturating_sub(1));
+                }
             }
             LibraryUpdate::Playlists(playlists) => {
                 self.playlist_overlay.playlists = crate::state::LoadingState::Loaded(playlists);
@@ -6257,13 +6430,13 @@ impl App {
             }
             Action::HomeSectionNext => {
                 if self.active_tab == Tab::Home {
-                    self.home.active_section = self.home.active_section.next();
+                    self.home.active_section = self.home_section_step(true);
                     self.home.selected_index = 0;
                 }
             }
             Action::HomeSectionPrev => {
                 if self.active_tab == Tab::Home {
-                    self.home.active_section = self.home.active_section.prev();
+                    self.home.active_section = self.home_section_step(false);
                     self.home.selected_index = 0;
                 }
             }
@@ -6346,7 +6519,7 @@ impl App {
                         }
                     } else {
                         // In bottom panes: h escapes to previous section.
-                        self.home.active_section = self.home.active_section.prev();
+                        self.home.active_section = self.home_section_step(false);
                         self.home.selected_index = 0;
                     }
                 }
@@ -6419,35 +6592,21 @@ impl App {
                         }
                     } else {
                         // In bottom panes: l escapes to next section.
-                        self.home.active_section = self.home.active_section.next();
+                        self.home.active_section = self.home_section_step(true);
                         self.home.selected_index = 0;
                     }
                 }
             }
             Action::HomeAlbumPlay => {
                 if self.active_tab == Tab::Home {
-                    let idx = self.home.album_selected_index;
-                    if let Some(album) = self.home.recent_albums.get(idx) {
-                        let album_id = album.album_id.clone();
-                        // Clear queue first then fetch+play.
-                        self.queue.songs.clear();
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
-                        self.queue.clear_shuffle_state();
-                        self.send_player(PlayerCommand::Stop);
-                        self.playback.current_song = None;
-                        self.playback.elapsed = std::time::Duration::ZERO;
-                        self.playback.paused = false;
-                        self.playback.player_loaded = false;
-                        self.fetch_and_replace_queue_with_album(album_id, true);
+                    if let Some(album_id) = self.home_selected_album_id() {
+                        self.play_album_replacing_queue(album_id);
                     }
                 }
             }
             Action::HomeAlbumAddToQueue => {
                 if self.active_tab == Tab::Home {
-                    let idx = self.home.album_selected_index;
-                    if let Some(album) = self.home.recent_albums.get(idx) {
-                        let album_id = album.album_id.clone();
+                    if let Some(album_id) = self.home_selected_album_id() {
                         self.fetch_and_append_album_to_queue(album_id);
                     }
                 }
@@ -6760,6 +6919,8 @@ impl App {
             HomeSection::RecentTracks => self.home.recent_tracks.len(),
             HomeSection::TopArtists => self.home.top_artists.len(),
             HomeSection::Rediscover => self.home.rediscover.len(),
+            HomeSection::RecentlyAdded => self.home.recently_added.len(),
+            HomeSection::RecentlyReleased => self.home.recently_released.len(),
         };
         if section_len == 0 {
             return;
@@ -7212,6 +7373,12 @@ impl App {
                 self.active_tab = Tab::Browser;
                 self.apply_pending_artist_select();
                 self.clear_browser_search();
+            }
+            HomeSection::RecentlyAdded | HomeSection::RecentlyReleased => {
+                // Enter plays the selected album (replace queue).
+                if let Some(album_id) = self.home_selected_album_id() {
+                    self.play_album_replacing_queue(album_id);
+                }
             }
         }
     }
@@ -8836,5 +9003,29 @@ mod tests {
         assert!(request.matches_completion(7, "song-a"));
         assert!(!request.matches_completion(6, "song-a"));
         assert!(!request.matches_completion(7, "song-b"));
+    }
+
+    fn album_json(json: &str) -> ratune_subsonic::Album {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn release_sort_key_prefers_release_date_over_year() {
+        let a = album_json(
+            r#"{"id":"a","name":"A","year":1999,"releaseDate":{"year":2020,"month":5,"day":1}}"#,
+        );
+        let key = super::release_sort_key(&a);
+        assert_eq!(key.year, Some(2020));
+        assert_eq!(key.month, Some(5));
+    }
+
+    #[test]
+    fn release_sort_key_falls_back_to_year() {
+        let empty = album_json(r#"{"id":"a","name":"A","year":1999,"releaseDate":{}}"#);
+        assert_eq!(super::release_sort_key(&empty).year, Some(1999));
+        let zero = album_json(r#"{"id":"a","name":"A","year":1999,"releaseDate":{"year":0}}"#);
+        assert_eq!(super::release_sort_key(&zero).year, Some(1999));
+        let none = album_json(r#"{"id":"a","name":"A"}"#);
+        assert_eq!(super::release_sort_key(&none).year, None);
     }
 }

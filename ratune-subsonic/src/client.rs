@@ -25,13 +25,13 @@ use tokio::task::JoinSet;
 
 use crate::error::check_status;
 use crate::models::{
-    parse_music_library_root_folder_id, structured_lyrics_to_lines, Album, AlbumEnvelope, Artist,
-    ArtistEnvelope, ArtistRef, Artists, ArtistsEnvelope, DirectoryChild, IndexesEnvelope,
-    InternetRadioStation, InternetRadioStationsEnvelope, LegacyLyricsEnvelope, LyricLine,
-    LyricsBySongIdEnvelope, MusicDirectory, MusicDirectoryEnvelope, MusicFolder,
-    MusicFoldersEnvelope, PingEnvelope, Playlist, PlaylistDetail, PlaylistEnvelope,
-    PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope, SearchEnvelope, SearchResult3, Song,
-    SongEnvelope, Starred2, Starred2Envelope, SubsonicLibrary,
+    parse_music_library_root_folder_id, structured_lyrics_to_lines, Album, AlbumEnvelope,
+    AlbumList2Envelope, Artist, ArtistEnvelope, ArtistRef, Artists, ArtistsEnvelope,
+    DirectoryChild, IndexesEnvelope, InternetRadioStation, InternetRadioStationsEnvelope,
+    LegacyLyricsEnvelope, LyricLine, LyricsBySongIdEnvelope, MusicDirectory,
+    MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope, PingEnvelope, Playlist,
+    PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
+    SearchEnvelope, SearchResult3, Song, SongEnvelope, Starred2, Starred2Envelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -202,6 +202,46 @@ impl SubsonicClient {
         r.scan_status
             .clone()
             .ok_or_else(|| anyhow!("missing 'scanStatus' in getScanStatus response"))
+    }
+
+    /// Album lists (`getAlbumList2`).
+    ///
+    /// `list_type` is one of the Subsonic list types (`newest`, `recent`,
+    /// `frequent`, `random`, `byYear`, …). `byYear` requires `from_year` and
+    /// `to_year`; a reversed range (`from_year` > `to_year`) returns newest
+    /// first per the Subsonic API.
+    pub async fn get_album_list2(
+        &self,
+        list_type: &str,
+        size: u32,
+        offset: u32,
+        from_year: Option<i32>,
+        to_year: Option<i32>,
+    ) -> Result<Vec<Album>> {
+        let mut params = self.auth_params();
+        params.push(("type", list_type.to_string()));
+        params.push(("size", size.to_string()));
+        params.push(("offset", offset.to_string()));
+        if let Some(y) = from_year {
+            params.push(("fromYear", y.to_string()));
+        }
+        if let Some(y) = to_year {
+            params.push(("toYear", y.to_string()));
+        }
+        let env: AlbumList2Envelope = self
+            .http
+            .get(self.endpoint_url("getAlbumList2"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())?;
+        Ok(env
+            .response
+            .album_list2
+            .map(|c| c.album)
+            .unwrap_or_default())
     }
 
     /// Ping the server to verify connectivity and authentication.
