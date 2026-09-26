@@ -1027,8 +1027,10 @@ pub fn write_snapshot(app: &crate::app::App, snap: &RwLock<MprisSnapshot>) {
     }
     s.position_micros = app.playback.elapsed.as_micros() as i64;
     s.volume = app.config.default_volume as f64 / 100.0;
-    s.can_go_next = app.queue.cursor + 1 < app.queue.songs.len();
-    s.can_go_previous = app.queue.cursor > 0;
+    let has_queue = !app.queue.songs.is_empty();
+    s.can_go_next =
+        has_queue && (app.queue.cursor + 1 < app.queue.songs.len() || app.queue.loop_enabled);
+    s.can_go_previous = has_queue && (app.queue.cursor > 0 || app.queue.loop_enabled);
     s.can_play = app.queue.current().is_some();
     s.can_pause = app.playback.player_loaded;
     s.can_seek = app.playback.player_loaded && app.playback.total.is_some();

@@ -319,7 +319,7 @@ pub struct QueueState {
     pub pre_shuffle_order: Option<Vec<Song>>,
     /// Whether the queue is currently in shuffled order (vs `pre_shuffle_order`).
     pub shuffle_active: bool,
-    /// When true, playback wraps to the first queue track after the last one ends.
+    /// When true, next/prev and natural end wrap around the queue ends.
     pub loop_enabled: bool,
 }
 
@@ -375,9 +375,17 @@ impl QueueState {
     }
 
     /// Advance to the next song. Returns true if there is a next song.
+    /// When [`Self::loop_enabled`] and at the end of a non-empty queue, wraps to the first song.
     pub fn next(&mut self) -> bool {
+        if self.songs.is_empty() {
+            return false;
+        }
         if self.cursor + 1 < self.songs.len() {
             self.cursor += 1;
+            true
+        } else if self.loop_enabled {
+            self.cursor = 0;
+            self.scroll = 0;
             true
         } else {
             false
@@ -385,14 +393,31 @@ impl QueueState {
     }
 
     /// Peek at the next song without advancing the cursor.
+    /// When [`Self::loop_enabled`] and at the end, returns the first song.
     pub fn peek_next(&self) -> Option<&Song> {
-        self.songs.get(self.cursor + 1)
+        if self.songs.is_empty() {
+            return None;
+        }
+        if self.cursor + 1 < self.songs.len() {
+            self.songs.get(self.cursor + 1)
+        } else if self.loop_enabled {
+            self.songs.first()
+        } else {
+            None
+        }
     }
 
     /// Move to the previous song. Returns true if there is a previous song.
+    /// When [`Self::loop_enabled`] and at the start of a non-empty queue, wraps to the last song.
     pub fn prev(&mut self) -> bool {
+        if self.songs.is_empty() {
+            return false;
+        }
         if self.cursor > 0 {
             self.cursor -= 1;
+            true
+        } else if self.loop_enabled {
+            self.cursor = self.songs.len() - 1;
             true
         } else {
             false
@@ -743,6 +768,53 @@ mod queue_tests {
     fn loop_enabled_defaults_true() {
         let q = QueueState::default();
         assert!(q.loop_enabled);
+    }
+
+    #[test]
+    fn next_wraps_to_first_when_loop_enabled() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 2;
+        assert!(q.loop_enabled);
+        assert!(q.next());
+        assert_eq!(q.cursor, 0);
+        assert_eq!(q.current().map(|s| s.id.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn next_stops_at_end_when_loop_disabled() {
+        let mut q = QueueState::default();
+        q.loop_enabled = false;
+        q.push(song("a"));
+        q.push(song("b"));
+        q.cursor = 1;
+        assert!(!q.next());
+        assert_eq!(q.cursor, 1);
+    }
+
+    #[test]
+    fn prev_wraps_to_last_when_loop_enabled() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 0;
+        assert!(q.prev());
+        assert_eq!(q.cursor, 2);
+        assert_eq!(q.current().map(|s| s.id.as_str()), Some("c"));
+    }
+
+    #[test]
+    fn peek_next_wraps_when_loop_enabled() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.cursor = 1;
+        assert_eq!(q.peek_next().map(|s| s.id.as_str()), Some("a"));
+        q.loop_enabled = false;
+        assert!(q.peek_next().is_none());
     }
 
     #[test]
