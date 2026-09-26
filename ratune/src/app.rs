@@ -204,6 +204,21 @@ pub enum BrowserColumn {
     Tracks,
 }
 
+/// Clear `slot` and return true when its deadline has passed.
+pub(crate) fn take_expired(slot: &mut Option<Instant>, now: Instant) -> bool {
+    if slot.is_some_and(|deadline| now >= deadline) {
+        *slot = None;
+        true
+    } else {
+        false
+    }
+}
+
+/// True when a redraw was requested or the idle fallback interval has passed.
+pub(crate) fn redraw_due(needs: bool, last: Instant, now: Instant, idle: Duration) -> bool {
+    needs || now.duration_since(last) >= idle
+}
+
 impl App {
     /// Filter string for a browser column, if search was confirmed while that column was focused.
     pub fn browser_column_filter(&self, column: BrowserColumn) -> Option<&str> {
@@ -1101,21 +1116,24 @@ impl App {
         let _ = self.player_tx.send(cmd);
     }
 
+    /// Returns true when a snapshot was applied (a redraw is needed).
     #[cfg(unix)]
-    pub(crate) fn drain_daemon_snapshots(&mut self) {
+    pub(crate) fn drain_daemon_snapshots(&mut self) -> bool {
         let mut last = None;
         if let Some(ctrl) = &mut self.daemon_ctrl {
             while let Some(snap) = ctrl.try_recv_snapshot() {
                 last = Some(snap);
             }
         }
-        if let Some(snap) = last {
-            self.apply_daemon_snapshot(snap, true);
-            let fp = crate::daemon::SessionSnapshot::from_app(self).fingerprint();
-            if let Some(ctrl) = &mut self.daemon_ctrl {
-                ctrl.note_fingerprint(fp);
-            }
+        let Some(snap) = last else {
+            return false;
+        };
+        self.apply_daemon_snapshot(snap, true);
+        let fp = crate::daemon::SessionSnapshot::from_app(self).fingerprint();
+        if let Some(ctrl) = &mut self.daemon_ctrl {
+            ctrl.note_fingerprint(fp);
         }
+        true
     }
 
     #[cfg(unix)]
@@ -1434,27 +1452,22 @@ impl App {
     }
 
     /// Call after `terminal.draw` when Home may be visible. Debounces strip re-encode on resize.
-    pub fn apply_home_strip_resize_settle(&mut self) {
-        let Some(deadline) = self.home_strip_resize_settle else {
-            return;
-        };
-        if Instant::now() < deadline {
-            return;
+    /// Returns true when the strip state was cleared (a redraw is needed).
+    pub fn apply_home_strip_resize_settle(&mut self) -> bool {
+        if !take_expired(&mut self.home_strip_resize_settle, Instant::now()) {
+            return false;
         }
         if self.active_tab != Tab::Home {
-            self.home_strip_resize_settle = None;
-            return;
+            return false;
         }
         let Some(inner) = self.home_recent_albums_inner else {
-            self.home_strip_resize_settle = None;
-            return;
+            return false;
         };
-        self.home_strip_resize_settle = None;
         use crate::ui::kitty_art::{art_strip_layout, strip_layout_key};
         let layout = art_strip_layout(inner.width, inner.height);
         let key = strip_layout_key(inner, &layout);
         if self.home_strip_layout_key == Some(key) {
-            return;
+            return false;
         }
         let prev = self.home_strip_layout_key;
         self.home_strip_layout_key = Some(key);
@@ -1463,7 +1476,7 @@ impl App {
             |old| old != key,
         );
         if !need_clear {
-            return;
+            return false;
         }
         self.home_strip_art.clear();
         self.home_strip_last_cells.clear();
@@ -1473,6 +1486,7 @@ impl App {
             let _ = crate::ui::kitty_art::clear_art_strip(self.in_tmux);
         }
         self.home_art_needs_redraw = true;
+        true
     }
 
     /// Match Kitty APC clears on tab navigation: NP overlay always; Home strip when leaving Home.
@@ -7964,18 +7978,18 @@ impl App {
     }
 
     /// Clear an expired status flash (call once per frame in the main loop).
-    pub fn tick_status_flash(&mut self) {
-        if let Some((_, deadline)) = &self.status_flash {
-            if Instant::now() >= *deadline {
-                self.status_flash = None;
-            }
+    /// Returns true when a flash expired (the status bar needs a redraw).
+    pub fn tick_status_flash(&mut self) -> bool {
+        let now = Instant::now();
+        let mut changed = false;
+        if self.status_flash.as_ref().is_some_and(|(_, d)| now >= *d) {
+            self.status_flash = None;
+            changed = true;
         }
-        if self
-            .scrobble_ok_until
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            self.scrobble_ok_until = None;
+        if take_expired(&mut self.scrobble_ok_until, now) {
+            changed = true;
         }
+        changed
     }
 
     /// True briefly after a scrobble succeeds (status bar shows ✓).
@@ -8046,15 +8060,13 @@ impl App {
         let _ = playlist_id;
     }
 
-    pub fn tick_playlist_tracks_fetch(&mut self) {
-        let Some(deadline) = self.playlist_tracks_fetch_deadline else {
-            return;
-        };
-        if Instant::now() < deadline {
-            return;
+    /// Returns true when the debounced fetch fired (a redraw is needed).
+    pub fn tick_playlist_tracks_fetch(&mut self) -> bool {
+        if !take_expired(&mut self.playlist_tracks_fetch_deadline, Instant::now()) {
+            return false;
         }
-        self.playlist_tracks_fetch_deadline = None;
         self.sync_playlist_tracks_for_selection_now();
+        true
     }
 
     fn sync_playlist_tracks_for_selection_now(&mut self) {
@@ -8815,7 +8827,38 @@ fn sorted_album_song_ids(songs: &[ratune_subsonic::Song]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::LyricsRequest;
+    use super::{redraw_due, take_expired, LyricsRequest};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn take_expired_clears_past_deadline() {
+        let now = Instant::now();
+        let mut slot = Some(now - Duration::from_millis(1));
+        assert!(take_expired(&mut slot, now));
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn take_expired_keeps_future_deadline() {
+        let now = Instant::now();
+        let mut slot = Some(now + Duration::from_secs(1));
+        assert!(!take_expired(&mut slot, now));
+        assert!(slot.is_some());
+    }
+
+    #[test]
+    fn take_expired_on_empty_slot_is_false() {
+        assert!(!take_expired(&mut None, Instant::now()));
+    }
+
+    #[test]
+    fn redraw_due_after_idle_interval() {
+        let t = Instant::now();
+        let idle = Duration::from_secs(1);
+        assert!(!redraw_due(false, t, t + Duration::from_millis(999), idle));
+        assert!(redraw_due(false, t, t + idle, idle));
+        assert!(redraw_due(true, t, t, idle));
+    }
 
     #[test]
     fn lyrics_request_suppresses_only_the_same_song() {

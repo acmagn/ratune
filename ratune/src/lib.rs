@@ -450,11 +450,14 @@ fn run_library_fzf_picker(
 }
 
 /// Merge completed Now Playing `ThreadProtocol` encodes from the worker thread.
-fn drain_ratatui_np_resize_completions(app: &mut App) {
+/// Returns true when at least one completion was applied (a redraw is needed).
+fn drain_ratatui_np_resize_completions(app: &mut App) -> bool {
     let Some(rx) = app.ratatui_resize_rx.as_ref() else {
-        return;
+        return false;
     };
+    let mut applied = false;
     while let Ok(done) = rx.try_recv() {
+        applied = true;
         match done {
             Ok(res) => {
                 if let Some(np) = app.np_art_state.as_mut() {
@@ -464,6 +467,7 @@ fn drain_ratatui_np_resize_completions(app: &mut App) {
             Err(e) => eprintln!("now playing art: {e}"),
         }
     }
+    applied
 }
 
 fn terminal_size_or_quit(
@@ -519,6 +523,12 @@ async fn run_loop(
     };
     let mut last_connectivity_check = Instant::now();
 
+    // Draw only when state changes (input, player, library, MPRIS, daemon,
+    // animations). Force a draw every 1 s as a fallback.
+    let mut needs_redraw = true;
+    let mut last_redraw = Instant::now();
+    const IDLE_REDRAW_INTERVAL: Duration = Duration::from_secs(1);
+
     loop {
         let frame_t0 = Instant::now();
         let poll_ms = if app.visualizer_visible || app.accent_transition_active() {
@@ -538,18 +548,33 @@ async fn run_loop(
         // Drain library updates from background tokio tasks.
         while let Ok(update) = app.library_rx.try_recv() {
             app.apply_library_update(update);
+            needs_redraw = true;
         }
         #[cfg(unix)]
-        app.drain_daemon_snapshots();
+        if app.drain_daemon_snapshots() {
+            needs_redraw = true;
+        }
         // Drain player events from the audio thread.
         while let Ok(event) = app.player_rx.try_recv() {
             app.handle_player_event(event);
+            needs_redraw = true;
         }
 
         if let Some(rx) = &mpris_ctrl_rx {
             while let Ok(c) = rx.try_recv() {
                 app.handle_mpris_control(c);
+                needs_redraw = true;
             }
+        }
+
+        // Animations redraw every frame while active (visualizer, accent
+        // transition, status-bar spinners).
+        if app.visualizer_visible
+            || app.accent_transition_active()
+            || app.library_index_refresh_started.is_some()
+            || app.library_server_append_started.is_some()
+        {
+            needs_redraw = true;
         }
 
         // Advance colour transition before drawing.
@@ -559,8 +584,12 @@ async fn run_loop(
         app.tick_visualizer();
 
         // Expire status flash messages.
-        app.tick_status_flash();
-        app.tick_playlist_tracks_fetch();
+        if app.tick_status_flash() {
+            needs_redraw = true;
+        }
+        if app.tick_playlist_tracks_fetch() {
+            needs_redraw = true;
+        }
 
         if connectivity_interval != Duration::MAX
             && last_connectivity_check.elapsed() >= connectivity_interval
@@ -570,25 +599,40 @@ async fn run_loop(
         }
 
         // Apply completed NP encodes before draw (previous frame) and after draw (same-frame worker).
-        drain_ratatui_np_resize_completions(app);
-
-        match terminal.draw(|f| ui::render(app, f)) {
-            Ok(_) => {}
-            Err(e) if tty::io_disconnect(&e) => app.should_quit = true,
-            // EINTR during SIGWINCH: skip this present; next frame redraws cleanly.
-            Err(e) if tty::io_interrupted(&e) => {}
-            Err(e) => return Err(e.into()),
-        }
-        match Backend::flush(terminal.backend_mut()) {
-            Ok(()) => {}
-            Err(e) if tty::io_disconnect(&e) => app.should_quit = true,
-            Err(e) if tty::io_interrupted(&e) => {}
-            Err(e) => return Err(e.into()),
+        if drain_ratatui_np_resize_completions(app) {
+            needs_redraw = true;
         }
 
-        app.apply_home_strip_resize_settle();
+        if app::redraw_due(
+            needs_redraw,
+            last_redraw,
+            Instant::now(),
+            IDLE_REDRAW_INTERVAL,
+        ) {
+            needs_redraw = false;
+            last_redraw = Instant::now();
+            match terminal.draw(|f| ui::render(app, f)) {
+                Ok(_) => {}
+                Err(e) if tty::io_disconnect(&e) => app.should_quit = true,
+                // EINTR during SIGWINCH: skip this present; next frame redraws cleanly.
+                Err(e) if tty::io_interrupted(&e) => needs_redraw = true,
+                Err(e) => return Err(e.into()),
+            }
+            match Backend::flush(terminal.backend_mut()) {
+                Ok(()) => {}
+                Err(e) if tty::io_disconnect(&e) => app.should_quit = true,
+                Err(e) if tty::io_interrupted(&e) => needs_redraw = true,
+                Err(e) => return Err(e.into()),
+            }
+        }
 
-        drain_ratatui_np_resize_completions(app);
+        if app.apply_home_strip_resize_settle() {
+            needs_redraw = true;
+        }
+
+        if drain_ratatui_np_resize_completions(app) {
+            needs_redraw = true;
+        }
 
         if app.ratatui_art_ready() && !app.ratatui_uses_kitty_apc() {
             for (_id, st) in app.home_strip_art.iter_mut() {
@@ -810,6 +854,9 @@ async fn run_loop(
             Ok(false) => {}
             Ok(true) => loop {
                 let read_result = event::read();
+                if read_result.is_ok() {
+                    needs_redraw = true;
+                }
                 match read_result {
                     Err(e) if tty::io_disconnect(&e) => {
                         app.should_quit = true;
@@ -1146,12 +1193,14 @@ async fn run_loop(
         // Drain once more so any triggered playback reflects on next frame.
         while let Ok(event) = app.player_rx.try_recv() {
             app.handle_player_event(event);
+            needs_redraw = true;
         }
         #[cfg(unix)]
         app.flush_daemon_session();
         if let Some(rx) = &mpris_ctrl_rx {
             while let Ok(c) = rx.try_recv() {
                 app.handle_mpris_control(c);
+                needs_redraw = true;
             }
         }
 
