@@ -146,9 +146,13 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         if app.config.show_volume_indicator {
             right_w += sep.len() + vol_label.len();
         }
-        let scrobble_w = scrobble_status_width(app);
-        if scrobble_w > 0 {
-            right_w += sep.len() + scrobble_w;
+        let shuffle_mode_label = if app.shuffle_mode {
+            Some(format!("{} add", t.icons.mode_shuffle))
+        } else {
+            None
+        };
+        if let Some(ref label) = shuffle_mode_label {
+            right_w += sep.len() + label.chars().count();
         }
 
         let conn_icon = if app.server_reachable {
@@ -157,8 +161,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             t.icons.offline.as_str()
         };
         let conn_label = format!("{conn_icon} ");
-        let host_w = conn_label.chars().count() + host_label.chars().count();
-        let gap = (area.width as usize).saturating_sub(host_w + right_w);
+        let scrobble_w = scrobble_status_width(app);
+        let mut left_w = conn_label.chars().count() + host_label.chars().count();
+        if scrobble_w > 0 {
+            left_w += sep.len() + scrobble_w;
+        }
+        let gap = (area.width as usize).saturating_sub(left_w + right_w);
 
         let conn_style = if app.server_reachable {
             Style::default().fg(app.accent())
@@ -168,10 +176,14 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         let mut spans = vec![
             Span::styled(conn_label, conn_style),
             Span::styled(host_label, Style::default().fg(t.dimmed)),
-            Span::raw(" ".repeat(gap)),
         ];
-        if app.config.scrobble_enabled {
+        if scrobble_w > 0 {
+            spans.push(Span::styled(sep, Style::default().fg(t.dimmed)));
             push_scrobble_status_spans(app, &mut spans, app.accent(), t.dimmed);
+        }
+        spans.push(Span::raw(" ".repeat(gap)));
+        if let Some(label) = shuffle_mode_label {
+            spans.push(Span::styled(label, Style::default().fg(app.accent())));
             spans.push(Span::styled(sep, Style::default().fg(t.dimmed)));
         }
         if app.config.show_volume_indicator {

@@ -1498,6 +1498,11 @@ fn map_favorites_key(
         }
         KeyCode::Enter => Action::FavoritesPlay,
         _ => {
+            if kb.toggle_shuffle_mode.matches(code, modifiers)
+                || kb.shuffle.matches(code, modifiers)
+            {
+                return Action::ToggleShuffleMode;
+            }
             if kb
                 .add_all_replace_album
                 .as_ref()
@@ -1682,6 +1687,11 @@ fn map_playlist_key(
                     if code == KeyCode::Char('X') || modifiers.intersects(KeyModifiers::SHIFT) =>
                 {
                     Action::PlaylistDelete
+                }
+                _ if kb.toggle_shuffle_mode.matches(code, modifiers)
+                    || kb.shuffle.matches(code, modifiers) =>
+                {
+                    Action::ToggleShuffleMode
                 }
                 _ if kb.remove_from_playlist.matches(code, modifiers)
                     && matches!(focus, PlaylistFocus::Tracks) =>
@@ -2017,8 +2027,15 @@ fn map_key(
         return Action::AddToQueue;
     }
 
+    if kb.toggle_shuffle_mode.matches(code, modifiers) {
+        return Action::ToggleShuffleMode;
+    }
+    // Bare shuffle key: Now Playing = reorder queue; Home/Browse = toggle shuffle mode.
     if kb.shuffle.matches(code, modifiers) {
-        return Action::Shuffle;
+        return match active_tab {
+            Tab::NowPlaying => Action::Shuffle,
+            Tab::Home | Tab::Browser => Action::ToggleShuffleMode,
+        };
     }
     if kb.unshuffle.matches(code, modifiers) {
         return Action::Unshuffle;
@@ -2826,5 +2843,79 @@ fn tmux_status_offset() -> u16 {
             }
         }
         Err(_) => 1, // safe default: assume top status bar
+    }
+}
+
+#[cfg(test)]
+mod map_key_tests {
+    use super::*;
+    use crate::config::KeybindsSection;
+    use crate::keybinds::Keybinds;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    fn kb() -> Keybinds {
+        Keybinds::from_section(&KeybindsSection::default())
+    }
+
+    #[test]
+    fn bare_x_toggles_shuffle_mode_on_browser() {
+        let mut pending = false;
+        let action = map_key(
+            KeyCode::Char('x'),
+            KeyModifiers::empty(),
+            Tab::Browser,
+            &kb(),
+            &mut pending,
+            false,
+        );
+        assert!(matches!(action, Action::ToggleShuffleMode));
+    }
+
+    #[test]
+    fn bare_x_toggles_shuffle_mode_on_home() {
+        let mut pending = false;
+        let action = map_key(
+            KeyCode::Char('x'),
+            KeyModifiers::empty(),
+            Tab::Home,
+            &kb(),
+            &mut pending,
+            false,
+        );
+        assert!(matches!(action, Action::ToggleShuffleMode));
+    }
+
+    #[test]
+    fn bare_x_shuffles_queue_on_now_playing() {
+        let mut pending = false;
+        let action = map_key(
+            KeyCode::Char('x'),
+            KeyModifiers::empty(),
+            Tab::NowPlaying,
+            &kb(),
+            &mut pending,
+            false,
+        );
+        assert!(matches!(action, Action::Shuffle));
+    }
+
+    #[test]
+    fn ctrl_x_toggles_shuffle_mode_on_any_tab() {
+        let binds = kb();
+        for tab in [Tab::Home, Tab::Browser, Tab::NowPlaying] {
+            let mut pending = false;
+            let action = map_key(
+                KeyCode::Char('x'),
+                KeyModifiers::CONTROL,
+                tab,
+                &binds,
+                &mut pending,
+                false,
+            );
+            assert!(
+                matches!(action, Action::ToggleShuffleMode),
+                "expected ToggleShuffleMode on {tab:?}"
+            );
+        }
     }
 }

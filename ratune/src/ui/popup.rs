@@ -21,7 +21,12 @@ fn sections(
         ("n / N", "Next / previous track"),
         ("f", "Toggle favorite (song / album / artist)"),
         ("F", "Favorites panel (Browse tab)"),
-        ("x / Z", "Shuffle / unshuffle"),
+        (
+            "x",
+            "Now Playing: shuffle queue · Home/Browse: shuffle mode",
+        ),
+        ("Ctrl+x", "Toggle shuffle mode (incoming adds)"),
+        ("z", "Unshuffle queue"),
         ("Q", "Toggle queue loop"),
     ];
     if ratings_enabled {

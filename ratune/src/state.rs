@@ -336,6 +336,28 @@ impl Default for QueueState {
     }
 }
 
+/// Fisher–Yates shuffle using a tiny LCG (same family as queue shuffle in `App`).
+pub fn fisher_yates_shuffle<T>(items: &mut [T]) {
+    let len = items.len();
+    if len < 2 {
+        return;
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(12345) as u64;
+    let mut rng = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    for i in (1..len).rev() {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let j = (rng >> 33) as usize % (i + 1);
+        items.swap(i, j);
+    }
+}
+
 impl QueueState {
     pub fn push(&mut self, song: Song) {
         // Keep pre_shuffle_order in sync: it is the canonical "original order"
@@ -370,6 +392,89 @@ impl QueueState {
             self.clear_shuffle_state();
         } else {
             self.pre_shuffle_order = Some(self.songs.clone());
+            self.shuffle_active = false;
+        }
+    }
+
+    /// Append a block. `baseline` is source order (for unshuffle). When
+    /// `shuffled_play` and the block has 2+ tracks, play order is shuffled
+    /// and [`Self::shuffle_active`] is set.
+    pub fn append_block(&mut self, baseline: Vec<Song>, shuffled_play: bool) {
+        if baseline.is_empty() {
+            return;
+        }
+        let play = if shuffled_play && baseline.len() >= 2 {
+            let mut play = baseline.clone();
+            fisher_yates_shuffle(&mut play);
+            self.shuffle_active = true;
+            play
+        } else {
+            baseline.clone()
+        };
+        match &mut self.pre_shuffle_order {
+            Some(orig) => orig.extend(baseline),
+            None => self.pre_shuffle_order = Some(baseline),
+        }
+        self.songs.extend(play);
+    }
+
+    /// Prepend a block with the same baseline / shuffled-play rules as [`Self::append_block`].
+    pub fn prepend_block(&mut self, baseline: Vec<Song>, shuffled_play: bool) {
+        if baseline.is_empty() {
+            return;
+        }
+        if self.songs.is_empty() {
+            self.append_block(baseline, shuffled_play);
+            return;
+        }
+        let n = baseline.len();
+        let play = if shuffled_play && n >= 2 {
+            let mut play = baseline.clone();
+            fisher_yates_shuffle(&mut play);
+            self.shuffle_active = true;
+            play
+        } else {
+            baseline.clone()
+        };
+        match &mut self.pre_shuffle_order {
+            Some(orig) => {
+                for s in baseline.into_iter().rev() {
+                    orig.insert(0, s);
+                }
+            }
+            None => {
+                self.pre_shuffle_order = Some(
+                    baseline
+                        .into_iter()
+                        .chain(self.songs.iter().cloned())
+                        .collect(),
+                );
+            }
+        }
+        for s in play.into_iter().rev() {
+            self.songs.insert(0, s);
+        }
+        self.cursor += n;
+    }
+
+    /// Replace the queue with `baseline`, optionally shuffling play order.
+    pub fn replace_with_block(&mut self, baseline: Vec<Song>, shuffled_play: bool) {
+        self.cursor = 0;
+        self.scroll = 0;
+        if baseline.is_empty() {
+            self.songs.clear();
+            self.clear_shuffle_state();
+            return;
+        }
+        if shuffled_play && baseline.len() >= 2 {
+            let mut play = baseline.clone();
+            fisher_yates_shuffle(&mut play);
+            self.pre_shuffle_order = Some(baseline);
+            self.shuffle_active = true;
+            self.songs = play;
+        } else {
+            self.songs = baseline.clone();
+            self.pre_shuffle_order = Some(baseline);
             self.shuffle_active = false;
         }
     }
@@ -446,31 +551,7 @@ impl QueueState {
     /// Insert `incoming` at the front of the queue in order; advances `cursor` so the
     /// currently playing track index still refers to the same song.
     pub fn prepend_songs(&mut self, incoming: Vec<Song>) {
-        if incoming.is_empty() {
-            return;
-        }
-        if self.songs.is_empty() {
-            for s in incoming {
-                self.push(s);
-            }
-            return;
-        }
-        let n = incoming.len();
-        match &mut self.pre_shuffle_order {
-            Some(orig) => {
-                for s in incoming.iter().rev() {
-                    orig.insert(0, s.clone());
-                }
-            }
-            None => {
-                self.pre_shuffle_order =
-                    Some(incoming.iter().chain(self.songs.iter()).cloned().collect());
-            }
-        }
-        for s in incoming.into_iter().rev() {
-            self.songs.insert(0, s);
-        }
-        self.cursor += n;
+        self.prepend_block(incoming, false);
     }
 
     /// Remove the song at `idx`, adjusting `cursor` and `pre_shuffle_order`.
@@ -855,5 +936,51 @@ mod queue_tests {
         let baseline = q.pre_shuffle_order.as_ref().unwrap();
         assert_eq!(baseline[0].id, "b");
         assert_eq!(baseline[1].id, "a");
+    }
+
+    #[test]
+    fn append_block_shuffled_keeps_baseline_order() {
+        let mut q = QueueState::default();
+        q.append_block(
+            vec![song("a"), song("b"), song("c"), song("d"), song("e")],
+            true,
+        );
+        assert!(q.is_shuffled());
+        let orig = q.pre_shuffle_order.as_ref().unwrap();
+        assert_eq!(
+            orig.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c", "d", "e"]
+        );
+        let mut play_ids: Vec<_> = q.songs.iter().map(|s| s.id.as_str()).collect();
+        play_ids.sort();
+        assert_eq!(play_ids, vec!["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn append_block_ordered_matches_baseline() {
+        let mut q = QueueState::default();
+        q.append_block(vec![song("a"), song("b")], false);
+        assert!(!q.is_shuffled());
+        assert_eq!(q.songs[0].id, "a");
+        assert_eq!(q.songs[1].id, "b");
+    }
+
+    #[test]
+    fn replace_with_block_shuffled_sets_active() {
+        let mut q = QueueState::default();
+        q.push(song("old"));
+        q.replace_with_block(vec![song("a"), song("b"), song("c")], true);
+        assert!(q.is_shuffled());
+        assert_eq!(q.pre_shuffle_order.as_ref().unwrap().len(), 3);
+        assert_eq!(q.songs.len(), 3);
+        assert_eq!(q.cursor, 0);
+    }
+
+    #[test]
+    fn single_track_block_never_marks_shuffled() {
+        let mut q = QueueState::default();
+        q.append_block(vec![song("a")], true);
+        assert!(!q.is_shuffled());
+        assert_eq!(q.songs[0].id, "a");
     }
 }

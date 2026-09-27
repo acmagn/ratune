@@ -140,8 +140,9 @@ queue_loop = true
 # add_all_replace_album  = "Ctrl+r"   # browser, playlist overlay, favorites: replace queue and play
 # add_all_replace_artist = "Ctrl+Shift+r"  # browser: replace queue with all tracks for artist
 # add_all_prepend     = "Ctrl+Shift+p"     # browser: prepend artist/album tracks
-# shuffle             = "x"
+# shuffle             = "x"           # Now Playing: shuffle queue; Home/Browse: toggle shuffle mode
 # unshuffle           = "z"
+# toggle_shuffle_mode = "Ctrl+x"      # toggle shuffle mode (incoming adds shuffled) from any tab
 # toggle_queue_loop   = "Shift+q"     # wrap queue after last track
 # toggle_radio        = "Shift+r"     # open/close internet radio picker
 # clear_queue         = "Shift+d"     # clear entire queue
@@ -213,6 +214,7 @@ queue_loop = true
 #   border_active — Reserved for themes; many panes now use accent for active frames.
 #
 # Pane outlines: optional `[theme.border_lines]` (`type` = plain|rounded|double|thick|ascii,
+# optional `[theme.border_lines.shuffle_mode]` while sticky shuffle mode is on; plus edge glyphs).
 # plus optional edge glyphs). Does not clash with the `border` colour key.
 #
 # Glyphs (optional `[theme.icon]`): transport, favorite marker, rating stars/brackets,
@@ -242,6 +244,13 @@ preset = "dynamic"
 # Edge overrides (any set builds a custom border): top_left, top_right,
 # bottom_left, bottom_right, vertical, horizontal.
 #
+# Optional `[theme.border_lines.shuffle_mode]`: when present, pane
+# borders switch to that set while sticky shuffle mode is on. Example:
+#   [theme.border_lines]
+#   type = "rounded"
+#   [theme.border_lines.shuffle_mode]
+#   type = "double"
+#
 # Legacy still accepted: flat `[theme].border_type` / `border_top_left` / … and the
 # same keys under `[theme.icon]`.
 
@@ -253,6 +262,9 @@ preset = "dynamic"
 # bottom_right = "+"
 # vertical = "|"
 # horizontal = "-"
+
+# [theme.border_lines.shuffle_mode]
+# type = "double"
 
 # -----------------------------------------------------------------------------
 # [theme.icon] — optional glyph overrides (fonts without media / specialty chars)

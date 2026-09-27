@@ -583,6 +583,9 @@ pub struct App {
     pub np_pane_focus: NowPlayingPaneFocus,
     pub folders: FolderBrowseState,
     pub queue: QueueState,
+    /// When true, bulk add/replace/prepend paths shuffle the incoming selection.
+    /// Does not reorder the existing queue when toggled.
+    pub shuffle_mode: bool,
     pub playback: PlaybackState,
     pub config: Config,
     /// Effective Browse tab layout: toggled at runtime when folder navigation is enabled.
@@ -942,6 +945,7 @@ impl App {
                 loop_enabled: config.queue_loop,
                 ..QueueState::default()
             },
+            shuffle_mode: false,
             playback: PlaybackState::default(),
             subsonic: Arc::new(subsonic),
             server_reachable: true,
@@ -2862,13 +2866,13 @@ impl App {
             self.playback.player_loaded = false;
         }
         let was_empty = self.queue.songs.is_empty();
-        let mut n = 0usize;
+        let mut collected = Vec::new();
         for id in ids {
             if let Some(song) = self.library_index_by_id.get(id.as_str()).cloned() {
-                self.queue.push(song);
-                n += 1;
+                collected.push(song);
             }
         }
+        let n = collected.len();
         if n == 0 {
             let msg = if ids.len() == 1 {
                 "Selected track not found in index"
@@ -2877,6 +2881,11 @@ impl App {
             };
             self.flash_status(msg);
             return 0;
+        }
+        if replace {
+            self.enqueue_replace(collected);
+        } else {
+            self.enqueue_append(collected);
         }
         if was_empty && !self.queue.songs.is_empty() {
             self.queue.cursor = 0;
@@ -3442,11 +3451,9 @@ impl App {
                     )
                 });
                 if prepend {
-                    self.queue.prepend_songs(songs);
+                    self.enqueue_prepend(songs);
                 } else {
-                    for song in songs {
-                        self.queue.push(song);
-                    }
+                    self.enqueue_append(songs);
                 }
                 if start_playing && was_empty && !self.queue.songs.is_empty() {
                     self.queue.cursor = 0;
@@ -3767,9 +3774,7 @@ impl App {
                             return;
                         }
                         let was_empty = self.queue.songs.is_empty();
-                        for s in tracks {
-                            self.queue.push(s);
-                        }
+                        self.enqueue_append(tracks);
                         if was_empty && !self.queue.songs.is_empty() {
                             self.queue.cursor = 0;
                             self.queue.scroll = 0;
@@ -6150,6 +6155,7 @@ impl App {
             Action::RemoveFromQueue => self.handle_remove_from_queue(),
             Action::Shuffle => self.handle_shuffle(),
             Action::Unshuffle => self.handle_unshuffle(),
+            Action::ToggleShuffleMode => self.handle_toggle_shuffle_mode(),
             Action::ToggleQueueLoop => self.handle_toggle_queue_loop(),
             Action::ToggleNpPaneFocus => self.handle_toggle_np_pane_focus(),
             Action::SeekForward => {
@@ -7315,7 +7321,7 @@ impl App {
             self.flash_status("Library index empty");
             return;
         }
-        let mut songs: Vec<_> = if !self.server_reachable && self.config.cache_enabled {
+        let songs: Vec<_> = if !self.server_reachable && self.config.cache_enabled {
             self.cache.filter_cached_tracks(&self.library_index_tracks)
         } else {
             self.library_index_tracks.clone()
@@ -7326,9 +7332,7 @@ impl App {
         }
         let n = songs.len();
         let was_empty = self.queue.songs.is_empty();
-        for song in songs.drain(..) {
-            self.queue.push(song);
-        }
+        self.enqueue_append(songs);
         if was_empty && !self.queue.songs.is_empty() {
             self.queue.cursor = 0;
             self.queue.scroll = 0;
@@ -7350,15 +7354,12 @@ impl App {
             let prepend = matches!(mode, AddAllMode::Prepend);
             match mode {
                 AddAllMode::ReplaceAlbum | AddAllMode::ReplaceArtist => {
-                    self.queue.songs = songs;
-                    self.queue.cursor = 0;
-                    self.queue.scroll = 0;
-                    self.queue.adopt_current_order_as_shuffle_baseline();
                     self.send_player(PlayerCommand::Stop);
                     self.playback.current_song = None;
                     self.playback.elapsed = std::time::Duration::ZERO;
                     self.playback.paused = false;
                     self.playback.player_loaded = false;
+                    self.enqueue_replace(songs);
                     if !self.queue.songs.is_empty() {
                         self.play_current();
                     }
@@ -7367,11 +7368,9 @@ impl App {
                 AddAllMode::Append | AddAllMode::Prepend => {
                     let was_empty = self.queue.songs.is_empty();
                     if prepend {
-                        self.queue.prepend_songs(songs);
+                        self.enqueue_prepend(songs);
                     } else {
-                        for song in songs {
-                            self.queue.push(song);
-                        }
+                        self.enqueue_append(songs);
                     }
                     if was_empty && !self.queue.songs.is_empty() {
                         self.queue.cursor = 0;
@@ -7409,11 +7408,9 @@ impl App {
                             });
                             let was_empty = self.queue.songs.is_empty();
                             if prepend {
-                                self.queue.prepend_songs(sorted);
+                                self.enqueue_prepend(sorted);
                             } else {
-                                for song in sorted {
-                                    self.queue.push(song);
-                                }
+                                self.enqueue_append(sorted);
                             }
                             if was_empty && !self.queue.songs.is_empty() {
                                 self.queue.cursor = 0;
@@ -7438,13 +7435,13 @@ impl App {
         if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
             let mut sorted = songs.clone();
             sorted.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
-            self.handle_clear_queue();
-            for song in sorted {
-                self.queue.push(song);
-            }
+            self.send_player(PlayerCommand::Stop);
+            self.playback.current_song = None;
+            self.playback.elapsed = std::time::Duration::ZERO;
+            self.playback.paused = false;
+            self.playback.player_loaded = false;
+            self.enqueue_replace(sorted);
             if !self.queue.songs.is_empty() {
-                self.queue.cursor = 0;
-                self.queue.scroll = 0;
                 self.play_current();
             }
         } else {
@@ -7518,6 +7515,35 @@ impl App {
         self.queue.cursor = 0;
         self.queue.scroll = 0;
         self.queue.shuffle_active = true;
+    }
+
+    fn handle_toggle_shuffle_mode(&mut self) {
+        self.shuffle_mode = !self.shuffle_mode;
+        self.theme.apply_shuffle_mode_borders(self.shuffle_mode);
+        if self.shuffle_mode {
+            self.flash_status("Shuffle mode on — new adds land shuffled");
+        } else {
+            self.flash_status("Shuffle mode off");
+        }
+    }
+
+    /// Append a block, shuffling play order when shuffle mode is on.
+    fn enqueue_append(&mut self, songs: Vec<ratune_subsonic::Song>) {
+        self.queue.append_block(songs, self.shuffle_mode);
+    }
+
+    /// Prepend a block, shuffling play order when shuffle mode is on.
+    fn enqueue_prepend(&mut self, songs: Vec<ratune_subsonic::Song>) {
+        if self.shuffle_mode {
+            self.queue.prepend_block(songs, true);
+        } else {
+            self.queue.prepend_songs(songs);
+        }
+    }
+
+    /// Replace the queue contents (caller handles stop/clear playback as needed).
+    fn enqueue_replace(&mut self, songs: Vec<ratune_subsonic::Song>) {
+        self.queue.replace_with_block(songs, self.shuffle_mode);
     }
 
     /// Apply the current search: move selection to the first filtered result.
@@ -8198,16 +8224,13 @@ impl App {
             Action::PlaylistPlayAll => {
                 if let LoadingState::Loaded(ref songs) = self.playlist_overlay.tracks {
                     let songs = songs.clone();
-                    self.queue.songs.clear();
-                    self.queue.cursor = 0;
-                    self.queue.scroll = 0;
-                    self.queue.clear_shuffle_state();
-                    for song in songs {
-                        self.queue.push(song);
-                    }
+                    self.send_player(PlayerCommand::Stop);
+                    self.playback.current_song = None;
+                    self.playback.elapsed = std::time::Duration::ZERO;
+                    self.playback.paused = false;
+                    self.playback.player_loaded = false;
+                    self.enqueue_replace(songs);
                     if !self.queue.songs.is_empty() {
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
                         self.play_current();
                     }
                 }
@@ -8216,9 +8239,7 @@ impl App {
             Action::PlaylistAppendAll => {
                 if let LoadingState::Loaded(ref songs) = self.playlist_overlay.tracks {
                     let was_empty = self.queue.songs.is_empty();
-                    for song in songs.clone() {
-                        self.queue.push(song);
-                    }
+                    self.enqueue_append(songs.clone());
                     if was_empty && !self.queue.songs.is_empty() {
                         self.queue.cursor = 0;
                         self.queue.scroll = 0;
@@ -8232,13 +8253,12 @@ impl App {
                         .get(self.playlist_overlay.selected_track_index)
                         .cloned()
                     {
-                        self.queue.songs.clear();
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
-                        self.queue.clear_shuffle_state();
-                        self.queue.push(song);
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
+                        self.send_player(PlayerCommand::Stop);
+                        self.playback.current_song = None;
+                        self.playback.elapsed = std::time::Duration::ZERO;
+                        self.playback.paused = false;
+                        self.playback.player_loaded = false;
+                        self.enqueue_replace(vec![song]);
                         self.play_current();
                     }
                 }
@@ -8436,19 +8456,23 @@ impl App {
             }
         }
         if replace {
-            self.queue.songs.clear();
-            self.queue.cursor = 0;
-            self.queue.scroll = 0;
-            self.queue.clear_shuffle_state();
-        }
-        let was_empty = self.queue.songs.is_empty();
-        for song in songs {
-            self.queue.push(song.clone());
-        }
-        if (replace || was_empty) && !self.queue.songs.is_empty() {
-            self.queue.cursor = 0;
-            self.queue.scroll = 0;
-            self.play_current();
+            self.send_player(PlayerCommand::Stop);
+            self.playback.current_song = None;
+            self.playback.elapsed = std::time::Duration::ZERO;
+            self.playback.paused = false;
+            self.playback.player_loaded = false;
+            self.enqueue_replace(songs);
+            if !self.queue.songs.is_empty() {
+                self.play_current();
+            }
+        } else {
+            let was_empty = self.queue.songs.is_empty();
+            self.enqueue_append(songs);
+            if was_empty && !self.queue.songs.is_empty() {
+                self.queue.cursor = 0;
+                self.queue.scroll = 0;
+                self.play_current();
+            }
         }
     }
 
