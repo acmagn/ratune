@@ -223,8 +223,10 @@ pub struct Keybinds {
     pub home_section_next: KeySpec,
     pub home_section_prev: KeySpec,
     pub home_refresh: KeySpec,
-    /// Folder browse toggle (`None` = disabled).
+    /// Folder / albums browse mode toggle (`None` = disabled).
     pub toggle_folder_browse: Option<KeySpec>,
+    /// Cycle album list sort in Albums browse mode (`None` = disabled).
+    pub cycle_album_sort: Option<KeySpec>,
     /// Toggle favorite on focused or playing item (Subsonic star API).
     pub toggle_favorite: KeySpec,
     /// Browser: favorites overlay. Default: Shift+f (`F`)
@@ -333,6 +335,10 @@ impl Keybinds {
                 code: KeyCode::Char('b'),
                 modifiers: KeyModifiers::CONTROL,
             }),
+        );
+        let cycle_album_sort = resolve_opt(
+            sec.cycle_album_sort.as_deref(),
+            Some(KeySpec::new(KeyCode::Char('s'))),
         );
         Self {
             scroll_up: resolve(sec.scroll_up.as_deref(), KeySpec::new(KeyCode::Char('k'))),
@@ -487,6 +493,7 @@ impl Keybinds {
                 KeySpec::new(KeyCode::Char('r')),
             ),
             toggle_folder_browse,
+            cycle_album_sort,
             toggle_favorite: resolve(
                 sec.toggle_favorite.as_deref(),
                 KeySpec::new(KeyCode::Char('f')),

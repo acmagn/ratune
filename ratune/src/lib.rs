@@ -205,8 +205,10 @@ pub async fn run() -> Result<()> {
 
     // Kick Browse immediately from the local index when available. Network-backed
     // startup work (index refresh, starred, radio, scrobble flush) waits for ping.
-    if app.browser_browse_mode != crate::config::BrowseMode::Files {
-        app.fetch_artists();
+    match app.browser_browse_mode {
+        crate::config::BrowseMode::Files => {}
+        crate::config::BrowseMode::Albums => app.fetch_flat_albums(),
+        _ => app.fetch_artists(),
     }
 
     // Spawn a task that sets a flag on SIGTERM, SIGHUP, SIGPIPE, or SIGINT so the main loop
@@ -2009,6 +2011,13 @@ fn map_key(
             return Action::ToggleBrowserFolder;
         }
     }
+    if active_tab == Tab::Browser {
+        if let Some(spec) = &kb.cycle_album_sort {
+            if spec.matches(code, modifiers) {
+                return Action::CycleAlbumSort;
+            }
+        }
+    }
 
     // seek_forward / seek_backward are tab-aware: they also act as column
     // navigation in the Browser tab so Right/Left keep working there.
@@ -2200,8 +2209,14 @@ fn browser_column_hit(
     }
 
     let files_mode = browse_mode == BrowseMode::Files;
-    let browser_cols = if files_mode {
-        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(center)
+    let albums_mode = browse_mode == BrowseMode::Albums;
+    let browser_cols = if files_mode || albums_mode {
+        let pct = if albums_mode {
+            [Constraint::Percentage(55), Constraint::Percentage(45)]
+        } else {
+            [Constraint::Percentage(45), Constraint::Percentage(55)]
+        };
+        Layout::horizontal(pct).split(center)
     } else {
         Layout::horizontal([
             Constraint::Percentage(30),
@@ -2211,7 +2226,7 @@ fn browser_column_hit(
         .split(center)
     };
 
-    let col_idx = if files_mode {
+    let col_idx = if files_mode || albums_mode {
         if x < browser_cols[1].x {
             0usize
         } else {
@@ -2233,6 +2248,11 @@ fn browser_column_hit(
     let focus = if files_mode {
         match col_idx {
             0 => BrowserColumn::Artists,
+            _ => BrowserColumn::Tracks,
+        }
+    } else if albums_mode {
+        match col_idx {
+            0 => BrowserColumn::Albums,
             _ => BrowserColumn::Tracks,
         }
     } else {

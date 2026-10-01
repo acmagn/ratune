@@ -141,8 +141,10 @@ pub struct KeybindsSection {
     pub home_section_prev: Option<String>,
     /// Home: re-roll / refresh. Default: r
     pub home_refresh: Option<String>,
-    /// Browse: toggle folder navigation (requires `[ui.browsetab] folder_navigation`). Default: Ctrl+b
+    /// Browse: toggle Artists / Albums / folders (folders need `[ui.browsetab] folder_navigation`). Default: Ctrl+b
     pub toggle_folder_browse: Option<String>,
+    /// Albums browse mode: cycle sort (newest / name / artist / frequent / starred). Default: s
+    pub cycle_album_sort: Option<String>,
     /// Toggle favorite on the focused song, album, or artist (Subsonic star API). Default: f
     pub toggle_favorite: Option<String>,
     /// Browse: open favorites overlay. Default: Shift+f (`F`)
@@ -978,6 +980,8 @@ fn parse_home_panels(v: Option<Vec<String>>) -> [HomePanel; 3] {
 pub enum BrowseMode {
     #[default]
     Artists,
+    /// Flat album list (all albums) with tracks.
+    Albums,
     Genre,
     Files,
 }
@@ -986,6 +990,7 @@ impl BrowseMode {
     fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "artists" | "artist" => Some(Self::Artists),
+            "albums" | "album" => Some(Self::Albums),
             "genre" | "genres" => Some(Self::Genre),
             "files" | "file" => Some(Self::Files),
             _ => None,
@@ -2814,6 +2819,7 @@ api_secret_command = "secret-tool lookup service ratune user lastfm|api_secret"
     #[test]
     fn browse_mode_parses_artists() {
         assert_eq!(BrowseMode::parse("artists"), Some(BrowseMode::Artists));
+        assert_eq!(BrowseMode::parse("albums"), Some(BrowseMode::Albums));
         assert_eq!(BrowseMode::parse("bogus"), None);
     }
 

@@ -23,8 +23,10 @@ pub enum Action {
     GoToHome,
     /// Jump directly to Browser tab (key '2')
     GoToBrowser,
-    /// Toggle Browse tab between artist columns and folder layout (requires config).
+    /// Toggle Browse tab between artist columns, albums list, and folder layout.
     ToggleBrowserFolder,
+    /// Albums browse mode: cycle sort order (newest / name / artist / …).
+    CycleAlbumSort,
     /// Jump directly to NowPlaying tab (key '3')
     GoToNowPlaying,
     /// Open or close the internet radio station picker (default: Shift+R).

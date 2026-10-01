@@ -20,8 +20,15 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
     } else {
         Style::default().fg(border_color)
     };
+
+    let title = if app.library.use_flat_albums {
+        format!(" Albums ({}) ", app.album_list_sort.label())
+    } else {
+        " Albums ".to_string()
+    };
+
     let block = Block::default()
-        .title(" Albums ")
+        .title(title)
         .title_style(
             Style::default()
                 .fg(title_color)
@@ -32,31 +39,44 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         .border_style(border_style)
         .style(style_with_bg(t.surface));
 
-    let artist_id = match app.library.current_artist() {
-        Some(a) => a.id.clone(),
-        None => {
+    let albums_state: &LoadingState<Vec<Album>> = if app.library.use_flat_albums {
+        &app.library.flat_albums
+    } else {
+        let Some(artist) = app.library.current_artist() else {
             let list = List::new(vec![
                 ListItem::new("← Select an artist").style(Style::default().fg(t.dimmed))
             ])
             .block(block);
             frame.render_widget(list, area);
             return;
+        };
+        match app.library.albums.get(&artist.id) {
+            Some(state) => state,
+            None => {
+                let list = List::new(vec![
+                    ListItem::new("← Select an artist").style(Style::default().fg(t.dimmed))
+                ])
+                .block(block);
+                frame.render_widget(list, area);
+                return;
+            }
         }
     };
 
-    match app.library.albums.get(&artist_id) {
-        None | Some(LoadingState::NotLoaded) | Some(LoadingState::Loading) => {
+    match albums_state {
+        LoadingState::NotLoaded | LoadingState::Loading => {
             let item = ListItem::new("Loading…").style(Style::default().fg(t.dimmed));
             let list = List::new(vec![item]).block(block);
             frame.render_widget(list, area);
         }
-        Some(LoadingState::Error(e)) => {
+        LoadingState::Error(e) => {
             let item =
                 ListItem::new(format!("Error: {e}")).style(Style::default().fg(app.accent()));
             let list = List::new(vec![item]).block(block);
             frame.render_widget(list, area);
         }
-        Some(LoadingState::Loaded(albums)) => {
+        LoadingState::Loaded(albums) => {
+            let flat = app.library.use_flat_albums;
             let make_label = |a: &Album| {
                 let star = if a.starred.is_some() {
                     app.theme.icons.favorite_prefix()
@@ -73,9 +93,19 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 } else {
                     String::new()
                 };
-                match a.year {
-                    Some(y) => format!("{}{} ({}){}", star, a.name, y, rating_suffix),
-                    None => format!("{}{}{}", star, a.name, rating_suffix),
+                if flat {
+                    let artist = a.artist.as_deref().unwrap_or("Unknown Artist");
+                    match a.year {
+                        Some(y) => {
+                            format!("{}{} — {} ({}){}", star, a.name, artist, y, rating_suffix)
+                        }
+                        None => format!("{}{} — {}{}", star, a.name, artist, rating_suffix),
+                    }
+                } else {
+                    match a.year {
+                        Some(y) => format!("{}{} ({}){}", star, a.name, y, rating_suffix),
+                        None => format!("{}{}{}", star, a.name, rating_suffix),
+                    }
                 }
             };
 
@@ -84,7 +114,15 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                     albums
                         .iter()
                         .enumerate()
-                        .filter(|(_, a)| a.name.to_lowercase().contains(q))
+                        .filter(|(_, a)| {
+                            let name_hit = a.name.to_lowercase().contains(q);
+                            let artist_hit = a
+                                .artist
+                                .as_deref()
+                                .map(|s| s.to_lowercase().contains(q))
+                                .unwrap_or(false);
+                            name_hit || artist_hit
+                        })
                         .map(|(i, a)| (i, make_label(a)))
                         .collect()
                 } else {

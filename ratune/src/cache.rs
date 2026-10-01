@@ -304,6 +304,8 @@ mod tests {
             album_artists: Vec::new(),
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             track: None,
             disc_number: None,
             year: None,

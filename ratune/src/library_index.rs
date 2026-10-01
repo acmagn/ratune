@@ -87,6 +87,43 @@ pub fn default_index_path() -> Option<PathBuf> {
     Some(base.join("library_index.json"))
 }
 
+/// Default path for library index refresh warnings: `~/.cache/ratune/library_index_refresh.log`.
+pub fn default_refresh_log_path() -> Option<PathBuf> {
+    let base = dirs_cache_base()?;
+    Some(base.join("library_index_refresh.log"))
+}
+
+/// Write refresh warnings to `path` (overwrites). Returns the number of lines written.
+pub fn write_refresh_log(path: &Path, warnings: &[String]) -> Result<usize> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut body = String::new();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    body.push_str(&format!(
+        "# ratune library index refresh log (unix {ts})\n# {} warning(s)\n",
+        warnings.len()
+    ));
+    for w in warnings {
+        body.push_str(w);
+        body.push('\n');
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp = path.with_extension(format!("log.{nanos}.part"));
+    let mut f = fs::File::create(&temp).with_context(|| format!("writing {}", temp.display()))?;
+    f.write_all(body.as_bytes())?;
+    f.sync_all().ok();
+    drop(f);
+    fs::rename(&temp, path).with_context(|| format!("renaming to {}", path.display()))?;
+    Ok(warnings.len())
+}
+
 fn dirs_cache_base() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
         return Some(PathBuf::from(xdg).join("ratune"));
@@ -246,7 +283,116 @@ pub fn index_by_id(tracks: &[Song]) -> std::collections::HashMap<String, Song> {
 pub struct BrowseSnapshot {
     pub artists: Vec<ratune_subsonic::Artist>,
     pub albums_by_artist: std::collections::HashMap<String, Vec<ratune_subsonic::Album>>,
+    /// Deduped flat album list (one entry per album id) for Albums browse mode.
+    pub flat_albums: Vec<ratune_subsonic::Album>,
     pub tracks_by_album: std::collections::HashMap<String, Vec<Song>>,
+}
+
+/// Sort order for the flat Albums browse list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlbumListSort {
+    /// Newest library additions first (`created` desc).
+    #[default]
+    Newest,
+    AlphabeticalByName,
+    AlphabeticalByArtist,
+    /// Highest play count first.
+    Frequent,
+    /// Starred albums only (name order). Requires `starred` set on albums.
+    Starred,
+}
+
+impl AlbumListSort {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Newest => Self::AlphabeticalByName,
+            Self::AlphabeticalByName => Self::AlphabeticalByArtist,
+            Self::AlphabeticalByArtist => Self::Frequent,
+            Self::Frequent => Self::Starred,
+            Self::Starred => Self::Newest,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::AlphabeticalByName => "name",
+            Self::AlphabeticalByArtist => "artist",
+            Self::Frequent => "frequent",
+            Self::Starred => "starred",
+        }
+    }
+
+    /// Subsonic `getAlbumList2` `type` parameter for the no-index fallback.
+    pub fn api_type(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::AlphabeticalByName => "alphabeticalByName",
+            Self::AlphabeticalByArtist => "alphabeticalByArtist",
+            Self::Frequent => "frequent",
+            Self::Starred => "starred",
+        }
+    }
+}
+
+/// Sort a flat album list in place according to [`AlbumListSort`].
+pub fn sort_flat_albums(albums: &mut Vec<ratune_subsonic::Album>, sort: AlbumListSort) {
+    match sort {
+        AlbumListSort::Newest => {
+            albums.sort_by(|a, b| match (a.created.as_deref(), b.created.as_deref()) {
+                (Some(ca), Some(cb)) => cb
+                    .cmp(ca)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            });
+        }
+        AlbumListSort::AlphabeticalByName => {
+            albums.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        }
+        AlbumListSort::AlphabeticalByArtist => {
+            albums.sort_by(|a, b| {
+                let aa = a.artist.as_deref().unwrap_or("").to_lowercase();
+                let ba = b.artist.as_deref().unwrap_or("").to_lowercase();
+                aa.cmp(&ba)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
+        }
+        AlbumListSort::Frequent => {
+            albums.sort_by(|a, b| {
+                let pa = a.play_count.unwrap_or(0);
+                let pb = b.play_count.unwrap_or(0);
+                pb.cmp(&pa)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
+        }
+        AlbumListSort::Starred => {
+            albums.retain(|a| a.starred.is_some());
+            albums.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        }
+    }
+}
+
+/// Whether the indexed album list has enough metadata for a local sort.
+///
+/// Stale indexes (from before `album_created` / `album_play_count` were stamped) return
+/// false for newest/frequent so the caller can fall back to `getAlbumList2`.
+pub fn index_supports_album_sort(albums: &[ratune_subsonic::Album], sort: AlbumListSort) -> bool {
+    if albums.is_empty() {
+        return true;
+    }
+    match sort {
+        AlbumListSort::Newest => {
+            let with_created = albums.iter().filter(|a| a.created.is_some()).count();
+            // Require at least half the albums to have dates; otherwise newest collapses to A–Z.
+            with_created * 2 >= albums.len()
+        }
+        AlbumListSort::Frequent => albums.iter().any(|a| a.play_count.unwrap_or(0) > 0),
+        AlbumListSort::AlphabeticalByName
+        | AlbumListSort::AlphabeticalByArtist
+        | AlbumListSort::Starred => true,
+    }
 }
 
 fn offline_artist_id(song: &Song) -> String {
@@ -366,6 +512,8 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
         genre: Option<String>,
         cover_art: Option<String>,
         user_rating: Option<u8>,
+        created: Option<String>,
+        play_count: Option<u64>,
     }
 
     // Phase 1: gather songs by album id (shared album_id stays one album even on compilations).
@@ -386,6 +534,7 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
     // Phase 2: list each album under every album artist (classical composer + performer).
     let mut by_artist: HashMap<String, (String, HashMap<String, AlbumAcc>)> = HashMap::new();
     let mut tracks_by_album: HashMap<String, Vec<Song>> = HashMap::new();
+    let mut flat_by_id: HashMap<String, AlbumAcc> = HashMap::new();
 
     for (album_id, mut songs) in by_album {
         sort_songs(&mut songs);
@@ -408,7 +557,31 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
             .find_map(|s| s.cover_art.clone())
             .or_else(|| Some(album_id.clone()));
         let user_rating = songs.iter().find_map(|s| s.album_user_rating);
+        let created = songs.iter().find_map(|s| s.album_created.clone());
+        let play_count = songs.iter().find_map(|s| s.album_play_count);
         tracks_by_album.insert(album_id.clone(), songs);
+
+        let primary_artist_id = owners
+            .first()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| "__offline_unknown_artist__".to_string());
+
+        flat_by_id.insert(
+            album_id.clone(),
+            AlbumAcc {
+                name: album_name.clone(),
+                column_artist_id: primary_artist_id,
+                display_artist_name: display_artist_name.clone(),
+                song_count,
+                duration,
+                year,
+                genre: genre.clone(),
+                cover_art: cover_art.clone(),
+                user_rating,
+                created: created.clone(),
+                play_count,
+            },
+        );
 
         for (artist_id, artist_name) in owners {
             let entry = by_artist
@@ -429,6 +602,8 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
                     genre: genre.clone(),
                     cover_art: cover_art.clone(),
                     user_rating,
+                    created: created.clone(),
+                    play_count,
                 },
             );
         }
@@ -472,6 +647,8 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
                 starred: None,
                 user_rating: album_acc.user_rating,
                 release_date: None,
+                created: album_acc.created,
+                play_count: album_acc.play_count,
                 song: Vec::new(),
             })
             .collect();
@@ -480,9 +657,37 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
         albums_by_artist.insert(artist_id, albums);
     }
 
+    let mut flat_albums: Vec<Album> = flat_by_id
+        .into_iter()
+        .map(|(album_id, album_acc)| Album {
+            id: album_id,
+            name: album_acc.name,
+            artist: Some(album_acc.display_artist_name),
+            artist_id: Some(album_acc.column_artist_id),
+            artists: vec![],
+            cover_art: album_acc.cover_art,
+            song_count: Some(album_acc.song_count),
+            duration: if album_acc.duration > 0 {
+                Some(album_acc.duration)
+            } else {
+                None
+            },
+            year: album_acc.year,
+            genre: album_acc.genre,
+            starred: None,
+            user_rating: album_acc.user_rating,
+            release_date: None,
+            created: album_acc.created,
+            play_count: album_acc.play_count,
+            song: Vec::new(),
+        })
+        .collect();
+    sort_flat_albums(&mut flat_albums, AlbumListSort::Newest);
+
     BrowseSnapshot {
         artists,
         albums_by_artist,
+        flat_albums,
         tracks_by_album,
     }
 }
@@ -506,6 +711,8 @@ mod tests {
                 album_artists: Vec::new(),
                 album_user_rating: None,
                 artist_user_rating: None,
+                album_created: None,
+                album_play_count: None,
                 track: Some(track),
                 disc_number: Some(1),
                 year: Some(2000),
@@ -563,6 +770,8 @@ mod tests {
                 album_artists: Vec::new(),
                 album_user_rating: None,
                 artist_user_rating: None,
+                album_created: None,
+                album_play_count: None,
                 track: Some(n),
                 disc_number: Some(1),
                 year: Some(2000),
@@ -621,6 +830,8 @@ mod tests {
             ],
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             track: Some(1),
             disc_number: Some(1),
             year: Some(1990),
@@ -664,6 +875,8 @@ mod tests {
                 album_artists: Vec::new(),
                 album_user_rating: None,
                 artist_user_rating: None,
+                album_created: None,
+                album_play_count: None,
                 track: Some(n),
                 disc_number: Some(1),
                 year: Some(2000),
@@ -705,6 +918,8 @@ mod tests {
                 album_artists: Vec::new(),
                 album_user_rating: Some(4),
                 artist_user_rating: Some(5),
+                album_created: None,
+                album_play_count: None,
                 track: Some(n),
                 disc_number: Some(1),
                 year: Some(2000),
@@ -791,6 +1006,8 @@ mod tests {
             album_artists: Vec::new(),
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             track: None,
             disc_number: None,
             year: None,
@@ -828,6 +1045,8 @@ mod tests {
             album_artists: Vec::new(),
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             track: None,
             disc_number: None,
             year: None,
@@ -848,6 +1067,96 @@ mod tests {
             4,
             "exactly 4 tabs as delimiters"
         );
+    }
+
+    #[test]
+    fn flat_albums_newest_sort_uses_created() {
+        fn track(id: &str, album: &str, created: &str) -> Song {
+            Song {
+                id: id.into(),
+                title: "T".into(),
+                album: Some(album.into()),
+                artist: Some("A".into()),
+                album_id: Some(format!("al-{album}")),
+                artist_id: Some("ar-a".into()),
+                album_artist: Some("A".into()),
+                album_artist_id: Some("ar-a".into()),
+                album_artists: Vec::new(),
+                album_user_rating: None,
+                artist_user_rating: None,
+                album_created: Some(created.into()),
+                album_play_count: None,
+                track: Some(1),
+                disc_number: Some(1),
+                year: None,
+                genre: None,
+                cover_art: None,
+                duration: Some(60),
+                bit_rate: None,
+                content_type: None,
+                suffix: None,
+                size: None,
+                path: None,
+                starred: None,
+                user_rating: None,
+            }
+        }
+        let snap = build_browse_snapshot(&[
+            track("1", "Old", "2020-01-01T00:00:00Z"),
+            track("2", "New", "2024-06-01T00:00:00Z"),
+        ]);
+        assert_eq!(snap.flat_albums.len(), 2);
+        assert_eq!(snap.flat_albums[0].name, "New");
+        assert_eq!(snap.flat_albums[1].name, "Old");
+        assert!(index_supports_album_sort(
+            &snap.flat_albums,
+            AlbumListSort::Newest
+        ));
+
+        let mut by_name = snap.flat_albums.clone();
+        sort_flat_albums(&mut by_name, AlbumListSort::AlphabeticalByName);
+        assert_eq!(by_name[0].name, "New");
+        assert_eq!(by_name[1].name, "Old");
+    }
+
+    #[test]
+    fn index_supports_newest_false_without_created() {
+        let snap = build_browse_snapshot(&[Song {
+            id: "1".into(),
+            title: "T".into(),
+            album: Some("A".into()),
+            artist: Some("Art".into()),
+            album_id: Some("al-a".into()),
+            artist_id: Some("ar".into()),
+            album_artist: Some("Art".into()),
+            album_artist_id: Some("ar".into()),
+            album_artists: Vec::new(),
+            album_user_rating: None,
+            artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
+            track: Some(1),
+            disc_number: Some(1),
+            year: None,
+            genre: None,
+            cover_art: None,
+            duration: Some(60),
+            bit_rate: None,
+            content_type: None,
+            suffix: None,
+            size: None,
+            path: None,
+            starred: None,
+            user_rating: None,
+        }]);
+        assert!(!index_supports_album_sort(
+            &snap.flat_albums,
+            AlbumListSort::Newest
+        ));
+        assert!(index_supports_album_sort(
+            &snap.flat_albums,
+            AlbumListSort::AlphabeticalByName
+        ));
     }
 
     #[test]

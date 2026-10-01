@@ -137,6 +137,12 @@ pub struct Song {
     /// Artist `userRating` stamped during library index walks (Browse artist column).
     #[serde(default)]
     pub artist_user_rating: Option<u8>,
+    /// Album `created` (RFC3339) stamped during library index walks for newest sort.
+    #[serde(default)]
+    pub album_created: Option<String>,
+    /// Album `playCount` stamped during library index walks for frequent sort.
+    #[serde(default)]
+    pub album_play_count: Option<u64>,
     pub track: Option<u32>,
     pub disc_number: Option<u32>,
     pub year: Option<u32>,
@@ -250,6 +256,12 @@ pub struct Album {
     /// OpenSubsonic: release date from tags (Navidrome sets this).
     #[serde(default)]
     pub release_date: Option<ItemDate>,
+    /// When the album was added to the library (RFC3339). From `getAlbum` / `getAlbumList2`.
+    #[serde(default)]
+    pub created: Option<String>,
+    /// Server play count when provided (`getAlbum` / `getAlbumList2`).
+    #[serde(default)]
+    pub play_count: Option<u64>,
     /// Tracks. Populated only by `getAlbum`, empty for search results.
     #[serde(default)]
     pub song: Vec<Song>,
@@ -435,6 +447,8 @@ impl DirectoryChild {
             album_artists: Vec::new(),
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             track: self.track,
             disc_number: self.disc_number,
             year: None,
@@ -699,7 +713,7 @@ pub(crate) struct AlbumList2Body {
     pub album_list2: Option<AlbumList2Container>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct AlbumList2Container {
     #[serde(default)]
     pub album: Vec<Album>,
