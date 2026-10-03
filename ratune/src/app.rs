@@ -112,7 +112,7 @@ fn humanize_playback_error(message: &str) -> String {
         return "Playback failed: stream interrupted (retry)".to_string();
     }
     if lower.contains("reading cached track") {
-        return "Playback failed: offline cache unreadable (try disabling cache)".to_string();
+        return "Playback failed: offline cache unreadable".to_string();
     }
     let one_line: String = raw
         .lines()
@@ -671,6 +671,11 @@ pub struct App {
     /// Monotonically increasing counter sent with every play command (`PlayUrl` / `PlayCached`).
     /// The engine uses it to discard stale downloads from rapid skips.
     play_gen: u64,
+    /// When the current play was started from disk cache: song id + `play_gen` at issue time.
+    /// Used to invalidate a corrupt cache file and re-stream once on decode failure.
+    playback_from_cache: Option<(String, u64)>,
+    /// Song id last gapless-enqueued from disk cache (invalidate on enqueue decode failure).
+    gapless_cached_song_id: Option<String>,
 
     // ── Library metadata index (Milestone 2) ───────────────────────────────────
     /// Cached tracks for fzf (text only; persisted under `~/.cache/ratune/` by default).
@@ -1007,6 +1012,8 @@ impl App {
             keybinds,
             theme,
             play_gen: 0,
+            playback_from_cache: None,
+            gapless_cached_song_id: None,
             library_index_tracks,
             library_index_by_id,
             library_index_refreshed_at,
@@ -4639,12 +4646,16 @@ impl App {
                         .map(|s| std::time::Duration::from_secs(u64::from(s)));
                     match self.resolve_playback(&next) {
                         ResolvedPlayback::Cached(path) => {
+                            self.gapless_cached_song_id = Some(next.id.clone());
                             self.send_player(PlayerCommand::EnqueueNextCached { path, duration });
                         }
                         ResolvedPlayback::Url(url) => {
+                            self.gapless_cached_song_id = None;
                             self.send_player(PlayerCommand::EnqueueNext { url, duration });
                         }
-                        ResolvedPlayback::UnavailableOffline => {}
+                        ResolvedPlayback::UnavailableOffline => {
+                            self.gapless_cached_song_id = None;
+                        }
                     }
                 }
             }
@@ -4717,6 +4728,11 @@ impl App {
                 }
             }
             PlayerEvent::Error(e) => {
+                // Corrupt / unreadable cache: drop the bad file and re-stream once when online.
+                // Skip when this TUI is a daemon client (the daemon owns playback recovery).
+                if !client && self.try_recover_corrupt_cache(&e) {
+                    return;
+                }
                 // Never eprintln here. Stderr draws over the alternate-screen TUI.
                 self.playback.player_loaded = false;
                 self.status_flash = Some((
@@ -4927,12 +4943,14 @@ impl App {
             let duration = song
                 .duration
                 .map(|s| std::time::Duration::from_secs(u64::from(s)));
+            let song_id = song.id.clone();
             let resolved = self.resolve_playback(&song);
             self.playback.current_song = Some(song);
             self.playback.player_loaded = true;
             let gen = self.play_gen;
             match resolved {
                 ResolvedPlayback::Cached(path) => {
+                    self.playback_from_cache = Some((song_id, gen));
                     self.send_player(PlayerCommand::PlayCached {
                         path,
                         duration,
@@ -4940,16 +4958,97 @@ impl App {
                     });
                 }
                 ResolvedPlayback::Url(url) => {
+                    self.playback_from_cache = None;
                     let _ = self
                         .player_tx
                         .send(PlayerCommand::PlayUrl { url, duration, gen });
                 }
                 ResolvedPlayback::UnavailableOffline => {
+                    self.playback_from_cache = None;
                     self.playback.player_loaded = false;
                     self.flash_status_secs("Track is not available in the offline cache", 6);
                 }
             }
         }
+    }
+
+    /// After a cached play/enqueue decode failure: delete the bad file and fall back to streaming.
+    ///
+    /// Offline: keep the file (may still be useful later) and only flash a status notice.
+    /// Returns `true` when the error was handled (caller should not show the raw failure).
+    fn try_recover_corrupt_cache(&mut self, err: &str) -> bool {
+        if err.starts_with("enqueue error:") {
+            let Some(song_id) = self.gapless_cached_song_id.take() else {
+                return false;
+            };
+            if !self.cache.get_const(&song_id) {
+                return false;
+            }
+            let Some(next) = self.queue.peek_next().cloned() else {
+                return false;
+            };
+            if next.id != song_id {
+                return false;
+            }
+            if !self.remote_available() {
+                self.flash_status_secs("Next track: cached file unreadable (offline)", 8);
+                return true;
+            }
+            self.cache.remove(&song_id);
+            let duration = next
+                .duration
+                .map(|s| std::time::Duration::from_secs(u64::from(s)));
+            let url = self.subsonic.stream_url(&next.id, self.config.max_bit_rate);
+            self.send_player(PlayerCommand::EnqueueNext { url, duration });
+            self.flash_status_secs("Next track: bad cache — re-streaming", 5);
+            return true;
+        }
+
+        let Some((song_id, gen)) = self.playback_from_cache.take() else {
+            return false;
+        };
+        // Stale error from a previous play after the user already skipped.
+        if gen != self.play_gen {
+            return false;
+        }
+        if !self.cache.get_const(&song_id) {
+            return false;
+        }
+
+        let current_matches = self
+            .playback
+            .current_song
+            .as_ref()
+            .is_some_and(|s| s.id == song_id);
+        if !current_matches {
+            return false;
+        }
+
+        if !self.remote_available() {
+            // Keep the on-disk file offline — user may come back online and we can
+            // invalidate+re-stream then, or the file may still be usable later.
+            self.playback.player_loaded = false;
+            self.flash_status_secs("Cached track unreadable (offline)", 8);
+            return true;
+        }
+
+        self.cache.remove(&song_id);
+        self.play_gen += 1;
+        let duration = self
+            .playback
+            .current_song
+            .as_ref()
+            .and_then(|s| s.duration)
+            .map(|s| std::time::Duration::from_secs(u64::from(s)));
+        let url = self.subsonic.stream_url(&song_id, self.config.max_bit_rate);
+        let gen = self.play_gen;
+        self.playback.player_loaded = true;
+        self.playback_from_cache = None;
+        let _ = self
+            .player_tx
+            .send(PlayerCommand::PlayUrl { url, duration, gen });
+        self.flash_status_secs("Cached track unreadable — re-streaming", 5);
+        true
     }
 
     /// Resolve a Subsonic stream URL or a finished on-disk cache file for `song`.
@@ -7635,6 +7734,7 @@ impl App {
                     let gen = self.play_gen;
                     match resolved {
                         ResolvedPlayback::Cached(path) => {
+                            self.playback_from_cache = Some((sid, gen));
                             self.send_player(ratune_player::PlayerCommand::PlayCached {
                                 path,
                                 duration: dur,
@@ -7642,6 +7742,7 @@ impl App {
                             });
                         }
                         ResolvedPlayback::Url(url) => {
+                            self.playback_from_cache = None;
                             self.send_player(ratune_player::PlayerCommand::PlayUrl {
                                 url,
                                 duration: dur,
@@ -7649,6 +7750,7 @@ impl App {
                             });
                         }
                         ResolvedPlayback::UnavailableOffline => {
+                            self.playback_from_cache = None;
                             self.playback.player_loaded = false;
                             self.flash_status_secs(
                                 "Track is not available in the offline cache",

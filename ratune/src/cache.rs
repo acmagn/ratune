@@ -181,6 +181,26 @@ impl TrackCache {
         None
     }
 
+    /// Delete a cache entry and its on-disk file (e.g. after a decode failure).
+    ///
+    /// Soft-fails on IO errors so callers can always fall back to streaming.
+    pub fn remove(&mut self, song_id: &str) {
+        if !self.enabled {
+            return;
+        }
+        if let Some(entry) = self.entries.remove(song_id) {
+            if let Err(e) = std::fs::remove_file(&entry.path) {
+                if entry.path.exists() {
+                    eprintln!(
+                        "warn: could not delete corrupt cache {}: {e}",
+                        entry.path.display()
+                    );
+                }
+            }
+            self.save_index();
+        }
+    }
+
     /// Write `data` to the cache for `song_id`.
     ///
     /// Updates the index, runs LRU eviction, then saves. Any IO error is
@@ -335,6 +355,29 @@ mod tests {
         let filtered = cache.filter_cached_tracks(&tracks);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, "cached");
+
+        std::env::remove_var("XDG_CACHE_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_deletes_file_and_index_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "ratune-cache-remove-test-{}-{}",
+            std::process::id(),
+            unix_now()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("XDG_CACHE_HOME", dir.to_str().unwrap());
+
+        let mut cache = TrackCache::load(true, 1.0);
+        cache.put("bad", "al1", b"not-audio").unwrap();
+        let path = cache.get("bad").expect("cached path");
+        assert!(path.exists());
+        cache.remove("bad");
+        assert!(!cache.get_const("bad"));
+        assert!(!path.exists());
 
         std::env::remove_var("XDG_CACHE_HOME");
         let _ = std::fs::remove_dir_all(&dir);
