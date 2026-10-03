@@ -1814,7 +1814,11 @@ impl App {
         if self.is_player_daemon() || !self.remote_available() {
             return;
         }
-        const LIST_SIZE: u32 = 50;
+        // `newest` is already server-ordered by date added. `byYear` is only
+        // year-granular; we re-sort that page by releaseDate, so a larger
+        // candidate set is needed when many albums share a year.
+        const NEWEST_LIST_SIZE: u32 = 50;
+        const BY_YEAR_LIST_SIZE: u32 = 200;
         for panel in self.config.home_panels {
             let released = match panel {
                 crate::config::HomePanel::RecentlyAdded => false,
@@ -1827,11 +1831,11 @@ impl App {
                 let res = if released {
                     // Reversed byYear range = newest year first (Subsonic API).
                     client
-                        .get_album_list2("byYear", LIST_SIZE, 0, Some(3000), Some(1))
+                        .get_album_list2("byYear", BY_YEAR_LIST_SIZE, 0, Some(3000), Some(1))
                         .await
                 } else {
                     client
-                        .get_album_list2("newest", LIST_SIZE, 0, None, None)
+                        .get_album_list2("newest", NEWEST_LIST_SIZE, 0, None, None)
                         .await
                 };
                 match res {
