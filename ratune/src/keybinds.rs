@@ -179,6 +179,8 @@ pub struct Keybinds {
     pub add_all_prepend: Option<KeySpec>,
     pub shuffle: KeySpec,
     pub unshuffle: KeySpec,
+    /// Toggle sticky shuffle mode for incoming adds (default: Ctrl+x).
+    pub toggle_shuffle_mode: KeySpec,
     pub toggle_queue_loop: KeySpec,
     pub toggle_radio: KeySpec,
     pub np_focus_queue: KeySpec,
@@ -364,6 +366,13 @@ impl Keybinds {
             add_all_prepend,
             shuffle: resolve(sec.shuffle.as_deref(), KeySpec::new(KeyCode::Char('x'))),
             unshuffle: resolve(sec.unshuffle.as_deref(), KeySpec::new(KeyCode::Char('z'))),
+            toggle_shuffle_mode: resolve(
+                sec.toggle_shuffle_mode.as_deref(),
+                KeySpec {
+                    code: KeyCode::Char('x'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ),
             toggle_queue_loop: resolve(
                 sec.toggle_queue_loop.as_deref(),
                 KeySpec {
@@ -655,5 +664,16 @@ mod tests {
         };
         let kb = Keybinds::from_section(&sec);
         assert!(kb.quit_stop.is_none());
+    }
+
+    #[test]
+    fn toggle_shuffle_mode_defaults_to_ctrl_x() {
+        let kb = Keybinds::from_section(&KeybindsSection::default());
+        assert!(kb
+            .toggle_shuffle_mode
+            .matches(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert!(!kb
+            .toggle_shuffle_mode
+            .matches(KeyCode::Char('x'), KeyModifiers::empty()));
     }
 }

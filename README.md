@@ -431,7 +431,9 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `p` / `Space` | Play / pause |
 | `n` / `N` | Next / previous |
 | `f` / `F` | Toggle favorite / toggle favorites panel (Browse) |
-| `x` / `z` | Shuffle / unshuffle |
+| `x` | Now Playing: shuffle queue · Home/Browse: toggle shuffle mode |
+| `Ctrl+x` | Toggle shuffle mode (incoming adds land shuffled) |
+| `z` | Unshuffle queue |
 | `Q` | Toggle queue loop |
 | `Shift+R` | Internet radio station picker |
 | `Ctrl+g` | Now Playing: radio pane ↔ library queue |

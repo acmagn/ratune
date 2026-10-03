@@ -123,9 +123,12 @@ pub struct Theme {
     pub dynamic: bool,
     /// Transport / chrome glyphs from `[theme.icon]`.
     pub icons: ThemeIcons,
-    /// Pane box-drawing set from `[theme.border_lines]`
-    /// (legacy: flat `[theme].border_*` / `[theme.icon].border_*`).
+    /// Pane box-drawing set currently in effect (normal or shuffle-mode override).
     pub border_set: border::Set,
+    /// Configured default border set (`[theme.border_lines].type`).
+    normal_border_set: border::Set,
+    /// Optional border set while shuffle mode is on (`[theme.border_lines.shuffle_mode]`).
+    shuffle_mode_border_set: Option<border::Set>,
 }
 
 impl Theme {
@@ -160,6 +163,8 @@ impl Theme {
                     dynamic: false,
                     icons: ThemeIcons::default(),
                     border_set: BorderType::Plain.to_border_set(),
+                    normal_border_set: BorderType::Plain.to_border_set(),
+                    shuffle_mode_border_set: None,
                 }
             }
             ThemePreset::Static => {
@@ -178,6 +183,8 @@ impl Theme {
                     dynamic: false,
                     icons: ThemeIcons::default(),
                     border_set: BorderType::Plain.to_border_set(),
+                    normal_border_set: BorderType::Plain.to_border_set(),
+                    shuffle_mode_border_set: None,
                 }
             }
             ThemePreset::Dynamic => {
@@ -196,12 +203,23 @@ impl Theme {
                     dynamic: true,
                     icons: ThemeIcons::default(),
                     border_set: BorderType::Plain.to_border_set(),
+                    normal_border_set: BorderType::Plain.to_border_set(),
+                    shuffle_mode_border_set: None,
                 }
             }
         };
 
         theme.icons = ThemeIcons::from_section(&sec.icon);
-        theme.border_set = resolve_border_set(&sec.border_source());
+        let normal = resolve_border_set(&sec.border_source());
+        theme.normal_border_set = normal;
+        theme.border_set = normal;
+        theme.shuffle_mode_border_set = sec.border_lines.shuffle_mode.as_ref().and_then(|sm| {
+            if sm.is_configured() {
+                Some(resolve_border_set(&sm.border_source()))
+            } else {
+                None
+            }
+        });
 
         let chrome_default = theme.background;
 
@@ -231,6 +249,16 @@ impl Theme {
         } else {
             self.accent
         }
+    }
+
+    /// Switch pane borders between the normal set and optional shuffle-mode set.
+    pub fn apply_shuffle_mode_borders(&mut self, shuffle_mode: bool) {
+        self.border_set = if shuffle_mode {
+            self.shuffle_mode_border_set
+                .unwrap_or(self.normal_border_set)
+        } else {
+            self.normal_border_set
+        };
     }
 }
 
@@ -533,6 +561,58 @@ mod tests {
         };
         let t = Theme::from_section(&sec);
         assert_eq!(t.border_set, ASCII_BORDER_SET);
+    }
+
+    #[test]
+    fn shuffle_mode_section_switches_active_border_set() {
+        let sec = crate::config::ThemeSection {
+            border_lines: crate::config::ThemeBorderLinesSection {
+                style: Some("rounded".into()),
+                shuffle_mode: Some(crate::config::ThemeBorderShuffleModeSection {
+                    style: Some("double".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut t = Theme::from_section(&sec);
+        let normal = t.border_set;
+        assert_eq!(normal, BorderType::Rounded.to_border_set());
+        assert!(t.shuffle_mode_border_set.is_some());
+        t.apply_shuffle_mode_borders(true);
+        assert_eq!(t.border_set, BorderType::Double.to_border_set());
+        t.apply_shuffle_mode_borders(false);
+        assert_eq!(t.border_set, normal);
+    }
+
+    #[test]
+    fn shuffle_mode_section_unset_keeps_normal_borders() {
+        let sec = crate::config::ThemeSection {
+            border_lines: crate::config::ThemeBorderLinesSection {
+                style: Some("rounded".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut t = Theme::from_section(&sec);
+        let normal = t.border_set;
+        t.apply_shuffle_mode_borders(true);
+        assert_eq!(t.border_set, normal);
+    }
+
+    #[test]
+    fn empty_shuffle_mode_section_is_noop() {
+        let sec = crate::config::ThemeSection {
+            border_lines: crate::config::ThemeBorderLinesSection {
+                style: Some("rounded".into()),
+                shuffle_mode: Some(crate::config::ThemeBorderShuffleModeSection::default()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert!(t.shuffle_mode_border_set.is_none());
     }
 
     #[test]

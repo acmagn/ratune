@@ -53,6 +53,8 @@ pub enum Action {
     RemoveFromQueue,
     Shuffle,
     Unshuffle,
+    /// Toggle sticky shuffle mode for incoming adds (does not reorder the queue).
+    ToggleShuffleMode,
     /// Toggle whether the queue loops after the last track (↻ control).
     ToggleQueueLoop,
     /// Toggle Now Playing pane focus between live radio and library queue.

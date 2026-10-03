@@ -87,6 +87,8 @@ pub struct KeybindsSection {
     pub add_all_prepend: Option<String>,
     pub shuffle: Option<String>,
     pub unshuffle: Option<String>,
+    /// Toggle sticky shuffle mode for incoming adds. Default: Ctrl+x
+    pub toggle_shuffle_mode: Option<String>,
     /// Toggle queue loop after the last track. Default: Shift+q
     pub toggle_queue_loop: Option<String>,
     /// Open or close the internet radio station picker. Default: Shift+r
@@ -1065,13 +1067,12 @@ pub struct ThemeSection {
 ///
 /// ```toml
 /// [theme.border_lines]
-/// type = "ascii"          # plain | rounded | double | thick | ascii
+/// type = "rounded"   # plain | rounded | double | thick | ascii
 /// top_left = "+"
-/// top_right = "+"
-/// bottom_left = "+"
-/// bottom_right = "+"
-/// vertical = "|"
-/// horizontal = "-"
+/// # …
+///
+/// [theme.border_lines.shuffle_mode]
+/// type = "double"    # optional; pane borders while sticky shuffle mode is on
 /// ```
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ThemeBorderLinesSection {
@@ -1079,6 +1080,9 @@ pub struct ThemeBorderLinesSection {
     /// TOML key: `type` (also accepts `border_type`).
     #[serde(default, rename = "type", alias = "border_type")]
     pub style: Option<String>,
+    /// Optional borders while sticky shuffle mode is on (`[theme.border_lines.shuffle_mode]`).
+    #[serde(default)]
+    pub shuffle_mode: Option<ThemeBorderShuffleModeSection>,
     #[serde(default, alias = "border_top_left")]
     pub top_left: Option<String>,
     #[serde(default, alias = "border_top_right")]
@@ -1091,6 +1095,54 @@ pub struct ThemeBorderLinesSection {
     pub vertical: Option<String>,
     #[serde(default, alias = "border_horizontal")]
     pub horizontal: Option<String>,
+}
+
+/// Alternate pane borders while sticky shuffle mode is on.
+///
+/// Same keys as `[theme.border_lines]` (`type` + optional edge glyphs). When this
+/// table is omitted, shuffle mode does not change borders.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct ThemeBorderShuffleModeSection {
+    /// Outline style: `plain`, `rounded`, `double`, `thick`, or `ascii`.
+    #[serde(default, rename = "type", alias = "border_type")]
+    pub style: Option<String>,
+    #[serde(default)]
+    pub top_left: Option<String>,
+    #[serde(default)]
+    pub top_right: Option<String>,
+    #[serde(default)]
+    pub bottom_left: Option<String>,
+    #[serde(default)]
+    pub bottom_right: Option<String>,
+    #[serde(default)]
+    pub vertical: Option<String>,
+    #[serde(default)]
+    pub horizontal: Option<String>,
+}
+
+impl ThemeBorderShuffleModeSection {
+    /// True when any field is set (empty `[theme.border_lines.shuffle_mode]` is a no-op).
+    pub fn is_configured(&self) -> bool {
+        self.style.is_some()
+            || self.top_left.is_some()
+            || self.top_right.is_some()
+            || self.bottom_left.is_some()
+            || self.bottom_right.is_some()
+            || self.vertical.is_some()
+            || self.horizontal.is_some()
+    }
+
+    pub fn border_source(&self) -> ThemeBorderSource<'_> {
+        ThemeBorderSource {
+            border_type: self.style.as_deref(),
+            top_left: self.top_left.as_deref(),
+            top_right: self.top_right.as_deref(),
+            bottom_left: self.bottom_left.as_deref(),
+            bottom_right: self.bottom_right.as_deref(),
+            vertical: self.vertical.as_deref(),
+            horizontal: self.horizontal.as_deref(),
+        }
+    }
 }
 
 /// Optional UI glyph overrides under `[theme.icon]`.
@@ -2020,8 +2072,9 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # add_all_replace_album  = "Ctrl+r"
 # add_all_replace_artist = "Ctrl+Shift+r"
 # add_all_prepend  = "Ctrl+Shift+p"
-# shuffle       = "x"
+# shuffle       = "x"         # Now Playing: shuffle queue; Home/Browse: toggle shuffle mode
 # unshuffle     = "z"
+# toggle_shuffle_mode = "Ctrl+x"  # sticky mode: bulk adds land shuffled
 # toggle_queue_loop = "Q"
 # toggle_radio      = "R"
 # np_focus_queue = "Ctrl+g"
@@ -2073,6 +2126,8 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # preset = "dynamic"          # static | dynamic (default) | terminal | os
 # Glyphs: [theme.icon] — see docs/sample-config.toml (transport, favorite, rating_*)
 # Outlines: [theme.border_lines] type = "ascii" | plain | rounded | …
+#   optional [theme.border_lines.shuffle_mode] type = "double" (etc.) while shuffle mode is on
+
 
 [ui]
 # album_art_backend = "kitty-apc"   # default: ratatui-image
@@ -3004,6 +3059,29 @@ border_type = "thick"
         )
         .expect("toml");
         assert_eq!(fc.theme.border_source().border_type, Some("ascii"));
+    }
+
+    #[test]
+    fn theme_border_lines_shuffle_mode_section_parses() {
+        let fc: FileConfig = toml::from_str(
+            r#"
+[theme.border_lines]
+type = "rounded"
+
+[theme.border_lines.shuffle_mode]
+type = "double"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(fc.theme.border_lines.style.as_deref(), Some("rounded"));
+        let sm = fc
+            .theme
+            .border_lines
+            .shuffle_mode
+            .as_ref()
+            .expect("section");
+        assert_eq!(sm.style.as_deref(), Some("double"));
+        assert!(sm.is_configured());
     }
 
     #[test]
