@@ -18,6 +18,8 @@ pub enum MouseClickTarget {
     HomeRecentAlbum(usize),
     HomeRecentTrack(usize),
     HomeRediscover(usize),
+    HomeRecentlyAdded(usize),
+    HomeRecentlyReleased(usize),
     PlaylistList(usize),
     PlaylistTrack(usize),
     FavoritesCategory(usize),

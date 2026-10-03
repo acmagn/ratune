@@ -247,9 +247,22 @@ pub struct Album {
     /// User rating 1–5 from Subsonic `userRating`.
     #[serde(default)]
     pub user_rating: Option<u8>,
+    /// OpenSubsonic: release date from tags (Navidrome sets this).
+    #[serde(default)]
+    pub release_date: Option<ItemDate>,
     /// Tracks. Populated only by `getAlbum`, empty for search results.
     #[serde(default)]
     pub song: Vec<Song>,
+}
+
+/// OpenSubsonic date with optional precision (`releaseDate` on AlbumID3).
+///
+/// Field order (year, month, day) makes the derived `Ord` chronological.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ItemDate {
+    pub year: Option<i32>,
+    pub month: Option<u32>,
+    pub day: Option<u32>,
 }
 
 /// A playlist entry as returned by `getPlaylists`.
@@ -670,6 +683,26 @@ pub(crate) struct SongBody {
     pub status: String,
     pub error: Option<SubsonicError>,
     pub song: Option<Song>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AlbumList2Envelope {
+    #[serde(rename = "subsonic-response")]
+    pub response: AlbumList2Body,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AlbumList2Body {
+    pub status: String,
+    pub error: Option<SubsonicError>,
+    pub album_list2: Option<AlbumList2Container>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AlbumList2Container {
+    #[serde(default)]
+    pub album: Vec<Album>,
 }
 
 #[derive(Deserialize)]
@@ -1243,5 +1276,34 @@ mod tests {
         assert_eq!(user_rating_mpris(Some(5)), Some(1.0));
         assert_eq!(user_rating_mpris(Some(3)), Some(0.6));
         assert_eq!(user_rating_mpris(None), None);
+    }
+
+    #[test]
+    fn deserialize_album_list2_with_release_date() {
+        let j = r#"{"subsonic-response":{"status":"ok","albumList2":{"album":[
+            {"id":"a","name":"Full","year":2020,
+             "releaseDate":{"year":2020,"month":5,"day":1}},
+            {"id":"b","name":"Empty","releaseDate":{}},
+            {"id":"c","name":"None"}]}}}"#;
+        let env: AlbumList2Envelope = serde_json::from_str(j).unwrap();
+        let albums = env.response.album_list2.unwrap().album;
+        assert_eq!(
+            albums[0].release_date,
+            Some(ItemDate {
+                year: Some(2020),
+                month: Some(5),
+                day: Some(1)
+            })
+        );
+        assert_eq!(albums[1].release_date, Some(ItemDate::default()));
+        assert!(albums[2].release_date.is_none());
+    }
+
+    #[test]
+    fn item_date_orders_chronologically() {
+        let d = |year, month, day| ItemDate { year, month, day };
+        assert!(d(Some(2020), None, None) < d(Some(2020), Some(1), None));
+        assert!(d(Some(2020), Some(12), Some(31)) < d(Some(2021), None, None));
+        assert!(d(None, None, None) < d(Some(1), None, None));
     }
 }

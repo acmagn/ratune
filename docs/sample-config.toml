@@ -357,15 +357,17 @@ cover_fetch_max_px = 320
 
 # [ui.hometab.layout]
 # top_height_percent — Top band height as percent of Home content (25–75). Default: 50.
-# panels — Exactly three entries, a permutation of:
-#   recent_albums | albums   (synonym)
-#   recent_tracks | tracks   (synonym)
+# panels — Exactly three distinct entries from:
+#   recent_albums     | albums (synonym)  — recently played (art strip)
+#   recent_tracks     | tracks (synonym)
 #   rediscover
+#   recently_added    | added | newest (synonyms)  — newest library additions (server)
+#   recently_released | released (synonym)         — newest releases by date/year (server)
 
 [ui.hometab.layout]
 top_height_percent = 50
 panels = ["recent_albums", "recent_tracks", "rediscover"]
-# panels = ["recent_albums", "rediscover", "recent_tracks"]
+# panels = ["recently_added", "recently_released", "rediscover"]
 
 # -----------------------------------------------------------------------------
 # [ui.browsetab]

@@ -9,7 +9,7 @@ use ratatui::Frame;
 use ratatui_image::picker::ProtocolType;
 use ratatui_image::StatefulImage;
 
-use crate::app::{App, HomeSection, HomeState, RecentAlbum};
+use crate::app::{App, HomeSection, HomeServerAlbum, HomeState, RecentAlbum};
 use crate::config::{Config, HomePanel};
 use crate::text_width::{self, Align};
 use crate::theme::{style_with_bg, Theme};
@@ -75,12 +75,24 @@ pub struct HomeLayout {
     pub bottom_h: u16,
 }
 
-#[allow(dead_code)]
 pub fn home_panel_to_section(panel: HomePanel) -> HomeSection {
     match panel {
         HomePanel::RecentAlbums => HomeSection::RecentAlbums,
         HomePanel::RecentTracks => HomeSection::RecentTracks,
         HomePanel::Rediscover => HomeSection::Rediscover,
+        HomePanel::RecentlyAdded => HomeSection::RecentlyAdded,
+        HomePanel::RecentlyReleased => HomeSection::RecentlyReleased,
+    }
+}
+
+/// First visible index of a selection-following list window (no persistent scroll
+/// state; the window slides so the cursor stays on-screen). Shared with mouse
+/// hit-testing so clicks map to the same rows the renderer shows.
+pub fn list_window_start(selected: usize, visible: usize) -> usize {
+    if visible == 0 {
+        selected
+    } else {
+        selected.saturating_sub(visible - 1)
     }
 }
 
@@ -297,7 +309,98 @@ fn render_home_panel(
         HomePanel::Rediscover => {
             render_rediscover_block(f, area, &app.home, accent, theme);
         }
+        HomePanel::RecentlyAdded => {
+            render_server_albums_block(
+                f,
+                area,
+                " Recently Added ",
+                &app.home.recently_added,
+                app.home.active_section == HomeSection::RecentlyAdded,
+                app.home.selected_index,
+                accent,
+                theme,
+            );
+        }
+        HomePanel::RecentlyReleased => {
+            render_server_albums_block(
+                f,
+                area,
+                " Recently Released ",
+                &app.home.recently_released,
+                app.home.active_section == HomeSection::RecentlyReleased,
+                app.home.selected_index,
+                accent,
+                theme,
+            );
+        }
     }
+}
+
+/// Server album list panel (Recently Added / Recently Released):
+/// `Nr. Album  Artist  (year)` rows with a selection-following window.
+#[allow(clippy::too_many_arguments)]
+fn render_server_albums_block(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    albums: &[HomeServerAlbum],
+    is_active: bool,
+    selected_index: usize,
+    accent: Color,
+    theme: &Theme,
+) {
+    let block = titled_block(title, is_active, accent, theme);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    if albums.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  No albums",
+                Style::default().fg(Color::DarkGray),
+            ))),
+            Rect { height: 1, ..inner },
+        );
+        return;
+    }
+
+    let visible = inner.height as usize;
+    let start = if is_active {
+        list_window_start(selected_index, visible)
+    } else {
+        0
+    };
+
+    // Width budget: "  N. " prefix (5) + year suffix (7) + artist ~40% of the rest.
+    let year_w = 7usize;
+    let body = (inner.width as usize).saturating_sub(5 + year_w);
+    let artist_w = (body * 40 / 100).max(8);
+    let album_w = body.saturating_sub(artist_w + 1).max(8);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, a) in albums.iter().enumerate().skip(start).take(visible) {
+        let year = a.year.map(|y| format!(" ({y})")).unwrap_or_default();
+        let text = format!(
+            " {:>2}. {} {}{}",
+            i + 1,
+            text_width::fit_to_width(&a.album_name, album_w, Align::Left),
+            text_width::fit_to_width(&a.artist_name, artist_w, Align::Left),
+            year,
+        );
+        let selected = is_active && i == selected_index;
+        let style = if selected {
+            Style::default().bg(accent).fg(Color::Black)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(text, style)));
+    }
+
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_recent_albums_list(
