@@ -39,7 +39,7 @@ Ratune was built to bring together a combination of features often missing from 
 - **Offline mode**: Starts without a server when needed; plays cached tracks, browse from library index, and detects reconnect automatically
 - **Visualizer**: FFT spectrum analyzer.
 - **Fuzzy finder**: Optional library index + external picker (fzf/skim) for fast track selection.
-- **Folder navigation**: Optional Browse layout that follows server music folders for servers that provide it.
+- **Browse**: Artist, album, and optional folder layouts for navigating the library.
 - **Customization**: Keybinds, theme, layout, now-playing lines, queue row template inspired by ncmpcpp.
 - **Mouse support**: Click tabs, transport controls, the seek bar, queue rows, and browse/home lists.
 - **Integration**: Linux MPRIS and macOS Now Playing (media keys, `playerctl` / Control Center).
@@ -317,20 +317,23 @@ Ratune plays internet radio stations configured on your Subsonic-compatible serv
 - **Formats:** direct Icecast/SHOUTcast URLs (MP3, AAC, and Ogg Vorbis).
 - **Station art:** Navidrome-uploaded logos, or optional homepage favicon fetch (`[radio] fetch_station_icons`)
 
-### Folder navigation (Browse)
+### Browse tab
 
-When enabled, the Browse tab can switch between the usual artist / album / track columns and a folder layout that mirrors how your server organizes files on disk (or per-library roots). This uses the Subsonic APIs `getMusicFolders`, `getIndexes`, and `getMusicDirectory` (tested with Navidrome and [gonic](https://github.com/sentriz/gonic)).
+The Browse tab supports several layouts under `[ui.browsetab]` (see [`docs/sample-config.toml`](docs/sample-config.toml)):
 
-**Enable in config** (`[ui.browsetab]` in [`docs/sample-config.toml`](docs/sample-config.toml)):
+- **artists** (default) — artist → album → track columns
+- **albums** — flat album list (default sort: newest by date added; **`s`** cycles newest → name → artist → frequent → starred; `/` filters by album or artist)
+- **files** — folder layout via `getMusicFolders` / `getIndexes` / `getMusicDirectory` (Navidrome, [gonic](https://github.com/sentriz/gonic), …); requires `folder_navigation = true`
 
 ```toml
 [ui.browsetab]
+# mode = "artists"   # default
+# mode = "albums"
 folder_navigation = true
-# mode = "artists"   # default on startup (default)
 # mode = "files"     # start in folder view when folder_navigation is true
 ```
 
-**Toggle at runtime:** default **`Ctrl+b`** (`toggle_folder_browse` in `[keybinds]`). Switches between folder view and artist browsing and jumps to the Browse tab. If you start in `files` mode, the first toggle to artists loads the artist list if it was not fetched yet.
+**Toggle at runtime:** default **`Ctrl+b`** (`toggle_folder_browse`). Cycles **Artists → Albums → Folders** (Folders only when `folder_navigation` is true) and jumps to the Browse tab.
 
 ### Scrobbling
 
@@ -445,7 +448,8 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `P` | Playlist overlay (Browse): `r` rename, `c` create, `X` delete |
 | `>` | Add to playlist (Browse) |
 | `Ctrl+f` | Library fzf picker (if configured) |
-| `Ctrl+b` | Toggle folder / artist browse (if `[ui.browsetab] folder_navigation = true`) |
+| `Ctrl+b` | Cycle Artists / Albums / folder browse |
+| `s` | Albums mode: cycle sort (newest / name / artist / …) |
 | `t` | Toggle dynamic theme |
 | `i` | Help |
 | `q` | Close the TUI (music keeps playing if a track is loaded) |
@@ -561,7 +565,7 @@ Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `~/.local/share/ratune/scrobble-queue.json` | Pending Last.fm scrobbles (offline retry) |
 | `~/.local/state/ratune/daemon.log` | Playback daemon log |
 | `$XDG_RUNTIME_DIR/ratune/ratune.sock` | Playback daemon socket (Unix) |
-| `~/.cache/ratune/` | Track cache, library index JSON, etc. |
+| `~/.cache/ratune/` | Track cache, library index JSON, `library_index_refresh.log`, etc. |
 
 ---
 

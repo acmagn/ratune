@@ -220,7 +220,7 @@ impl SubsonicClient {
     ) -> Result<Vec<Album>> {
         let mut params = self.auth_params();
         params.push(("type", list_type.to_string()));
-        params.push(("size", size.to_string()));
+        params.push(("size", size.min(500).to_string()));
         params.push(("offset", offset.to_string()));
         if let Some(y) = from_year {
             params.push(("fromYear", y.to_string()));
@@ -971,16 +971,60 @@ impl Default for FetchLibraryOptions {
     }
 }
 
+/// Result of a full-library metadata walk, including non-fatal per-item failures.
+#[derive(Debug, Clone, Default)]
+pub struct FetchLibraryResult {
+    pub songs: Vec<Song>,
+    /// Skipped `getArtist` / `getAlbum` / join errors (auth tokens redacted).
+    pub warnings: Vec<String>,
+}
+
+/// Redact Subsonic auth query params from error strings so they are safe to log/show.
+#[must_use]
+pub fn sanitize_subsonic_error(msg: &str) -> String {
+    let mut out = msg.to_string();
+    for key in ["t", "s", "p", "password", "pass", "token"] {
+        out = redact_query_value(&out, key);
+    }
+    out
+}
+
+fn redact_query_value(input: &str, key: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut rest = input;
+    let patterns = [format!("?{key}="), format!("&{key}=")];
+    while let Some((idx, pat_len)) = patterns
+        .iter()
+        .filter_map(|p| rest.find(p.as_str()).map(|i| (i, p.len())))
+        .min_by_key(|(i, _)| *i)
+    {
+        result.push_str(&rest[..idx + pat_len]);
+        result.push_str("***");
+        rest = &rest[idx + pat_len..];
+        if let Some(end) = rest.find(|c: char| c == '&' || c == ')' || c == ' ' || c == '"') {
+            rest = &rest[end..];
+        } else {
+            rest = "";
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
 async fn fetch_songs_for_artist_inner(
     client: &SubsonicClient,
     artist: &Artist,
     album_parallelism: usize,
-) -> Vec<Song> {
+) -> (Vec<Song>, Vec<String>) {
+    let mut warnings = Vec::new();
     let artist_detail = match client.get_artist(&artist.id).await {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ratune-subsonic: get_artist({}) failed — {e}", artist.id);
-            return Vec::new();
+            warnings.push(sanitize_subsonic_error(&format!(
+                "get_artist({}) failed — {e}",
+                artist.id
+            )));
+            return (Vec::new(), warnings);
         }
     };
 
@@ -1026,6 +1070,8 @@ async fn fetch_songs_for_artist_inner(
                     .filter(|n| !n.trim().is_empty())
                     .unwrap_or_else(|| library_name.clone());
                 let album_user_rating = normalized_user_rating(album.user_rating).or(stub_rating);
+                let album_created = album.created.clone().filter(|s| !s.trim().is_empty());
+                let album_play_count = album.play_count;
                 for mut s in album.song {
                     apply_album_artist_fallback(&mut s, album_artist, library_name_ref);
                     // Prefer API-provided album artist when present; otherwise stamp from the
@@ -1067,18 +1113,28 @@ async fn fetch_songs_for_artist_inner(
                     if s.album_user_rating.is_none() {
                         s.album_user_rating = album_user_rating;
                     }
+                    if s.album_created.is_none() {
+                        s.album_created = album_created.clone();
+                    }
+                    if s.album_play_count.is_none() {
+                        s.album_play_count = album_play_count;
+                    }
                     songs.push(s);
                 }
             }
             Ok((album_id, Err(e), _)) => {
-                eprintln!("ratune-subsonic: get_album({}) failed — {e}", album_id);
+                warnings.push(sanitize_subsonic_error(&format!(
+                    "get_album({album_id}) failed — {e}"
+                )));
             }
-            Err(e) => eprintln!("ratune-subsonic: album task join — {e}"),
+            Err(e) => {
+                warnings.push(sanitize_subsonic_error(&format!("album task join — {e}")));
+            }
         }
     }
 
     songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
-    songs
+    (songs, warnings)
 }
 
 /// Subsonic/Navidrome use `userRating` 0 (or omit) for unrated; only 1–5 are real ratings.
@@ -1142,16 +1198,19 @@ pub async fn fetch_songs_for_artist(client: &SubsonicClient, artist: &Artist) ->
         FetchLibraryOptions::default().album_parallelism,
     )
     .await
+    .0
 }
 
 /// Fetch metadata for every track in the library: `getArtists`, then for each
 /// artist `getArtist` + parallel `getAlbum` (see [`FetchLibraryOptions`]).
 ///
 /// Deduplicates by song ID and sorts by artist name, album id, disc, track.
+/// Non-fatal per-item failures are collected in [`FetchLibraryResult::warnings`]
+/// (never written to stderr — callers should log them away from the TUI).
 pub async fn fetch_all_library_songs_with_options(
     client: &SubsonicClient,
     opts: FetchLibraryOptions,
-) -> Result<Vec<Song>> {
+) -> Result<FetchLibraryResult> {
     let lib = fetch_library(client).await?;
     let artist_limit = opts.artist_parallelism.max(1);
     let album_p = opts.album_parallelism.max(1);
@@ -1168,9 +1227,11 @@ pub async fn fetch_all_library_songs_with_options(
     }
 
     let mut by_id: HashMap<String, Song> = HashMap::new();
+    let mut warnings = Vec::new();
     while let Some(joined) = set.join_next().await {
         match joined {
-            Ok(song_vecs) => {
+            Ok((song_vecs, artist_warnings)) => {
+                warnings.extend(artist_warnings);
                 for s in song_vecs {
                     match by_id.get_mut(&s.id) {
                         Some(existing) => merge_indexed_song(existing, s),
@@ -1180,7 +1241,9 @@ pub async fn fetch_all_library_songs_with_options(
                     }
                 }
             }
-            Err(e) => eprintln!("ratune-subsonic: artist task join — {e}"),
+            Err(e) => {
+                warnings.push(sanitize_subsonic_error(&format!("artist task join — {e}")));
+            }
         }
     }
 
@@ -1193,12 +1256,19 @@ pub async fn fetch_all_library_songs_with_options(
             .then_with(|| a.disc_number.unwrap_or(1).cmp(&b.disc_number.unwrap_or(1)))
             .then_with(|| a.track.unwrap_or(0).cmp(&b.track.unwrap_or(0)))
     });
-    Ok(tracks)
+    Ok(FetchLibraryResult {
+        songs: tracks,
+        warnings,
+    })
 }
 
 /// Like [`fetch_all_library_songs_with_options`] with [`FetchLibraryOptions::default`].
 pub async fn fetch_all_library_songs(client: &SubsonicClient) -> Result<Vec<Song>> {
-    fetch_all_library_songs_with_options(client, FetchLibraryOptions::default()).await
+    Ok(
+        fetch_all_library_songs_with_options(client, FetchLibraryOptions::default())
+            .await?
+            .songs,
+    )
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -1220,6 +1290,8 @@ mod tests {
             album_artists: Vec::new(),
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             track: None,
             disc_number: None,
             year: None,
@@ -1234,6 +1306,17 @@ mod tests {
             starred: None,
             user_rating: None,
         }
+    }
+
+    #[test]
+    fn sanitize_subsonic_error_redacts_auth_query_params() {
+        let raw = "get_album(x) failed — error sending request for url (https://ex.ample/rest/getAlbum?u=me&t=SECRETTOKEN&s=SALTY&v=1.16.1&c=ratune&f=json&id=x)";
+        let clean = sanitize_subsonic_error(raw);
+        assert!(!clean.contains("SECRETTOKEN"));
+        assert!(!clean.contains("SALTY"));
+        assert!(clean.contains("t=***"));
+        assert!(clean.contains("s=***"));
+        assert!(clean.contains("id=x"));
     }
 
     #[test]

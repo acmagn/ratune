@@ -16,7 +16,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     "Genre browsing is not implemented yet.\n\
-                     Use [ui.browsetab] mode = \"artists\" or \"files\".",
+                     Use [ui.browsetab] mode = \"artists\", \"albums\", or \"files\".",
                     Style::default().fg(Color::DarkGray),
                 ))),
                 area,
@@ -50,6 +50,43 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
                 matches!(app.browser_focus, BrowserColumn::Artists),
             );
             folder_tracks::render(
+                app,
+                frame,
+                cols[1],
+                matches!(app.browser_focus, BrowserColumn::Tracks),
+            );
+            playlist_overlay::render_playlist_overlay(
+                frame,
+                area,
+                &mut app.playlist_overlay,
+                accent,
+                &theme,
+            );
+            if let Some(picker) = app.playlist_picker.as_mut() {
+                playlist_overlay::render_playlist_picker(frame, area, picker, accent, &theme);
+            }
+            favorites_overlay::render_favorites_overlay(
+                frame,
+                area,
+                &mut app.favorites_overlay,
+                accent,
+                &theme,
+            );
+            return;
+        }
+        BrowseMode::Albums => {
+            let cols = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .split(area);
+            albums::render(
+                app,
+                frame,
+                cols[0],
+                matches!(
+                    app.browser_focus,
+                    BrowserColumn::Albums | BrowserColumn::Artists
+                ),
+            );
+            tracks::render(
                 app,
                 frame,
                 cols[1],

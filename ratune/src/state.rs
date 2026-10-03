@@ -27,6 +27,11 @@ pub struct LibraryState {
     pub albums: HashMap<String, LoadingState<Vec<Album>>>,
     pub selected_album: Option<usize>,
 
+    /// Flat album list for Albums browse mode (all albums, not scoped to an artist).
+    pub flat_albums: LoadingState<Vec<Album>>,
+    /// When true, [`Self::current_album`] reads from `flat_albums`.
+    pub use_flat_albums: bool,
+
     /// Songs keyed by album ID.
     pub tracks: HashMap<String, LoadingState<Vec<Song>>>,
     pub selected_track: Option<usize>,
@@ -64,8 +69,14 @@ impl LibraryState {
         }
     }
 
-    /// The album currently highlighted for the selected artist, if loaded.
+    /// The album currently highlighted, if loaded (flat list or artist-scoped).
     pub fn current_album(&self) -> Option<&Album> {
+        if self.use_flat_albums {
+            if let LoadingState::Loaded(albums) = &self.flat_albums {
+                return self.selected_album.and_then(|i| albums.get(i));
+            }
+            return None;
+        }
         let artist_id = self.current_artist().map(|a| a.id.as_str())?;
         if let Some(LoadingState::Loaded(albums)) = self.albums.get(artist_id) {
             self.selected_album.and_then(|i| albums.get(i))
@@ -782,6 +793,8 @@ mod queue_tests {
             album_artists: Vec::new(),
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             track: None,
             disc_number: None,
             year: None,

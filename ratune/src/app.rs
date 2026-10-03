@@ -339,6 +339,8 @@ pub enum LibraryUpdate {
         artist_id: String,
         result: Result<Vec<ratune_subsonic::Album>, String>,
     },
+    /// Flat album list for Albums browse mode (`getAlbumList2` fallback or index).
+    FlatAlbums(Result<Vec<ratune_subsonic::Album>, String>),
     Tracks {
         album_id: String,
         result: Result<Vec<ratune_subsonic::Song>, String>,
@@ -426,6 +428,7 @@ pub enum LibraryUpdate {
     /// - Option<String>: Navidrome `lastScan` token to persist when scan-skip is enabled.
     /// - bool: whether this refresh was explicitly forced by the user (e.g. Ctrl+g).
     /// - BrowseSnapshot: artist/album/track tree built off the UI thread.
+    /// - usize: non-fatal fetch warning count (details in library_index_refresh.log).
     LibraryIndexRefreshComplete {
         result: Result<
             (
@@ -433,6 +436,7 @@ pub enum LibraryUpdate {
                 Option<String>,
                 bool,
                 std::sync::Arc<crate::library_index::BrowseSnapshot>,
+                usize,
             ),
             String,
         >,
@@ -603,6 +607,8 @@ pub struct App {
     pub config: Config,
     /// Effective Browse tab layout: toggled at runtime when folder navigation is enabled.
     pub browser_browse_mode: BrowseMode,
+    /// Sort order for flat Albums browse mode.
+    pub album_list_sort: crate::library_index::AlbumListSort,
     pub subsonic: Arc<SubsonicClient>,
     /// Set at startup when the Subsonic `ping` fails for a non-auth reason (e.g. no network).
     pub server_reachable: bool,
@@ -936,10 +942,11 @@ impl App {
         let library_index_by_id = crate::library_index::index_by_id(&library_index_tracks);
         let browser_browse_mode = match config.browse_mode {
             BrowseMode::Genre => BrowseMode::Genre,
-            _ if !config.browse_folder_navigation => BrowseMode::Artists,
-            BrowseMode::Files => BrowseMode::Files,
-            BrowseMode::Artists => BrowseMode::Artists,
+            BrowseMode::Albums => BrowseMode::Albums,
+            BrowseMode::Files if config.browse_folder_navigation => BrowseMode::Files,
+            BrowseMode::Files | BrowseMode::Artists => BrowseMode::Artists,
         };
+        let use_flat_albums = browser_browse_mode == BrowseMode::Albums;
         let scrobble_client = config.audioscrobbler_client();
         let scrobble_queue_path = crate::scrobble_queue::scrobble_queue_path();
         let scrobble_queue = crate::scrobble_queue::ScrobbleQueue::load(&scrobble_queue_path)
@@ -947,10 +954,16 @@ impl App {
                 eprintln!("warn: could not load scrobble queue: {e:#}");
                 crate::scrobble_queue::ScrobbleQueue::default()
             });
+        let mut library = LibraryState::default();
+        library.use_flat_albums = use_flat_albums;
         let mut app = Self {
             active_tab: Tab::Home,
-            browser_focus: BrowserColumn::Artists,
-            library: LibraryState::default(),
+            browser_focus: if use_flat_albums {
+                BrowserColumn::Albums
+            } else {
+                BrowserColumn::Artists
+            },
+            library,
             radio: RadioState::default(),
             np_pane_focus: NowPlayingPaneFocus::Queue,
             folders: FolderBrowseState::default(),
@@ -973,6 +986,7 @@ impl App {
             daemon_ctrl,
             config,
             browser_browse_mode,
+            album_list_sort: crate::library_index::AlbumListSort::Newest,
             should_quit: false,
             stop_daemon_on_quit: false,
             search_mode: SearchMode::default(),
@@ -1908,6 +1922,10 @@ impl App {
         self.browser_browse_mode == BrowseMode::Files
     }
 
+    fn browse_albums(&self) -> bool {
+        self.browser_browse_mode == BrowseMode::Albums
+    }
+
     /// Spawn a task to fetch top-level music folders (file browse mode).
     pub fn fetch_music_folders(&self) {
         if !self.remote_available() {
@@ -2438,14 +2456,17 @@ impl App {
             return;
         }
         self.prepare_offline_browse();
-        if self.browser_browse_mode != BrowseMode::Files {
-            self.library.albums.clear();
-            self.library.tracks.clear();
-            self.fetch_artists();
-        } else {
+        if self.browser_browse_mode == BrowseMode::Files {
             self.folders.roots = LoadingState::Error(
                 "Folder browse requires server — switch to artists (config or toggle)".into(),
             );
+        } else if self.browser_browse_mode == BrowseMode::Albums {
+            self.library.tracks.clear();
+            self.fetch_flat_albums();
+        } else {
+            self.library.albums.clear();
+            self.library.tracks.clear();
+            self.fetch_artists();
         }
     }
 
@@ -2468,6 +2489,9 @@ impl App {
             ) {
                 self.fetch_music_folders();
             }
+        } else if self.browser_browse_mode == BrowseMode::Albums {
+            self.library.tracks.clear();
+            self.fetch_flat_albums();
         } else {
             self.library.albums.clear();
             self.library.tracks.clear();
@@ -2862,6 +2886,7 @@ impl App {
                     Option<String>,
                     bool,
                     std::sync::Arc<crate::library_index::BrowseSnapshot>,
+                    usize,
                 ),
                 String,
             > = async {
@@ -2894,9 +2919,23 @@ impl App {
                                     .await
                                     .map_err(|e| e.to_string())?;
                                     if let Err(e) = save_out.0 {
-                                        eprintln!("library index save: {e}");
+                                        let log_path =
+                                            crate::library_index::default_refresh_log_path();
+                                        if let Some(log_path) = log_path {
+                                            let msg = format!("library index save: {e}");
+                                            let _ = crate::library_index::write_refresh_log(
+                                                &log_path,
+                                                &[msg],
+                                            );
+                                        }
                                     }
-                                    return Ok((save_out.1, Some(tok.clone()), false, save_out.2));
+                                    return Ok((
+                                        save_out.1,
+                                        Some(tok.clone()),
+                                        false,
+                                        save_out.2,
+                                        0,
+                                    ));
                                 }
                             }
                         }
@@ -2907,9 +2946,20 @@ impl App {
                     album_parallelism: album_p,
                     artist_parallelism: artist_p,
                 };
-                let tracks = ratune_subsonic::fetch_all_library_songs_with_options(&client, opts)
+                let fetched = ratune_subsonic::fetch_all_library_songs_with_options(&client, opts)
                     .await
                     .map_err(|e| e.to_string())?;
+                let warning_count = fetched.warnings.len();
+                if !fetched.warnings.is_empty() {
+                    let log_path = crate::library_index::default_refresh_log_path()
+                        .unwrap_or_else(|| index_path.with_file_name("library_index_refresh.log"));
+                    let warnings = fetched.warnings;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::library_index::write_refresh_log(&log_path, &warnings)
+                    })
+                    .await;
+                }
+                let tracks = fetched.songs;
                 let scan_tok = if nav_skip {
                     client
                         .get_scan_status()
@@ -2935,9 +2985,14 @@ impl App {
                 .await
                 .map_err(|e| e.to_string())?;
                 if let Err(e) = save_out.0 {
-                    eprintln!("library index save: {e}");
+                    // Save errors stay off the TUI; refresh log is the place for diagnostics.
+                    let log_path = crate::library_index::default_refresh_log_path();
+                    if let Some(log_path) = log_path {
+                        let msg = format!("library index save: {e}");
+                        let _ = crate::library_index::write_refresh_log(&log_path, &[msg]);
+                    }
                 }
-                Ok((save_out.1, scan_tok, force, save_out.2))
+                Ok((save_out.1, scan_tok, force, save_out.2, warning_count))
             }
             .await;
             let _ = tx
@@ -2971,6 +3026,7 @@ impl App {
             };
             let result = ratune_subsonic::fetch_all_library_songs_with_options(&client, opts)
                 .await
+                .map(|r| r.songs)
                 .map_err(|e| e.to_string());
             let _ = tx
                 .send(LibraryUpdate::LibraryServerAppendQueueComplete { result })
@@ -3091,6 +3147,128 @@ impl App {
         });
         self.browse_album_fetches
             .insert(fetch_id, handle.abort_handle());
+    }
+
+    /// Load the flat album list for Albums browse mode (index-first, API fallback).
+    pub fn fetch_flat_albums(&mut self) {
+        self.library.use_flat_albums = true;
+        self.library.flat_albums = LoadingState::Loading;
+
+        if let Some(snapshot) = self.browse_snapshot() {
+            let mut albums = snapshot.flat_albums.clone();
+            // Apply current starred marks before starred-only sort.
+            if let Some(starred) = &self.server_starred {
+                let starred_ids: HashSet<&str> =
+                    starred.album.iter().map(|a| a.id.as_str()).collect();
+                for a in &mut albums {
+                    if starred_ids.contains(a.id.as_str()) && a.starred.is_none() {
+                        a.starred = Some(String::new());
+                    }
+                }
+            }
+            if crate::library_index::index_supports_album_sort(&albums, self.album_list_sort) {
+                crate::library_index::sort_flat_albums(&mut albums, self.album_list_sort);
+                self.apply_library_update(LibraryUpdate::FlatAlbums(Ok(albums)));
+                return;
+            }
+            // Stale index without created/playCount: newest/frequent would look alphabetical.
+            // Fall through to getAlbumList2 when online.
+            if !self.remote_available() || self.startup_ping_pending {
+                crate::library_index::sort_flat_albums(&mut albums, self.album_list_sort);
+                self.apply_library_update(LibraryUpdate::FlatAlbums(Ok(albums)));
+                if matches!(
+                    self.album_list_sort,
+                    crate::library_index::AlbumListSort::Newest
+                        | crate::library_index::AlbumListSort::Frequent
+                ) {
+                    self.flash_status_secs(
+                        "Albums: refresh library index (Ctrl+g) for newest/frequent dates",
+                        6,
+                    );
+                }
+                return;
+            }
+            self.flash_status_secs(
+                "Albums: fetching newest from server (Ctrl+g refreshes local dates)",
+                5,
+            );
+        } else if !self.remote_available() {
+            self.apply_library_update(LibraryUpdate::FlatAlbums(Ok(Vec::new())));
+            return;
+        } else if self.startup_ping_pending {
+            return;
+        }
+
+        self.spawn_flat_albums_api_fetch();
+    }
+
+    fn spawn_flat_albums_api_fetch(&mut self) {
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        let list_type = self.album_list_sort.api_type().to_string();
+        tokio::spawn(async move {
+            // Page through up to a few thousand albums for no-index / metadata fallback.
+            let mut all = Vec::new();
+            let page_size = 500u32;
+            let mut offset = 0u32;
+            let result = loop {
+                match client
+                    .get_album_list2(&list_type, page_size, offset, None, None)
+                    .await
+                {
+                    Ok(page) => {
+                        let n = page.len() as u32;
+                        all.extend(page);
+                        if n < page_size || offset + n >= 5000 {
+                            break Ok(all);
+                        }
+                        offset += n;
+                    }
+                    Err(e) => break Err(e.to_string()),
+                }
+            };
+            let _ = tx.send(LibraryUpdate::FlatAlbums(result)).await;
+        });
+    }
+
+    /// Cycle flat album sort and reload the list.
+    pub fn cycle_album_list_sort(&mut self) {
+        if self.browser_browse_mode != BrowseMode::Albums {
+            return;
+        }
+        self.album_list_sort = self.album_list_sort.next();
+        self.library.selected_album = Some(0);
+        self.library.albums_scroll = 0;
+        self.library.selected_track = None;
+        self.clear_browser_search();
+        self.fetch_flat_albums();
+        self.flash_status(format!("Albums sort: {}", self.album_list_sort.label()));
+    }
+
+    /// Enter Albums browse mode (flat list).
+    pub fn enter_albums_browse_mode(&mut self) {
+        self.browser_browse_mode = BrowseMode::Albums;
+        self.library.use_flat_albums = true;
+        self.browser_focus = BrowserColumn::Albums;
+        self.library.selected_album = Some(0);
+        self.library.albums_scroll = 0;
+        self.library.selected_track = None;
+        self.clear_browser_search();
+        self.fetch_flat_albums();
+    }
+
+    /// Enter Artists browse mode (artist → album → track).
+    pub fn enter_artists_browse_mode(&mut self) {
+        self.browser_browse_mode = BrowseMode::Artists;
+        self.library.use_flat_albums = false;
+        self.browser_focus = BrowserColumn::Artists;
+        self.clear_browser_search();
+        if matches!(
+            &self.library.artists,
+            LoadingState::NotLoaded | LoadingState::Error(_)
+        ) {
+            self.fetch_artists();
+        }
     }
 
     /// Spawn a task to fetch the track list for the given album.
@@ -3546,6 +3724,34 @@ impl App {
                 }
                 self.merge_server_starred();
             }
+            LibraryUpdate::FlatAlbums(result) => {
+                let mut prefetch_tracks: Option<String> = None;
+                let state = match result {
+                    Ok(albums) if !albums.is_empty() => {
+                        if self.library.selected_album.is_none() {
+                            self.library.selected_album = Some(0);
+                        }
+                        let idx = self.library.selected_album.unwrap().min(albums.len() - 1);
+                        self.library.selected_album = Some(idx);
+                        let album_id = albums[idx].id.clone();
+                        if !self.library.tracks.contains_key(&album_id) {
+                            self.library
+                                .tracks
+                                .insert(album_id.clone(), LoadingState::Loading);
+                            prefetch_tracks = Some(album_id);
+                        }
+                        LoadingState::Loaded(albums)
+                    }
+                    Ok(albums) => LoadingState::Loaded(albums),
+                    Err(e) => LoadingState::Error(e),
+                };
+                self.library.flat_albums = state;
+                self.library.use_flat_albums = true;
+                if let Some(album_id) = prefetch_tracks {
+                    self.fetch_tracks(album_id);
+                }
+                self.merge_server_starred();
+            }
             LibraryUpdate::Tracks { album_id, result } => {
                 self.browse_track_fetches.remove(&album_id);
 
@@ -3899,7 +4105,7 @@ impl App {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 match result {
-                    Ok((tracks, _navidrome_last_scan, forced, snapshot)) => {
+                    Ok((tracks, _navidrome_last_scan, forced, snapshot, warning_count)) => {
                         // Disk save already ran off the UI thread in the refresh task.
                         self.library_index_refreshed_at = Some(now);
                         self.library_index_tracks = tracks;
@@ -3908,11 +4114,18 @@ impl App {
                         self.index_browse = Some(snapshot);
                         if !self.server_reachable {
                             self.prepare_offline_browse();
-                            if self.browser_browse_mode != BrowseMode::Files {
+                            if self.browser_browse_mode == BrowseMode::Albums {
+                                self.library.tracks.clear();
+                                self.fetch_flat_albums();
+                            } else if self.browser_browse_mode != BrowseMode::Files {
                                 self.library.albums.clear();
                                 self.library.tracks.clear();
                                 self.fetch_artists();
                             }
+                        } else if self.browser_browse_mode == BrowseMode::Albums {
+                            self.abort_all_browse_fetches();
+                            self.library.tracks.clear();
+                            self.fetch_flat_albums();
                         } else if self.browser_browse_mode != BrowseMode::Files {
                             // Rebuild Browse columns from the new index (instant, no network).
                             self.abort_all_browse_fetches();
@@ -3921,13 +4134,22 @@ impl App {
                             self.fetch_artists();
                         }
                         self.merge_server_starred();
-                        let msg = if forced {
-                            "Library index refresh complete"
-                        } else {
-                            "Library index updated"
-                        };
-                        self.status_flash =
-                            Some((msg.into(), Instant::now() + Duration::from_secs(2)));
+                        let msg =
+                            if warning_count > 0 {
+                                format!(
+                                "Library index {} ({warning_count} fetch warnings — see cache log)",
+                                if forced { "refresh complete" } else { "updated" }
+                            )
+                            } else if forced {
+                                "Library index refresh complete".into()
+                            } else {
+                                "Library index updated".into()
+                            };
+                        self.status_flash = Some((
+                            msg,
+                            Instant::now()
+                                + Duration::from_secs(if warning_count > 0 { 5 } else { 2 }),
+                        ));
                         if forced && self.config.library_notify_on_forced_index_refresh {
                             crate::desktop_notify::spawn_forced_library_index_complete();
                         }
@@ -4768,6 +4990,8 @@ impl App {
             album_artists: Vec::new(),
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             track: None,
             disc_number: None,
             year: None,
@@ -5542,6 +5766,11 @@ impl App {
                         }
                     }
                 }
+                if let LoadingState::Loaded(albums) = &mut self.library.flat_albums {
+                    for a in albums.iter_mut().filter(|a| a.id == item_id) {
+                        a.starred = starred.clone();
+                    }
+                }
                 for a in self
                     .favorites_overlay
                     .albums
@@ -5637,6 +5866,11 @@ impl App {
                         for a in albums.iter_mut().filter(|a| a.id == item_id) {
                             a.user_rating = rating;
                         }
+                    }
+                }
+                if let LoadingState::Loaded(albums) = &mut self.library.flat_albums {
+                    for a in albums.iter_mut().filter(|a| a.id == item_id) {
+                        a.user_rating = rating;
                     }
                 }
                 for a in self
@@ -6190,40 +6424,50 @@ impl App {
                 self.close_radio_picker();
                 self.clear_art_on_tab_switch();
                 self.pending_gg = false;
-                if !self.config.browse_folder_navigation {
-                    self.flash_status_secs(
-                        "Folder browse disabled — set [ui.browsetab] folder_navigation = true",
-                        5,
-                    );
-                } else if self.browser_browse_mode == BrowseMode::Genre {
+                if self.browser_browse_mode == BrowseMode::Genre {
                     self.flash_status("Genre browse is not implemented (change mode in config)");
                 } else {
-                    self.browser_browse_mode = match self.browser_browse_mode {
+                    // Cycle: Artists → Albums → Files (if enabled) → Artists
+                    let next = match self.browser_browse_mode {
+                        BrowseMode::Artists => BrowseMode::Albums,
+                        BrowseMode::Albums if self.config.browse_folder_navigation => {
+                            BrowseMode::Files
+                        }
+                        BrowseMode::Albums => BrowseMode::Artists,
                         BrowseMode::Files => BrowseMode::Artists,
-                        _ => BrowseMode::Files,
+                        BrowseMode::Genre => BrowseMode::Artists,
                     };
                     self.active_tab = Tab::Browser;
                     self.clear_browser_search();
-                    if self.browser_browse_mode == BrowseMode::Files {
-                        if matches!(
-                            &self.folders.roots,
-                            LoadingState::NotLoaded | LoadingState::Error(_)
-                        ) {
-                            self.fetch_music_folders();
+                    match next {
+                        BrowseMode::Albums => {
+                            self.enter_albums_browse_mode();
+                            self.flash_status(format!(
+                                "Browse: albums ({})",
+                                self.album_list_sort.label()
+                            ));
                         }
-                        self.sync_folder_preview_from_left();
-                    } else if matches!(
-                        &self.library.artists,
-                        LoadingState::NotLoaded | LoadingState::Error(_)
-                    ) {
-                        // Cold start in `files` mode never called `fetch_artists`; load when toggling here.
-                        self.fetch_artists();
+                        BrowseMode::Files => {
+                            self.browser_browse_mode = BrowseMode::Files;
+                            self.library.use_flat_albums = false;
+                            if matches!(
+                                &self.folders.roots,
+                                LoadingState::NotLoaded | LoadingState::Error(_)
+                            ) {
+                                self.fetch_music_folders();
+                            }
+                            self.sync_folder_preview_from_left();
+                            self.flash_status("Browse: folders");
+                        }
+                        _ => {
+                            self.enter_artists_browse_mode();
+                            self.flash_status("Browse: artists / albums / tracks");
+                        }
                     }
-                    self.flash_status(match self.browser_browse_mode {
-                        BrowseMode::Files => "Browse: folders",
-                        _ => "Browse: artists / albums / tracks",
-                    });
                 }
+            }
+            Action::CycleAlbumSort => {
+                self.cycle_album_list_sort();
             }
             Action::GoToNowPlaying => {
                 self.playlist_overlay.visible = false;
@@ -6737,6 +6981,24 @@ impl App {
             }
             return;
         }
+        if self.browse_albums() {
+            match self.browser_focus {
+                BrowserColumn::Artists | BrowserColumn::Albums => {
+                    if let Some(album) = self.library.current_album() {
+                        let album_id = album.id.clone();
+                        if !self.library.tracks.contains_key(&album_id) {
+                            self.library
+                                .tracks
+                                .insert(album_id.clone(), LoadingState::Loading);
+                            self.fetch_tracks(album_id);
+                        }
+                    }
+                    self.browser_focus = BrowserColumn::Tracks;
+                }
+                BrowserColumn::Tracks => {}
+            }
+            return;
+        }
         match self.browser_focus {
             BrowserColumn::Artists => {
                 if let Some(artist) = self.library.current_artist() {
@@ -6775,6 +7037,15 @@ impl App {
                 BrowserColumn::Tracks => {
                     self.browser_focus = BrowserColumn::Artists;
                     self.sync_folder_preview_from_left();
+                }
+                BrowserColumn::Artists | BrowserColumn::Albums => {}
+            }
+            return;
+        }
+        if self.browse_albums() {
+            match self.browser_focus {
+                BrowserColumn::Tracks => {
+                    self.browser_focus = BrowserColumn::Albums;
                 }
                 BrowserColumn::Artists | BrowserColumn::Albums => {}
             }
@@ -6965,6 +7236,9 @@ impl App {
             self.handle_navigate_browser_files(dir, line_steps);
             return;
         }
+        if self.browse_albums() && self.browser_focus == BrowserColumn::Artists {
+            self.browser_focus = BrowserColumn::Albums;
+        }
         match self.browser_focus {
             BrowserColumn::Artists => {
                 let result = if let LoadingState::Loaded(artists) = &self.library.artists {
@@ -7036,18 +7310,30 @@ impl App {
             }
             BrowserColumn::Albums => {
                 let result = {
-                    let artist_id = match self.library.current_artist() {
-                        Some(a) => a.id.clone(),
-                        None => return,
+                    let albums_state = if self.library.use_flat_albums {
+                        Some(&self.library.flat_albums)
+                    } else {
+                        let artist_id = match self.library.current_artist() {
+                            Some(a) => a.id.clone(),
+                            None => return,
+                        };
+                        self.library.albums.get(&artist_id)
                     };
-                    if let Some(LoadingState::Loaded(albums)) = self.library.albums.get(&artist_id)
-                    {
+                    if let Some(LoadingState::Loaded(albums)) = albums_state {
                         let indices: Vec<usize> =
                             if let Some(q) = self.browser_column_filter(BrowserColumn::Albums) {
                                 albums
                                     .iter()
                                     .enumerate()
-                                    .filter(|(_, a)| a.name.to_lowercase().contains(q))
+                                    .filter(|(_, a)| {
+                                        let name_hit = a.name.to_lowercase().contains(q);
+                                        let artist_hit = a
+                                            .artist
+                                            .as_deref()
+                                            .map(|s| s.to_lowercase().contains(q))
+                                            .unwrap_or(false);
+                                        name_hit || artist_hit
+                                    })
                                     .map(|(i, _)| i)
                                     .collect()
                             } else {
@@ -7305,6 +7591,8 @@ impl App {
                         album_artists: Vec::new(),
                         album_user_rating: None,
                         artist_user_rating: None,
+                        album_created: None,
+                        album_play_count: None,
                         album: Some(record.album_name.clone()),
                         album_id: Some(record.album_id.clone()),
                         duration: Some(record.duration_secs as u32),
@@ -7424,6 +7712,8 @@ impl App {
             album_artists: Vec::new(),
             album_user_rating: None,
             artist_user_rating: None,
+            album_created: None,
+            album_play_count: None,
             album: Some(record.album_name.clone()),
             album_id: Some(record.album_id.clone()),
             duration: Some(record.duration_secs as u32),
