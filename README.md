@@ -350,7 +350,7 @@ Register an API account at [Last.fm](https://www.last.fm/api/account/create) (or
 enabled = true
 service = "lastfm"   # or "librefm"
 api_key = "your_application_key"
-scrobble_to_server = true   # Subsonic /scrobble (default: true; works without Last.fm)
+scrobble_to_server = true   # Subsonic now-playing + /scrobble (default: true; works without Last.fm)
 ```
 
 Same options for secret handling as Subsonic password are provided.
@@ -387,7 +387,7 @@ service = "lastfm"   # or "librefm"
 api_key = "your_application_key"
 api_secret = "your_shared_secret"
 session_key = "your_session_key"   # from `ratune scrobble-auth`
-scrobble_to_server = true   # Subsonic /scrobble (default: true; works without Last.fm)
+scrobble_to_server = true   # Subsonic now-playing + /scrobble (default: true; works without Last.fm)
 ```
 
 Get `session_key` once with `ratune scrobble-auth` (prints the key for config unless you pass `--save-keyring`).

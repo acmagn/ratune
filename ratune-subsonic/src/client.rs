@@ -863,6 +863,22 @@ impl SubsonicClient {
         check_status(&env.response.status, env.response.error.as_ref())
     }
 
+    /// Mark a song as now playing (scrobble).
+    pub async fn now_playing(&self, id: &str) -> Result<()> {
+        let mut params = self.auth_params();
+        params.push(("id", id.to_string()));
+        params.push(("submission", "false".to_string()));
+        let env: PingEnvelope = self
+            .http
+            .get(self.endpoint_url("scrobble"))
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+        check_status(&env.response.status, env.response.error.as_ref())
+    }
+
     /// Fetch structured lyrics for a song (`getLyricsBySongId`, OpenSubsonic).
     ///
     /// Returns an empty vec when the server has no lyrics for this track.

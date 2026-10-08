@@ -4393,6 +4393,12 @@ impl App {
         self.audioscrobbler_scrobbled = false;
         self.track_started_at = Some(ratune_scrobble::TrackInfo::now_secs());
         if self.remote_available() {
+            if self.config.scrobble_to_server {
+                crate::scrobble::spawn_subsonic_now_playing(
+                    self.subsonic.clone(),
+                    song.id.clone(),
+                );
+            }
             if let Some(client) = self.scrobble_client.clone() {
                 crate::scrobble::spawn_now_playing(client, crate::scrobble::track_from_song(song));
             }

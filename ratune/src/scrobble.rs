@@ -64,6 +64,14 @@ pub fn spawn_subsonic_scrobble(client: Arc<SubsonicClient>, song_id: String) {
     });
 }
 
+pub fn spawn_subsonic_now_playing(client: Arc<SubsonicClient>, song_id: String) {
+    tokio::spawn(async move {
+        if let Err(e) = client.now_playing(&song_id).await {
+            eprintln!("scrobble: server now playing failed: {e:#}");
+        }
+    });
+}
+
 pub fn spawn_flush_scrobble_queue(
     client: AudioscrobblerClient,
     entries: Vec<QueuedScrobble>,
