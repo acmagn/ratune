@@ -577,7 +577,7 @@ pub struct ScrobbleSection {
     /// Shell command whose stdout is the session key (trimmed).
     #[serde(default)]
     pub session_key_command: String,
-    /// Call the Subsonic `/scrobble` endpoint when a listen is recorded. Default: true.
+    /// Announce now-playing and call the Subsonic `/scrobble` endpoint when a listen is recorded. Default: true.
     #[serde(default = "default_scrobble_to_server")]
     pub scrobble_to_server: bool,
     /// Optional listen thresholds (defaults follow Last.fm conventions).
@@ -2236,7 +2236,7 @@ source = "lrclib"
 # session_key = ""           # from `ratune scrobble-auth`; or session_key_command / keyring
 # api_secret_command = ""
 # session_key_command = ""
-# scrobble_to_server = true   # Subsonic /scrobble for Navidrome play counts
+# scrobble_to_server = true   # Subsonic now-playing and /scrobble for Navidrome
 #
 # CLI helpers (see README § Scrobbling):
 #   ratune scrobble-api-secret [--save-keyring]
