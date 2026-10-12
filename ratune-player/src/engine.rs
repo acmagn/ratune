@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::header::ACCEPT_ENCODING;
@@ -21,6 +21,9 @@ use rodio::{Decoder, DeviceSinkBuilder, Player};
 use crate::adts_normalize::AdtsNormalizeReader;
 use crate::stream::{open_live_stream, StreamFormatHint, StreamingReader};
 use crate::tap::SampleTap;
+
+/// Pause length after which resuming a live stream reconnects instead of resuming.
+const LIVE_RECONNECT_AFTER_PAUSE: Duration = Duration::from_secs(30);
 
 type SampleBuffer = Arc<Mutex<VecDeque<f32>>>;
 
@@ -129,7 +132,12 @@ fn player_thread(
     sample_buffer: SampleBuffer,
 ) {
     // MixerDeviceSink must live for the duration of playback.
-    let mut device = match DeviceSinkBuilder::open_default_sink() {
+    // rodio's default stream-error callback `eprintln!`s, which scribbles over the
+    // TUI on transient ALSA xruns ("Buffer underrun/overrun occurred", common with
+    // live radio). Install a silent callback; fall back to rodio's device search.
+    let silent = DeviceSinkBuilder::from_default_device()
+        .and_then(|b| b.with_error_callback(|_err| {}).open_stream());
+    let mut device = match silent.or_else(|_| DeviceSinkBuilder::open_default_sink()) {
         Ok(d) => d,
         Err(e) => {
             let _ = evt_tx.send(PlayerEvent::Error(format!("audio device error: {e}")));
@@ -153,6 +161,10 @@ fn player_thread(
     // Skip-generation counter: updated every time a PlayUrl / PlayCached is received.
     // Used to discard stale loads when the user skips rapidly.
     let mut skip_gen: u64 = 0;
+    // Live radio is not seekable/resumable: remember the URL and when we paused so a
+    // long pause reconnects at the live edge instead of replaying stale buffered audio.
+    let mut live_url: Option<(String, u64)> = None;
+    let mut paused_at: Option<Instant> = None;
 
     'outer: loop {
         // ── Drain all pending commands (non-blocking) ─────────────────────────
@@ -161,6 +173,8 @@ fn player_thread(
             match cmd_rx.try_recv() {
                 Ok(PlayerCommand::Quit) => break 'outer,
                 Ok(PlayerCommand::PlayUrl { url, duration, gen }) => {
+                    live_url = None;
+                    paused_at = None;
                     play_payload(
                         PlayPayload::Url(url),
                         duration,
@@ -183,6 +197,8 @@ fn player_thread(
                     duration,
                     gen,
                 }) => {
+                    live_url = None;
+                    paused_at = None;
                     play_payload(
                         PlayPayload::Cached(path),
                         duration,
@@ -201,6 +217,8 @@ fn player_thread(
                     );
                 }
                 Ok(PlayerCommand::PlayLiveStream { url, gen }) => {
+                    live_url = Some((url.clone(), gen));
+                    paused_at = None;
                     play_live_stream(
                         url,
                         gen,
@@ -217,7 +235,39 @@ fn player_thread(
                         &sample_buffer,
                     );
                 }
-                Ok(cmd) => handle_command(
+                Ok(PlayerCommand::Pause) => {
+                    player.pause();
+                    paused_at = Some(Instant::now());
+                }
+                Ok(PlayerCommand::Resume)
+                    if live_url.is_some()
+                        && paused_at.is_some_and(|t| t.elapsed() > LIVE_RECONNECT_AFTER_PAUSE) =>
+                {
+                    // The stream kept downloading into RAM while paused and its
+                    // buffered audio is now stale; reconnect at the live edge.
+                    paused_at = None;
+                    let (url, gen) = live_url.clone().expect("checked above");
+                    play_live_stream(
+                        url,
+                        gen,
+                        &cmd_rx,
+                        &mut skip_gen,
+                        &player,
+                        &evt_tx,
+                        &mut current_total,
+                        &mut was_playing,
+                        &mut next_total,
+                        &mut next_queued,
+                        &mut about_to_finish_sent,
+                        &mut prev_elapsed,
+                        &sample_buffer,
+                    );
+                }
+                Ok(cmd) => {
+                    if matches!(cmd, PlayerCommand::Resume | PlayerCommand::Stop) {
+                        paused_at = None;
+                    }
+                    handle_command(
                     cmd,
                     &player,
                     &evt_tx,
@@ -228,7 +278,8 @@ fn player_thread(
                     &mut about_to_finish_sent,
                     &mut prev_elapsed,
                     &sample_buffer,
-                ),
+                    );
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => break 'outer,
             }
