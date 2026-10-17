@@ -39,6 +39,7 @@ Ratune was built to bring together a combination of features often missing from 
 - **Offline mode**: Starts without a server when needed; plays cached tracks, browse from library index, and detects reconnect automatically
 - **Visualizer**: FFT spectrum analyzer.
 - **Fuzzy finder**: Optional library index + external picker (fzf/skim) for fast track selection.
+- **Server search**: Optional Subsonic `search3` overlay for searching the server (in addition to local `/` filter and library fzf).
 - **Browse**: Artist, album, and optional folder layouts for navigating the library.
 - **Customization**: Keybinds, theme, layout, now-playing lines, queue row template inspired by ncmpcpp.
 - **Mouse support**: Click tabs, transport controls, the seek bar, queue rows, and browse/home lists.
@@ -268,9 +269,29 @@ preset = "dynamic"
 [radio]
 enabled = true
 # fetch_station_icons = true   # homepage favicons when no server logo
+
+# [server_search]
+# enabled = true   # Subsonic search3 overlay; off by default
 ```
 
 Remapping is done in `[keybinds]`; colors in `[theme]`; now-playing strip vs queue are different keys — see the sample and in-app help (`i`).
+
+### Server search
+
+Ratune can call Subsonic **`search3`** to find artists, albums, and songs on the server. Mainly for live server results instead of the local library index / fzf picker.
+
+**Off by default.** Enable it in config:
+
+```toml
+[server_search]
+enabled = true
+```
+
+- **Open:** Browse tab → **`Ctrl+s`** (`server_search` in `[keybinds]`; set `""` to disable the key)
+- **Search:** type a query → **Enter** (calls `search3`)
+- **Play:** **Enter** / **`Ctrl+r`** replaces the queue; **Shift+A** appends
+- **Star:** **`f`** on a result
+- Local **`/`** filter and **`Ctrl+f`** fzf still only see your indexed library
 
 ### Favorites
 
@@ -448,6 +469,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `P` | Playlist overlay (Browse): `r` rename, `c` create, `X` delete |
 | `>` | Add to playlist (Browse) |
 | `Ctrl+f` | Library fzf picker (if configured) |
+| `Ctrl+s` | Server search overlay (requires `[server_search] enabled = true`) |
 | `Ctrl+b` | Cycle Artists / Albums / folder browse |
 | `s` | Albums mode: cycle sort (newest / name / artist / …) |
 | `t` | Toggle dynamic theme |

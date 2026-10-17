@@ -26,6 +26,7 @@ use crate::state::{
     FavoritesCategory, FavoritesFocus, FavoritesOverlay, FolderBrowseState, FolderPreviewRow,
     GlobalConfirm, LibraryState, LoadingState, NowPlayingPaneFocus, PlaybackState, PlaylistFocus,
     PlaylistInputMode, PlaylistOverlay, QueueState, RadioField, RadioInputMode, RadioState,
+    ServerSearchFocus, ServerSearchOverlay,
 };
 use crate::theme::Theme;
 use image::{imageops::FilterType, DynamicImage};
@@ -478,6 +479,11 @@ pub enum LibraryUpdate {
     PrefetchStarredCache(Vec<(String, String)>),
     /// Starred library from `getStarred2` for the favorites overlay.
     StarredFetched(Result<ratune_subsonic::Starred2, String>),
+    /// Results from Subsonic `search3` (server search overlay).
+    ServerSearchResults {
+        query: String,
+        result: Result<ratune_subsonic::SearchResult3, String>,
+    },
     /// Background connectivity probe (`ping`); may repeat current state when `forced`.
     ConnectivityChanged {
         reachable: bool,
@@ -773,6 +779,7 @@ pub struct App {
     // ── Playlist overlay (Phase 8) ────────────────────────────────────────────
     pub playlist_overlay: PlaylistOverlay,
     pub favorites_overlay: FavoritesOverlay,
+    pub server_search_overlay: ServerSearchOverlay,
     /// Last `getStarred2` payload; re-applied when browse caches load after startup.
     server_starred: Option<ratune_subsonic::Starred2>,
     /// Unix seconds when the on-disk favorites snapshot was last refreshed.
@@ -1040,6 +1047,7 @@ impl App {
             pending_artist_select: None,
             playlist_overlay: PlaylistOverlay::default(),
             favorites_overlay: FavoritesOverlay::default(),
+            server_search_overlay: ServerSearchOverlay::default(),
             server_starred: None,
             favorites_snapshot_refreshed_at: None,
             playlist_picker: None,
@@ -4302,6 +4310,13 @@ impl App {
                     }
                 }
             }
+            LibraryUpdate::ServerSearchResults { query, result } => {
+                // `last_query` is set when a search is submitted; ignore superseded responses.
+                if self.server_search_overlay.last_query.as_ref() != Some(&query) {
+                    return;
+                }
+                self.apply_server_search_results(query, result);
+            }
             LibraryUpdate::ConnectivityChanged { reachable, forced } => {
                 self.apply_connectivity_changed(reachable, forced);
             }
@@ -5297,6 +5312,35 @@ impl App {
         self.favorites_queue_action(false);
     }
 
+    /// Mouse click on a category row in the server search overlay.
+    pub fn click_server_search_category(&mut self, index: usize) {
+        if index < FavoritesCategory::ALL.len() {
+            self.server_search_overlay.focus = ServerSearchFocus::Categories;
+            self.server_search_overlay.selected_category_index = index;
+            self.server_search_overlay.selected_item_index = 0;
+            self.server_search_overlay.sync_category_from_index();
+        }
+    }
+
+    pub fn double_click_server_search_category(&mut self, index: usize) {
+        self.click_server_search_category(index);
+        self.server_search_queue_action(false);
+    }
+
+    /// Mouse click on an item row in the server search overlay.
+    pub fn click_server_search_item(&mut self, index: usize) {
+        let count = self.server_search_overlay.item_count();
+        if index < count {
+            self.server_search_overlay.focus = ServerSearchFocus::Items;
+            self.server_search_overlay.selected_item_index = index;
+        }
+    }
+
+    pub fn double_click_server_search_item(&mut self, index: usize) {
+        self.click_server_search_item(index);
+        self.server_search_queue_action(false);
+    }
+
     /// Mouse click on a row in the add-to-playlist picker popup.
     pub fn click_playlist_picker_row(&mut self, index: usize) {
         if let Some(ref mut picker) = self.playlist_picker {
@@ -5664,6 +5708,43 @@ impl App {
 
     /// Item targeted by the favorite toggle key.
     fn favorite_target(&self) -> Option<FavoriteTarget> {
+        if self.server_search_overlay.visible
+            && self.server_search_overlay.focus != ServerSearchFocus::Query
+        {
+            let idx = self.server_search_overlay.selected_item_index;
+            return match self.server_search_overlay.category {
+                FavoritesCategory::Songs => {
+                    self.server_search_overlay
+                        .songs
+                        .get(idx)
+                        .map(|s| FavoriteTarget {
+                            id: s.id.clone(),
+                            kind: FavoriteKind::Song,
+                            was_starred: s.starred.is_some(),
+                        })
+                }
+                FavoritesCategory::Albums => {
+                    self.server_search_overlay
+                        .albums
+                        .get(idx)
+                        .map(|a| FavoriteTarget {
+                            id: a.id.clone(),
+                            kind: FavoriteKind::Album,
+                            was_starred: a.starred.is_some(),
+                        })
+                }
+                FavoritesCategory::Artists => {
+                    self.server_search_overlay
+                        .artists
+                        .get(idx)
+                        .map(|a| FavoriteTarget {
+                            id: a.id.clone(),
+                            kind: FavoriteKind::Artist,
+                            was_starred: a.starred.is_some(),
+                        })
+                }
+            };
+        }
         if self.favorites_overlay.visible {
             let idx = self.favorites_overlay.selected_item_index;
             return match self.favorites_overlay.category {
@@ -5768,6 +5849,40 @@ impl App {
 
     /// Item targeted by rating keys (1–5 / clear): song, album, or artist.
     fn rating_target(&self) -> Option<RatingTarget> {
+        if self.server_search_overlay.visible
+            && self.server_search_overlay.focus != ServerSearchFocus::Query
+        {
+            let idx = self.server_search_overlay.selected_item_index;
+            return match self.server_search_overlay.category {
+                FavoritesCategory::Songs => {
+                    self.server_search_overlay
+                        .songs
+                        .get(idx)
+                        .map(|s| RatingTarget {
+                            id: s.id.clone(),
+                            kind: FavoriteKind::Song,
+                        })
+                }
+                FavoritesCategory::Albums => {
+                    self.server_search_overlay
+                        .albums
+                        .get(idx)
+                        .map(|a| RatingTarget {
+                            id: a.id.clone(),
+                            kind: FavoriteKind::Album,
+                        })
+                }
+                FavoritesCategory::Artists => {
+                    self.server_search_overlay
+                        .artists
+                        .get(idx)
+                        .map(|a| RatingTarget {
+                            id: a.id.clone(),
+                            kind: FavoriteKind::Artist,
+                        })
+                }
+            };
+        }
         if self.favorites_overlay.visible {
             let idx = self.favorites_overlay.selected_item_index;
             return match self.favorites_overlay.category {
@@ -7033,6 +7148,18 @@ impl App {
             | Action::FavoritesPlay
             | Action::FavoritesAppend => {
                 self.handle_favorites_action(action);
+            }
+            Action::ToggleServerSearch
+            | Action::ServerSearchNavigate(_)
+            | Action::ServerSearchFocusQuery
+            | Action::ServerSearchFocusCategories
+            | Action::ServerSearchFocusItems
+            | Action::ServerSearchConfirm
+            | Action::ServerSearchInput(_)
+            | Action::ServerSearchBackspace
+            | Action::ServerSearchPlay
+            | Action::ServerSearchAppend => {
+                self.handle_server_search_action(action);
             }
             Action::None => {}
         }
@@ -8731,6 +8858,7 @@ impl App {
                     self.playlist_overlay.visible = false;
                 } else {
                     self.favorites_overlay.visible = false;
+                    self.server_search_overlay.visible = false;
                     self.playlist_overlay.visible = true;
                     if matches!(self.playlist_overlay.playlists, LoadingState::NotLoaded) {
                         if self.remote_available() {
@@ -8864,6 +8992,218 @@ impl App {
         });
     }
 
+    fn apply_server_search_results(
+        &mut self,
+        query: String,
+        result: Result<ratune_subsonic::SearchResult3, String>,
+    ) {
+        self.server_search_overlay.loading = false;
+        self.server_search_overlay.last_query = Some(query);
+        match result {
+            Ok(sr) => {
+                self.server_search_overlay.error = None;
+                self.server_search_overlay.songs = sr.song;
+                self.server_search_overlay.albums = sr.album;
+                self.server_search_overlay.artists = sr.artist;
+                self.server_search_overlay.selected_item_index = 0;
+                self.server_search_overlay.items_scroll = 0;
+                // Prefer the first non-empty category.
+                let prefer = [
+                    FavoritesCategory::Songs,
+                    FavoritesCategory::Albums,
+                    FavoritesCategory::Artists,
+                ];
+                for (i, cat) in prefer.iter().enumerate() {
+                    let n = match cat {
+                        FavoritesCategory::Songs => self.server_search_overlay.songs.len(),
+                        FavoritesCategory::Albums => self.server_search_overlay.albums.len(),
+                        FavoritesCategory::Artists => self.server_search_overlay.artists.len(),
+                    };
+                    if n > 0 {
+                        self.server_search_overlay.selected_category_index = i;
+                        self.server_search_overlay.category = *cat;
+                        break;
+                    }
+                }
+                self.server_search_overlay.sync_category_from_index();
+                if self.server_search_overlay.focus == ServerSearchFocus::Query {
+                    self.server_search_overlay.focus = ServerSearchFocus::Items;
+                }
+            }
+            Err(e) => {
+                self.server_search_overlay.error = Some(e);
+            }
+        }
+    }
+
+    fn fetch_server_search(&self, query: String) {
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let result = client
+                .search3(&query, 20, 20, 40)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx
+                .send(LibraryUpdate::ServerSearchResults { query, result })
+                .await;
+        });
+    }
+
+    pub fn handle_server_search_action(&mut self, action: Action) {
+        if !self.config.server_search_enabled {
+            if self.server_search_overlay.visible {
+                self.server_search_overlay.visible = false;
+            }
+            if matches!(action, Action::ToggleServerSearch) {
+                self.flash_status_secs(
+                    "Server search is disabled — set [server_search] enabled = true",
+                    6,
+                );
+            }
+            return;
+        }
+        match action {
+            Action::ToggleServerSearch => {
+                if self.server_search_overlay.visible {
+                    self.server_search_overlay.visible = false;
+                } else {
+                    if !self.remote_available() {
+                        self.flash_status_secs("Server search needs a connection", 5);
+                        return;
+                    }
+                    self.playlist_overlay.visible = false;
+                    self.favorites_overlay.visible = false;
+                    self.server_search_overlay.reset_for_open();
+                }
+            }
+            Action::ServerSearchFocusQuery => {
+                self.server_search_overlay.focus = ServerSearchFocus::Query;
+            }
+            Action::ServerSearchFocusCategories => {
+                self.server_search_overlay.focus = ServerSearchFocus::Categories;
+            }
+            Action::ServerSearchFocusItems => {
+                self.server_search_overlay.focus = ServerSearchFocus::Items;
+            }
+            Action::ServerSearchInput(c) => {
+                self.server_search_overlay.focus = ServerSearchFocus::Query;
+                self.server_search_overlay.query.push(c);
+            }
+            Action::ServerSearchBackspace => {
+                self.server_search_overlay.focus = ServerSearchFocus::Query;
+                self.server_search_overlay.query.pop();
+            }
+            Action::ServerSearchConfirm => {
+                let q = self.server_search_overlay.query.trim().to_string();
+                if q.is_empty() {
+                    self.flash_status("Enter a search query");
+                    return;
+                }
+                if !self.remote_available() {
+                    self.flash_status_secs("Server search needs a connection", 5);
+                    return;
+                }
+                self.server_search_overlay.loading = true;
+                self.server_search_overlay.error = None;
+                self.server_search_overlay.last_query = Some(q.clone());
+                self.fetch_server_search(q);
+            }
+            Action::ServerSearchNavigate(dir) => match self.server_search_overlay.focus {
+                ServerSearchFocus::Query => {
+                    if matches!(dir, Direction::Down | Direction::PageDown) {
+                        self.server_search_overlay.focus = ServerSearchFocus::Categories;
+                    }
+                }
+                ServerSearchFocus::Categories => {
+                    if matches!(dir, Direction::Up | Direction::PageUp)
+                        && self.server_search_overlay.selected_category_index == 0
+                    {
+                        self.server_search_overlay.focus = ServerSearchFocus::Query;
+                        return;
+                    }
+                    let len = FavoritesCategory::ALL.len();
+                    let page = self.server_search_overlay.categories_viewport_rows.max(1);
+                    let next = move_list_index(
+                        self.server_search_overlay.selected_category_index,
+                        len,
+                        page,
+                        dir,
+                    );
+                    if next != self.server_search_overlay.selected_category_index {
+                        self.server_search_overlay.selected_category_index = next;
+                        self.server_search_overlay.sync_category_from_index();
+                    }
+                }
+                ServerSearchFocus::Items => {
+                    if matches!(dir, Direction::Up | Direction::PageUp)
+                        && self.server_search_overlay.selected_item_index == 0
+                    {
+                        self.server_search_overlay.focus = ServerSearchFocus::Query;
+                        return;
+                    }
+                    let len = self.server_search_overlay.item_count();
+                    if len == 0 {
+                        return;
+                    }
+                    let page = self.server_search_overlay.items_viewport_rows.max(1);
+                    let next = move_list_index(
+                        self.server_search_overlay.selected_item_index,
+                        len,
+                        page,
+                        dir,
+                    );
+                    self.server_search_overlay.selected_item_index = next;
+                }
+            },
+            Action::ServerSearchPlay => self.server_search_queue_action(true),
+            Action::ServerSearchAppend => self.server_search_queue_action(false),
+            _ => {}
+        }
+    }
+
+    fn server_search_queue_action(&mut self, replace: bool) {
+        let idx = self.server_search_overlay.selected_item_index;
+        match self.server_search_overlay.category {
+            FavoritesCategory::Songs => {
+                let songs = if self.server_search_overlay.focus == ServerSearchFocus::Categories {
+                    self.server_search_overlay.songs.clone()
+                } else if let Some(song) = self.server_search_overlay.songs.get(idx) {
+                    vec![song.clone()]
+                } else {
+                    return;
+                };
+                self.favorites_apply_songs(&songs, replace);
+            }
+            FavoritesCategory::Albums => {
+                if let Some(album) = self.server_search_overlay.albums.get(idx) {
+                    if replace {
+                        self.queue.songs.clear();
+                        self.queue.cursor = 0;
+                        self.queue.scroll = 0;
+                        self.queue.clear_shuffle_state();
+                        self.fetch_and_replace_queue_with_album(album.id.clone(), true);
+                    } else {
+                        self.fetch_and_append_album_to_queue(album.id.clone());
+                    }
+                }
+            }
+            FavoritesCategory::Artists => {
+                if let Some(artist) = self.server_search_overlay.artists.get(idx) {
+                    if replace {
+                        self.queue.songs.clear();
+                        self.queue.cursor = 0;
+                        self.queue.scroll = 0;
+                        self.queue.clear_shuffle_state();
+                        self.fetch_all_tracks_for_artist(artist.id.clone(), true, false);
+                    } else {
+                        self.fetch_all_tracks_for_artist(artist.id.clone(), false, false);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn handle_favorites_action(&mut self, action: Action) {
         match action {
             Action::ToggleFavoritesOverlay => {
@@ -8871,6 +9211,7 @@ impl App {
                     self.favorites_overlay.visible = false;
                 } else {
                     self.playlist_overlay.visible = false;
+                    self.server_search_overlay.visible = false;
                     self.favorites_overlay.visible = true;
                     self.favorites_overlay.selected_category_index = 0;
                     self.favorites_overlay.selected_item_index = 0;

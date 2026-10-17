@@ -231,6 +231,8 @@ pub struct Keybinds {
     pub toggle_favorite: KeySpec,
     /// Browser: favorites overlay. Default: Shift+f (`F`)
     pub favorites_overlay: KeySpec,
+    /// Browser: server `search3` overlay. Default: Ctrl+s (`None` = disabled).
+    pub server_search: Option<KeySpec>,
     /// Rate focused/playing song 1–5 via Subsonic `setRating`.
     pub rate_song_1: KeySpec,
     pub rate_song_2: KeySpec,
@@ -504,6 +506,13 @@ impl Keybinds {
                     code: KeyCode::Char('f'),
                     modifiers: KeyModifiers::SHIFT,
                 },
+            ),
+            server_search: resolve_opt(
+                sec.server_search.as_deref(),
+                Some(KeySpec {
+                    code: KeyCode::Char('s'),
+                    modifiers: KeyModifiers::CONTROL,
+                }),
             ),
             rate_song_1: resolve(sec.rate_song_1.as_deref(), rate_default('1')),
             rate_song_2: resolve(sec.rate_song_2.as_deref(), rate_default('2')),

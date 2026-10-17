@@ -24,6 +24,8 @@ pub enum MouseClickTarget {
     PlaylistTrack(usize),
     FavoritesCategory(usize),
     FavoritesItem(usize),
+    ServerSearchCategory(usize),
+    ServerSearchItem(usize),
     QueueRow(usize),
 }
 
