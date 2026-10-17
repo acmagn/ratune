@@ -1295,6 +1295,10 @@ struct ServerSection {
     /// `keyutils` (default) or `secret-service` (gnome-keyring / KWallet). Ignored on macOS/Windows.
     #[serde(default = "default_password_keyring")]
     password_keyring: String,
+    /// `token` (default, salted MD5) or `legacy` (hex-encoded password, for servers that
+    /// reject token auth). Legacy sends a reversible secret; use HTTPS.
+    #[serde(default)]
+    auth: ratune_subsonic::AuthMode,
     /// Background Subsonic `ping` interval in seconds to detect online/offline transitions.
     /// `0` disables periodic checks (startup ping still runs). Default: 45.
     #[serde(default = "default_connection_check_interval_secs")]
@@ -1471,6 +1475,7 @@ pub struct Config {
     pub subsonic_url: String,
     pub subsonic_user: String,
     pub subsonic_pass: String,
+    pub subsonic_auth: ratune_subsonic::AuthMode,
     /// When set, shown in the status bar instead of the server URL.
     pub server_alias: Option<String>,
     /// Periodic Subsonic `ping` interval (seconds). `0` = startup ping only.
@@ -1917,6 +1922,7 @@ impl Config {
         Ok(Config {
             subsonic_url: file_cfg.server.url,
             subsonic_user: file_cfg.server.username,
+            subsonic_auth: file_cfg.server.auth,
             server_alias: file_cfg.server.alias.filter(|s| !s.trim().is_empty()),
             connection_check_interval_secs: file_cfg.server.connection_check_interval_secs,
             subsonic_pass,
@@ -2070,6 +2076,7 @@ fn create_default(path: &PathBuf) -> Result<()> {
 url = ""
 username = ""
 password = ""
+# auth = "token"   # "legacy" for servers without token auth ; use HTTPS
 
 [player]
 default_volume = 70
@@ -2745,6 +2752,23 @@ password_keyring = "secret-service"
     }
 
     #[test]
+    fn server_auth_defaults_to_token() {
+        let fc: FileConfig = toml::from_str("[server]\nurl = \"x\"\n").expect("toml");
+        assert_eq!(fc.server.auth, ratune_subsonic::AuthMode::Token);
+    }
+
+    #[test]
+    fn parses_server_auth_legacy() {
+        let fc: FileConfig = toml::from_str("[server]\nauth = \"legacy\"\n").expect("toml");
+        assert_eq!(fc.server.auth, ratune_subsonic::AuthMode::Legacy);
+    }
+
+    #[test]
+    fn rejects_unknown_server_auth() {
+        assert!(toml::from_str::<FileConfig>("[server]\nauth = \"plain\"\n").is_err());
+    }
+
+    #[test]
     fn password_keyring_defaults_to_keyutils() {
         let fc: FileConfig = toml::from_str("[server]\nurl = \"x\"\n").expect("toml");
         assert_eq!(fc.server.password_keyring, "keyutils");
@@ -2759,6 +2783,7 @@ password_keyring = "secret-service"
             password: String::new(),
             password_command: "printf '%s' 'from-cmd'".into(),
             password_keyring: default_password_keyring(),
+            auth: ratune_subsonic::AuthMode::default(),
             connection_check_interval_secs: default_connection_check_interval_secs(),
             alias: None,
         };

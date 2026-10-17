@@ -230,6 +230,17 @@ password = "your_password"
 
 Subsonic auth uses a random salt per request and `MD5(secret + salt)` ([Navidrome / Subsonic API](https://www.navidrome.org/docs/developers/subsonic-api/)).
 
+#### Legacy auth
+
+Some servers don't support token auth. Set `auth = "legacy"` to send the secret hex-encoded (`p=enc:…`) instead. The encoding is reversible, so only use this over HTTPS.
+
+```toml
+[server]
+url = "https://your-server.example.com"
+username = "you"
+auth = "legacy"
+```
+
 ### Environment overrides (optional)
 
 Overrides the config file when set:

@@ -1,22 +1,27 @@
 //! Subsonic REST API client.
 //!
 //! Implements the [Subsonic API](http://www.subsonic.org/pages/api.jsp) v1.16.1
-//! with MD5 token authentication against a Navidrome server.
+//! against Navidrome and other Subsonic-compatible servers.
 //!
 //! # Authentication
 //!
-//! Every request appends five standard query parameters:
+//! Every request appends these standard query parameters:
 //!
 //! | Param | Value |
 //! |-------|-------|
 //! | `u`   | username |
-//! | `t`   | MD5(secret + salt) as lowercase hex (`secret` = account password or compatible token) |
-//! | `s`   | random alphanumeric salt (new per request) |
+//! | `t`   | [`AuthMode::Token`]: MD5(secret + salt) as lowercase hex (`secret` = account password or compatible token) |
+//! | `s`   | [`AuthMode::Token`]: random alphanumeric salt (new per request) |
+//! | `p`   | [`AuthMode::Legacy`]: `enc:` + hex-encoded secret, sent instead of `t` and `s` |
 //! | `v`   | Subsonic API version (`1.16.1`) |
 //! | `c`   | client name (`ratune`) |
+//!
+//! Legacy mode exists for servers without token support. The hex
+//! encoding is reversible, so the secret is effectively sent in clear text; use HTTPS.
 
 use anyhow::{anyhow, Result};
 use reqwest::{Client, ClientBuilder};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,6 +60,17 @@ pub enum StarItemType {
     Song,
     Album,
     Artist,
+}
+
+/// How [`SubsonicClient`] authenticates each request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthMode {
+    /// Salted MD5 token (`t` + `s`, Subsonic 1.13+).
+    #[default]
+    Token,
+    /// Hex-encoded secret (`p=enc:…`) for servers that reject token auth.
+    Legacy,
 }
 
 // ── Auth helpers ───────────────────────────────────────────────────────────────
@@ -107,6 +123,7 @@ pub struct SubsonicClient {
     base_url: String,
     username: String,
     password: String,
+    auth_mode: AuthMode,
     http: Client,
 }
 
@@ -157,27 +174,42 @@ impl SubsonicClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             username: username.to_string(),
             password: password.to_string(),
+            auth_mode: AuthMode::default(),
             http,
         })
+    }
+
+    /// Use `mode` for every subsequent request (default: [`AuthMode::Token`]).
+    #[must_use]
+    pub fn with_auth_mode(mut self, mode: AuthMode) -> Self {
+        self.auth_mode = mode;
+        self
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────
 
     /// Build the standard authentication parameters.
     ///
-    /// A fresh random salt is generated on
+    /// In token mode a fresh random salt is generated on
     /// every call so that repeated requests are not replayable.
     fn auth_params(&self) -> Vec<(&'static str, String)> {
-        let salt = random_ascii(12);
-        let token = make_token(&self.password, &salt);
-        vec![
-            ("u", self.username.clone()),
-            ("t", token),
-            ("s", salt),
+        let mut params = vec![("u", self.username.clone())];
+        match self.auth_mode {
+            AuthMode::Token => {
+                let salt = random_ascii(12);
+                params.push(("t", make_token(&self.password, &salt)));
+                params.push(("s", salt));
+            }
+            AuthMode::Legacy => {
+                params.push(("p", format!("enc:{}", hex::encode(&self.password))));
+            }
+        }
+        params.extend([
             ("v", API_VERSION.to_string()),
             ("c", CLIENT_NAME.to_string()),
             ("f", "json".to_string()),
-        ]
+        ]);
+        params
     }
 
     fn endpoint_url(&self, name: &str) -> String {
@@ -1409,6 +1441,30 @@ mod tests {
             q.get("t").map(|t| t.len()) == Some(32),
             "MD5 hex token length"
         );
+        assert!(!q.contains_key("p"), "no legacy password param");
+    }
+
+    #[test]
+    fn stream_url_legacy_auth_sends_hex_password() {
+        let client = SubsonicClient::new("http://127.0.0.1:4533", "alice", "secret")
+            .unwrap()
+            .with_auth_mode(AuthMode::Legacy);
+        let url = url::Url::parse(&client.stream_url("track-99", 0)).unwrap();
+        let q: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
+        assert_eq!(q.get("u").map(String::as_str), Some("alice"));
+        assert_eq!(q.get("p").map(String::as_str), Some("enc:736563726574"));
+        assert!(!q.contains_key("t"), "no token param");
+        assert!(!q.contains_key("s"), "no salt param");
+        assert_eq!(q.get("id").map(String::as_str), Some("track-99"));
+    }
+
+    #[test]
+    fn sanitize_subsonic_error_redacts_legacy_password() {
+        let raw = "error sending request for url (https://ex.ample/rest/ping?u=me&p=enc:736563726574&v=1.16.1)";
+        let clean = sanitize_subsonic_error(raw);
+        assert!(!clean.contains("736563726574"));
+        assert!(clean.contains("p=***"));
+        assert!(clean.contains("v=1.16.1"));
     }
 
     #[test]

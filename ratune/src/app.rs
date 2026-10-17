@@ -908,7 +908,8 @@ impl App {
             &config.subsonic_url,
             &config.subsonic_user,
             &config.subsonic_pass,
-        )?;
+        )?
+        .with_auth_mode(config.subsonic_auth);
         let (library_tx, library_rx) = mpsc::channel(64);
         #[cfg(unix)]
         let (player_tx, player_rx, player_join, sample_buffer, daemon_ctrl) = match client {
