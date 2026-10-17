@@ -62,12 +62,17 @@
 #
 # Subsonic API auth (v1.16.1): random salt per request + MD5(secret+salt). See:
 # https://www.navidrome.org/docs/developers/subsonic-api/
+#
+# auth — "token" (default) or "legacy". Legacy sends the secret hex-encoded (p=enc:…) on every
+#        request instead of a salted token. Use it only for servers that reject token auth,
+#        and only over HTTPS: the encoding is reversible.
 
 [server]
 url = ""
 username = ""
 password = ""
 # alias = "Home server"
+# auth = "token"                      # "legacy" for servers without token auth (HTTPS only)
 # password_keyring = "keyutils"       # Linux only: "keyutils" (default) or "secret-service"
 # password_command = "secret-tool lookup service subsonic user you"
 # connection_check_interval_secs = 45  # background ping for online/offline; 0 = startup only
