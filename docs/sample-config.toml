@@ -183,6 +183,7 @@ queue_loop = true
 # rate_song_5         = "Shift+5"
 # rate_song_clear     = "Shift+0"   # clear song rating
 # favorites_overlay   = "Shift+f"   # favorites panel on Browse tab (`F`)
+# server_search       = "Ctrl+s"    # search3 overlay; requires [server_search] enabled = true; "" disables key
 
 # -----------------------------------------------------------------------------
 # [theme]
@@ -669,3 +670,16 @@ scrobble_to_server = true
 # [radio]
 # enabled = true
 # fetch_station_icons = true
+
+# -----------------------------------------------------------------------------
+# [server_search] — Subsonic search3 overlay
+# -----------------------------------------------------------------------------
+#
+# Off by default. Enable to search the server via search3 (Browse Ctrl+s).
+# Local library fzf (Ctrl+f) is separate and does not call search3.
+#
+# enabled — Show Browse server-search overlay (default keybind: Ctrl+s). Default: false.
+# Keybind: [keybinds] server_search = "Ctrl+s"  ("" disables the key even when enabled)
+
+# [server_search]
+# enabled = true

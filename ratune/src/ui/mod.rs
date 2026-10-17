@@ -17,6 +17,7 @@ pub mod popup;
 pub mod queue;
 pub mod radio_nowplaying;
 pub mod radio_popup;
+pub mod server_search_overlay;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod terminal_palette;

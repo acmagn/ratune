@@ -94,6 +94,26 @@ pub enum Action {
     FavoritesPlay,
     /// Favorites overlay: append to queue (category or item).
     FavoritesAppend,
+    /// Toggle the server `search3` overlay.
+    ToggleServerSearch,
+    /// Server search: move selection in categories or items.
+    ServerSearchNavigate(Direction),
+    /// Server search: focus the query input.
+    ServerSearchFocusQuery,
+    /// Server search: focus category list.
+    ServerSearchFocusCategories,
+    /// Server search: focus items list.
+    ServerSearchFocusItems,
+    /// Server search: submit query (`search3`).
+    ServerSearchConfirm,
+    /// Server search: type into the query buffer.
+    ServerSearchInput(char),
+    /// Server search: backspace in the query buffer.
+    ServerSearchBackspace,
+    /// Server search: replace queue and play selection.
+    ServerSearchPlay,
+    /// Server search: append selection to queue.
+    ServerSearchAppend,
     /// Scroll the help popup up one line.
     HelpScrollUp,
     /// Scroll the help popup down one line.

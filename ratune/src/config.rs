@@ -41,6 +41,8 @@ struct FileConfig {
     #[serde(default)]
     pub radio: RadioSection,
     #[serde(default)]
+    pub server_search: ServerSearchSection,
+    #[serde(default)]
     ratings: RatingsSection,
 }
 
@@ -60,6 +62,17 @@ fn default_radio_enabled() -> bool {
 
 fn default_radio_fetch_station_icons() -> bool {
     true
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct ServerSearchSection {
+    /// Enable Subsonic `search3` overlay (Browse `Ctrl+s`). Default: false.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+fn default_server_search_enabled() -> bool {
+    false
 }
 
 // ── [keybinds] ────────────────────────────────────────────────────────────────
@@ -149,6 +162,8 @@ pub struct KeybindsSection {
     pub toggle_favorite: Option<String>,
     /// Browse: open favorites overlay. Default: Shift+f (`F`)
     pub favorites_overlay: Option<String>,
+    /// Browse: open server `search3` overlay. Default: Ctrl+s
+    pub server_search: Option<String>,
     /// Rate focused/playing song 1–5 (Subsonic setRating). Defaults: Shift+1 … Shift+5
     pub rate_song_1: Option<String>,
     pub rate_song_2: Option<String>,
@@ -1476,6 +1491,8 @@ pub struct Config {
     pub radio_enabled: bool,
     /// When false, skip HTTP fetches to station homepages for Now Playing art.
     pub radio_fetch_station_icons: bool,
+    /// Subsonic `search3` overlay. Off by default.
+    pub server_search_enabled: bool,
     /// Raw keybind strings. Parsed into `Keybinds` by `App::new`.
     pub keybinds: KeybindsSection,
     /// Raw theme colour strings. Parsed into `Theme` by `App::new`.
@@ -1889,6 +1906,10 @@ impl Config {
             .radio
             .fetch_station_icons
             .unwrap_or_else(default_radio_fetch_station_icons);
+        let server_search_enabled = file_cfg
+            .server_search
+            .enabled
+            .unwrap_or_else(default_server_search_enabled);
 
         let library = file_cfg.library;
         let library_fzf = library.resolve_fzf();
@@ -1918,6 +1939,7 @@ impl Config {
             rating_stars: resolve_rating_stars(&file_cfg.theme.icon, &file_cfg.ratings),
             radio_enabled,
             radio_fetch_station_icons,
+            server_search_enabled,
             keybinds: file_cfg.keybinds,
             theme: file_cfg.theme,
             lyrics_visible,
@@ -2108,6 +2130,8 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # home_section_next = "Shift+j"
 # home_section_prev = "Shift+k"
 # home_refresh = "r"
+# favorites_overlay = "Shift+f"
+# server_search = "Ctrl+s"   # search3 overlay; requires [server_search] enabled = true
 
 # toggle_favorite = "f"
 # rate_song_1 = "Shift+1"   # rate focused/playing song 1–5 (Subsonic setRating)
@@ -2929,6 +2953,19 @@ cache_enabled = false
         let fc: FileConfig =
             toml::from_str("[player]\nbackground_playback = false\n").expect("toml");
         assert!(!fc.player.daemon);
+    }
+
+    #[test]
+    fn server_search_enabled_defaults_false() {
+        let fc: FileConfig = toml::from_str("").expect("toml");
+        assert_eq!(fc.server_search.enabled, None);
+        assert!(!default_server_search_enabled());
+    }
+
+    #[test]
+    fn parses_server_search_enabled() {
+        let fc: FileConfig = toml::from_str("[server_search]\nenabled = true\n").expect("toml");
+        assert_eq!(fc.server_search.enabled, Some(true));
     }
 
     #[test]

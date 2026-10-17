@@ -762,6 +762,131 @@ impl FavoritesOverlay {
     }
 }
 
+// ── ServerSearchOverlay (Subsonic search3) ─────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ServerSearchFocus {
+    #[default]
+    Query,
+    Categories,
+    Items,
+}
+
+/// Live `search3` results overlay.
+#[derive(Debug)]
+pub struct ServerSearchOverlay {
+    pub visible: bool,
+    pub query: String,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// Last query that produced the current result lists.
+    pub last_query: Option<String>,
+    pub category: FavoritesCategory,
+    pub focus: ServerSearchFocus,
+    pub selected_category_index: usize,
+    pub selected_item_index: usize,
+    pub categories_scroll: usize,
+    pub items_scroll: usize,
+    pub categories_viewport_rows: usize,
+    pub items_viewport_rows: usize,
+    pub songs: Vec<ratune_subsonic::Song>,
+    pub albums: Vec<ratune_subsonic::Album>,
+    pub artists: Vec<ratune_subsonic::Artist>,
+}
+
+impl Default for ServerSearchOverlay {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            query: String::new(),
+            loading: false,
+            error: None,
+            last_query: None,
+            category: FavoritesCategory::Songs,
+            focus: ServerSearchFocus::Query,
+            selected_category_index: 0,
+            selected_item_index: 0,
+            categories_scroll: 0,
+            items_scroll: 0,
+            categories_viewport_rows: 8,
+            items_viewport_rows: 8,
+            songs: Vec::new(),
+            albums: Vec::new(),
+            artists: Vec::new(),
+        }
+    }
+}
+
+impl ServerSearchOverlay {
+    pub fn item_count(&self) -> usize {
+        match self.category {
+            FavoritesCategory::Songs => self.songs.len(),
+            FavoritesCategory::Albums => self.albums.len(),
+            FavoritesCategory::Artists => self.artists.len(),
+        }
+    }
+
+    pub fn sync_category_from_index(&mut self) {
+        if let Some(cat) = FavoritesCategory::ALL.get(self.selected_category_index) {
+            self.category = *cat;
+        }
+        let max = self.item_count().saturating_sub(1);
+        self.selected_item_index = self.selected_item_index.min(max);
+        self.items_scroll = 0;
+    }
+
+    pub fn reset_for_open(&mut self) {
+        self.visible = true;
+        self.focus = ServerSearchFocus::Query;
+        self.loading = false;
+        self.error = None;
+        self.selected_category_index = 0;
+        self.selected_item_index = 0;
+        self.category = FavoritesCategory::Songs;
+        self.categories_scroll = 0;
+        self.items_scroll = 0;
+    }
+}
+
+#[cfg(test)]
+mod server_search_overlay_tests {
+    use super::*;
+
+    #[test]
+    fn reset_for_open_focuses_query() {
+        let mut o = ServerSearchOverlay {
+            visible: false,
+            focus: ServerSearchFocus::Items,
+            selected_category_index: 2,
+            selected_item_index: 5,
+            category: FavoritesCategory::Artists,
+            error: Some("old".into()),
+            loading: true,
+            ..Default::default()
+        };
+        o.reset_for_open();
+        assert!(o.visible);
+        assert_eq!(o.focus, ServerSearchFocus::Query);
+        assert_eq!(o.selected_category_index, 0);
+        assert_eq!(o.selected_item_index, 0);
+        assert_eq!(o.category, FavoritesCategory::Songs);
+        assert!(!o.loading);
+        assert!(o.error.is_none());
+    }
+
+    #[test]
+    fn sync_category_from_index_clamps_item_selection() {
+        let mut o = ServerSearchOverlay::default();
+        o.selected_category_index = 1; // Albums
+        o.selected_item_index = 99;
+        o.albums = Vec::new();
+        o.sync_category_from_index();
+        assert_eq!(o.category, FavoritesCategory::Albums);
+        assert_eq!(o.selected_item_index, 0);
+        assert_eq!(o.item_count(), 0);
+    }
+}
+
 // ── PlaybackState ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]

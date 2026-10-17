@@ -50,7 +50,10 @@ use action::{Action, Direction};
 use app::{App, BrowserColumn, Tab};
 use config::{AlbumArtBackend, BrowseMode, Config, HomePanel};
 use keybinds::Keybinds;
-use state::{FavoritesFocus, GlobalConfirm, PlaylistFocus, PlaylistInputMode, RadioInputMode};
+use state::{
+    FavoritesFocus, GlobalConfirm, PlaylistFocus, PlaylistInputMode, RadioInputMode,
+    ServerSearchFocus,
+};
 
 /// Headless playback process (`ratune daemon`).
 pub async fn run_daemon() -> Result<()> {
@@ -896,6 +899,55 @@ async fn run_loop(
                                         &app.keybinds,
                                     );
                                     app.dispatch(action);
+                                } else if app.config.server_search_enabled
+                                    && app.server_search_overlay.visible
+                                    && app.active_tab == Tab::Browser
+                                    && !app.help_visible
+                                {
+                                    let is_tab_switch = matches!(
+                                        key.code,
+                                        KeyCode::Tab
+                                            | KeyCode::BackTab
+                                            | KeyCode::Char('1')
+                                            | KeyCode::Char('2')
+                                            | KeyCode::Char('3')
+                                    );
+                                    let is_quit_stop = matches_quit_stop(
+                                        &app.keybinds,
+                                        key.code,
+                                        key.modifiers,
+                                    );
+                                    let is_quit_in_normal =
+                                        app.keybinds.quit.matches(key.code, key.modifiers)
+                                            && app.server_search_overlay.focus
+                                                != ServerSearchFocus::Query;
+                                    if is_quit_stop {
+                                        app.dispatch(Action::QuitStop);
+                                    } else if is_tab_switch {
+                                        app.server_search_overlay.visible = false;
+                                        let action = map_key(
+                                            key.code,
+                                            key.modifiers,
+                                            app.active_tab,
+                                            &app.keybinds,
+                                            &mut app.pending_gg,
+                                            app.config.ratings_enabled,
+                                            app.config.server_search_enabled,
+                                        );
+                                        app.dispatch(action);
+                                    } else if is_quit_in_normal {
+                                        app.server_search_overlay.visible = false;
+                                    } else {
+                                        let action = map_server_search_key(
+                                            key.code,
+                                            key.modifiers,
+                                            app.server_search_overlay.focus,
+                                            &app.keybinds,
+                                            app.config.ratings_enabled,
+                                            &mut app.pending_gg,
+                                        );
+                                        app.dispatch(action);
+                                    }
                                 } else if app.favorites_overlay.visible
                                     && app.active_tab == Tab::Browser
                                     && !app.help_visible
@@ -904,7 +956,7 @@ async fn run_loop(
                                         key.code,
                                         KeyCode::Tab
                                             | KeyCode::BackTab
-                                            |                                         KeyCode::Char('1')
+                                            | KeyCode::Char('1')
                                             | KeyCode::Char('2')
                                             | KeyCode::Char('3')
                                     );
@@ -926,6 +978,7 @@ async fn run_loop(
                                             &app.keybinds,
                                             &mut app.pending_gg,
                                             app.config.ratings_enabled,
+                                            app.config.server_search_enabled,
                                         );
                                         app.dispatch(action);
                                     } else if is_quit_in_normal {
@@ -982,6 +1035,7 @@ async fn run_loop(
                                             &app.keybinds,
                                             &mut app.pending_gg,
                                             app.config.ratings_enabled,
+                                            app.config.server_search_enabled,
                                         );
                                         app.dispatch(action);
                                     } else if is_quit_in_normal {
@@ -1058,6 +1112,7 @@ async fn run_loop(
                                             &app.keybinds,
                                             &mut app.pending_gg,
                                             app.config.ratings_enabled,
+                                            app.config.server_search_enabled,
                                         )
                                     };
                                     match action {
@@ -1510,6 +1565,115 @@ fn home_click_panel(x: u16, y: u16, area: Rect, panel: HomePanel, app: &mut App)
     }
 }
 
+/// Translate a key event into an `Action` when the server search overlay is open.
+fn map_server_search_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    focus: ServerSearchFocus,
+    kb: &Keybinds,
+    ratings_enabled: bool,
+    pending_gg: &mut bool,
+) -> Action {
+    if kb
+        .server_search
+        .as_ref()
+        .is_some_and(|spec| spec.matches(code, modifiers))
+    {
+        return Action::ToggleServerSearch;
+    }
+    if code == KeyCode::Esc {
+        return Action::ToggleServerSearch;
+    }
+
+    if focus == ServerSearchFocus::Query {
+        match code {
+            KeyCode::Enter => return Action::ServerSearchConfirm,
+            KeyCode::Backspace => return Action::ServerSearchBackspace,
+            KeyCode::Tab | KeyCode::Down => return Action::ServerSearchFocusCategories,
+            KeyCode::Char(c)
+                if !modifiers.intersects(
+                    KeyModifiers::CONTROL
+                        | KeyModifiers::ALT
+                        | KeyModifiers::SUPER
+                        | KeyModifiers::HYPER,
+                ) =>
+            {
+                return Action::ServerSearchInput(c);
+            }
+            _ => {}
+        }
+        // Allow volume / play-pause while typing.
+        if kb.play_pause.matches(code, modifiers) {
+            return Action::PlayPause;
+        }
+        return Action::None;
+    }
+
+    if let Some(action) = map_rate_key(code, modifiers, kb, ratings_enabled) {
+        return action;
+    }
+    if code == KeyCode::Char('/') && modifiers.is_empty() {
+        return Action::ServerSearchFocusQuery;
+    }
+    if code == KeyCode::Tab {
+        return match focus {
+            ServerSearchFocus::Categories => Action::ServerSearchFocusItems,
+            ServerSearchFocus::Items => Action::ServerSearchFocusQuery,
+            ServerSearchFocus::Query => Action::ServerSearchFocusCategories,
+        };
+    }
+    if let Some(dir) = overlay_list_nav_direction(code, modifiers, kb, pending_gg) {
+        return Action::ServerSearchNavigate(dir);
+    }
+    let shift = modifiers.intersects(KeyModifiers::SHIFT);
+    match code {
+        _ if kb.toggle_favorite.matches(code, modifiers) => Action::ToggleFavorite,
+        KeyCode::Left | KeyCode::Char('h') => Action::ServerSearchFocusCategories,
+        KeyCode::Right | KeyCode::Char('l') => Action::ServerSearchFocusItems,
+        _ if kb.column_left.matches(code, modifiers)
+            || kb.seek_backward.matches(code, modifiers) =>
+        {
+            Action::ServerSearchFocusCategories
+        }
+        _ if kb.column_right.matches(code, modifiers)
+            || kb.seek_forward.matches(code, modifiers) =>
+        {
+            Action::ServerSearchFocusItems
+        }
+        KeyCode::Enter => Action::ServerSearchPlay,
+        _ => {
+            if kb.toggle_shuffle_mode.matches(code, modifiers)
+                || kb.shuffle.matches(code, modifiers)
+            {
+                return Action::ToggleShuffleMode;
+            }
+            if kb
+                .add_all_replace_album
+                .as_ref()
+                .is_some_and(|spec| spec.matches(code, modifiers))
+            {
+                return Action::ServerSearchPlay;
+            }
+            if code == KeyCode::Char('A') || (code == KeyCode::Char('a') && shift) {
+                return Action::ServerSearchAppend;
+            }
+            // Printable chars jump back to the query box.
+            if let KeyCode::Char(c) = code {
+                if !modifiers.intersects(
+                    KeyModifiers::CONTROL
+                        | KeyModifiers::ALT
+                        | KeyModifiers::SUPER
+                        | KeyModifiers::HYPER,
+                ) && !shift
+                {
+                    return Action::ServerSearchInput(c);
+                }
+            }
+            Action::None
+        }
+    }
+}
+
 /// Translate a key event into an `Action` when the favorites overlay is open.
 fn map_favorites_key(
     code: KeyCode,
@@ -1843,6 +2007,7 @@ fn map_key(
     kb: &Keybinds,
     pending_gg: &mut bool,
     ratings_enabled: bool,
+    server_search_enabled: bool,
 ) -> Action {
     // Second `g` after a lone `g`: vim-style `gg` → top.
     if *pending_gg {
@@ -1859,6 +2024,14 @@ fn map_key(
         }
         if kb.favorites_overlay.matches(code, modifiers) {
             return Action::ToggleFavoritesOverlay;
+        }
+        if server_search_enabled
+            && kb
+                .server_search
+                .as_ref()
+                .is_some_and(|spec| spec.matches(code, modifiers))
+        {
+            return Action::ToggleServerSearch;
         }
         if kb.browser_add_to_playlist.matches(code, modifiers) {
             return Action::BrowserAddToPlaylist;
@@ -2298,9 +2471,51 @@ fn picker_list_row_at(popup: Rect, x: u16, y: u16) -> Option<usize> {
 /// Returns true when the click was consumed by a browser-tab overlay or popup.
 fn handle_browser_overlay_click(x: u16, y: u16, app: &mut App, center: Rect) -> bool {
     use crate::state::LoadingState;
-    use crate::ui::{favorites_overlay, list_scroll, playlist_overlay};
+    use crate::ui::{favorites_overlay, list_scroll, playlist_overlay, server_search_overlay};
 
-    // Render order: playlist overlay → picker → favorites (topmost last).
+    // Render order: playlist → picker → favorites → server search (topmost last).
+    if app.config.server_search_enabled && app.server_search_overlay.visible {
+        let layout = server_search_overlay::panel_layout(center);
+        if rect_contains(layout.area, x, y) {
+            if rect_contains(layout.query_row, x, y) {
+                app.server_search_overlay.focus = ServerSearchFocus::Query;
+                return true;
+            }
+            let cat_len = crate::state::FavoritesCategory::ALL.len();
+            if let Some(idx) = list_scroll::list_index_at_click(
+                layout.categories_col,
+                x,
+                y,
+                app.server_search_overlay.categories_scroll,
+                cat_len,
+            ) {
+                let target = mouse_click::MouseClickTarget::ServerSearchCategory(idx);
+                if mouse_click::is_double_click(app, target) {
+                    app.double_click_server_search_category(idx);
+                } else {
+                    app.click_server_search_category(idx);
+                }
+            } else {
+                let item_len = app.server_search_overlay.item_count();
+                if let Some(idx) = list_scroll::list_index_at_click(
+                    layout.items_col,
+                    x,
+                    y,
+                    app.server_search_overlay.items_scroll,
+                    item_len,
+                ) {
+                    let target = mouse_click::MouseClickTarget::ServerSearchItem(idx);
+                    if mouse_click::is_double_click(app, target) {
+                        app.double_click_server_search_item(idx);
+                    } else {
+                        app.click_server_search_item(idx);
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
     if app.favorites_overlay.visible {
         let layout = favorites_overlay::panel_layout(center);
         if rect_contains(layout.area, x, y) {
@@ -2407,10 +2622,25 @@ fn handle_browser_overlay_wheel(
     app: &mut App,
     center: Rect,
 ) -> bool {
-    use crate::state::{FavoritesFocus, PlaylistFocus};
-    use crate::ui::{favorites_overlay, playlist_overlay};
+    use crate::state::{FavoritesFocus, PlaylistFocus, ServerSearchFocus};
+    use crate::ui::{favorites_overlay, playlist_overlay, server_search_overlay};
 
-    // Render order: playlist overlay → picker → favorites (topmost last).
+    // Render order: playlist overlay → picker → favorites → server search (topmost last).
+    if app.config.server_search_enabled && app.server_search_overlay.visible {
+        let layout = server_search_overlay::panel_layout(center);
+        if rect_contains(layout.area, x, y) {
+            if rect_contains(layout.query_row, x, y) {
+                app.server_search_overlay.focus = ServerSearchFocus::Query;
+            } else if list_row_at(layout.categories_col, x, y).is_some() {
+                app.server_search_overlay.focus = ServerSearchFocus::Categories;
+            } else if list_row_at(layout.items_col, x, y).is_some() {
+                app.server_search_overlay.focus = ServerSearchFocus::Items;
+            }
+            app.handle_server_search_action(Action::ServerSearchNavigate(dir));
+            return true;
+        }
+    }
+
     if app.favorites_overlay.visible {
         let layout = favorites_overlay::panel_layout(center);
         if rect_contains(layout.area, x, y) {
@@ -2580,6 +2810,7 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
             terminal_size,
             app.config.radio_enabled,
             app.config.ratings_enabled,
+            app.config.server_search_enabled,
         );
         if rect_contains(popup, x, y) {
             mouse_click::clear_pending_click(app);
@@ -2931,6 +3162,7 @@ mod map_key_tests {
             &kb(),
             &mut pending,
             false,
+            false,
         );
         assert!(matches!(action, Action::ToggleShuffleMode));
     }
@@ -2945,6 +3177,7 @@ mod map_key_tests {
             &kb(),
             &mut pending,
             false,
+            false,
         );
         assert!(matches!(action, Action::ToggleShuffleMode));
     }
@@ -2958,6 +3191,7 @@ mod map_key_tests {
             Tab::NowPlaying,
             &kb(),
             &mut pending,
+            false,
             false,
         );
         assert!(matches!(action, Action::Shuffle));
@@ -2975,11 +3209,57 @@ mod map_key_tests {
                 &binds,
                 &mut pending,
                 false,
+                false,
             );
             assert!(
                 matches!(action, Action::ToggleShuffleMode),
                 "expected ToggleShuffleMode on {tab:?}"
             );
         }
+    }
+
+    #[test]
+    fn ctrl_s_toggles_server_search_when_enabled() {
+        let mut pending = false;
+        let action = map_key(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+            Tab::Browser,
+            &kb(),
+            &mut pending,
+            false,
+            true,
+        );
+        assert!(matches!(action, Action::ToggleServerSearch));
+    }
+
+    #[test]
+    fn ctrl_s_ignored_when_server_search_disabled() {
+        let mut pending = false;
+        let action = map_key(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+            Tab::Browser,
+            &kb(),
+            &mut pending,
+            false,
+            false,
+        );
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn ctrl_s_ignored_outside_browser_even_when_enabled() {
+        let mut pending = false;
+        let action = map_key(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+            Tab::Home,
+            &kb(),
+            &mut pending,
+            false,
+            true,
+        );
+        assert!(matches!(action, Action::None));
     }
 }

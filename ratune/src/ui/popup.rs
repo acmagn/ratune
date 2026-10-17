@@ -15,6 +15,7 @@ const KEY_COL_W: usize = 12;
 fn sections(
     radio_enabled: bool,
     ratings_enabled: bool,
+    server_search_enabled: bool,
 ) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     let mut playback = vec![
         ("p / Space", "Play / pause"),
@@ -29,6 +30,9 @@ fn sections(
         ("z", "Unshuffle queue"),
         ("Q", "Toggle queue loop"),
     ];
+    if server_search_enabled {
+        playback.insert(4, ("Ctrl+s", "Server search (search3)"));
+    }
     if ratings_enabled {
         playback.insert(
             3,
@@ -143,6 +147,7 @@ fn sections(
 
 fn playlist_sections(
     ratings_enabled: bool,
+    server_search_enabled: bool,
 ) -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     let mut favorites = vec![
         ("F", "Open / close favorites panel (Browse)"),
@@ -159,28 +164,48 @@ fn playlist_sections(
     }
     favorites.push(("Escape / q", "Close panel"));
 
-    vec![
-        ("Favorites", favorites),
-        (
-            "Playlists",
-            vec![
-                ("Shift+P", "Open / close playlist panel"),
-                ("j / k", "Scroll playlist / track list"),
-                ("PgUp / PgDn · Ctrl+u / Ctrl+d", "Page scroll"),
-                ("gg / G", "Jump to top / bottom"),
-                ("h / l · ← / →", "Switch between lists"),
-                ("Enter / Ctrl+r", "Replace queue and play"),
-                ("a", "Append track to queue"),
-                ("A", "Append playlist to queue"),
-                (">", "Add track to playlist (Browser)"),
-                ("c", "Create playlist"),
-                ("r", "Rename playlist"),
-                ("X", "Delete playlist (with confirm)"),
-                ("<", "Remove track from playlist"),
-                ("Escape / q", "Close panel"),
-            ],
-        ),
-    ]
+    let mut out = vec![("Favorites", favorites)];
+
+    if server_search_enabled {
+        let mut server_search = vec![
+            ("Ctrl+s", "Open / close server search (Browse)"),
+            ("Type · Enter", "Query Subsonic search3"),
+            ("j / k", "Scroll category / item list"),
+            ("PgUp / PgDn · Ctrl+u / Ctrl+d", "Page scroll"),
+            ("gg / G", "Jump to top / bottom"),
+            ("/ · Tab", "Focus query / next pane"),
+            ("h / l · ← / →", "Switch between lists"),
+            ("Enter / Ctrl+r", "Replace queue and play"),
+            ("Shift+A", "Append to queue"),
+            ("f", "Toggle favorite"),
+        ];
+        if ratings_enabled {
+            server_search.push(("Shift+1 … Shift+5", "Rate song (Shift+0 clears)"));
+        }
+        server_search.push(("Escape / q", "Close panel"));
+        out.push(("Server Search", server_search));
+    }
+
+    out.push((
+        "Playlists",
+        vec![
+            ("Shift+P", "Open / close playlist panel"),
+            ("j / k", "Scroll playlist / track list"),
+            ("PgUp / PgDn · Ctrl+u / Ctrl+d", "Page scroll"),
+            ("gg / G", "Jump to top / bottom"),
+            ("h / l · ← / →", "Switch between lists"),
+            ("Enter / Ctrl+r", "Replace queue and play"),
+            ("a", "Append track to queue"),
+            ("A", "Append playlist to queue"),
+            (">", "Add track to playlist (Browser)"),
+            ("c", "Create playlist"),
+            ("r", "Rename playlist"),
+            ("X", "Delete playlist (with confirm)"),
+            ("<", "Remove track from playlist"),
+            ("Escape / q", "Close panel"),
+        ],
+    ));
+    out
 }
 
 fn build_blocks(
@@ -238,20 +263,25 @@ fn pack_blocks_into_two_columns(
 }
 
 /// Popup bounds for the keybind help overlay (matches `render_help` sizing).
-pub fn help_popup_rect(area: Rect, radio_enabled: bool, ratings_enabled: bool) -> Rect {
+pub fn help_popup_rect(
+    area: Rect,
+    radio_enabled: bool,
+    ratings_enabled: bool,
+    server_search_enabled: bool,
+) -> Rect {
     use ratatui::style::Color;
 
     // Colors are only used for line content; lengths depend on section text alone.
     let accent = Color::White;
     let mut blocks = build_blocks(
-        sections(radio_enabled, ratings_enabled),
+        sections(radio_enabled, ratings_enabled, server_search_enabled),
         accent,
         accent,
         accent,
     );
     blocks.push(vec![Line::from("")]);
     blocks.extend(build_blocks(
-        playlist_sections(ratings_enabled),
+        playlist_sections(ratings_enabled, server_search_enabled),
         accent,
         accent,
         accent,
@@ -286,21 +316,30 @@ pub fn render_help(app: &mut App, frame: &mut Frame) {
     // roughly equal column heights.
 
     let mut blocks = build_blocks(
-        sections(app.config.radio_enabled, app.config.ratings_enabled),
+        sections(
+            app.config.radio_enabled,
+            app.config.ratings_enabled,
+            app.config.server_search_enabled,
+        ),
         accent,
         fg,
         dim,
     );
     blocks.push(vec![Line::from("")]);
     blocks.extend(build_blocks(
-        playlist_sections(app.config.ratings_enabled),
+        playlist_sections(app.config.ratings_enabled, app.config.server_search_enabled),
         accent,
         fg,
         dim,
     ));
     let (left_all, right_all) = pack_blocks_into_two_columns(blocks);
 
-    let popup_area = help_popup_rect(area, app.config.radio_enabled, app.config.ratings_enabled);
+    let popup_area = help_popup_rect(
+        area,
+        app.config.radio_enabled,
+        app.config.ratings_enabled,
+        app.config.server_search_enabled,
+    );
 
     // ── Render ────────────────────────────────────────────────────────────────
 
