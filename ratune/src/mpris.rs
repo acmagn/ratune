@@ -386,7 +386,6 @@ mod macos {
     use objc2::{AnyThread, ClassType, MainThreadMarker, Message};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSImage};
     use objc2_core_foundation::CGSize;
-    use objc2_core_foundation::{CFRunLoopGetMain, CFRunLoopStop};
     use objc2_foundation::{
         NSBundle, NSDictionary, NSMutableDictionary, NSNumber, NSRunLoop, NSString, NSURL,
     };
@@ -690,14 +689,8 @@ mod macos {
 
     pub(super) fn run_main_loop() {
         crate::debug::log("now-playing: entering main NSRunLoop");
-        // Blocks until `stop_main_loop` (daemon exit).
+        // Cannot be stopped from another thread; the daemon exits the process instead.
         NSRunLoop::mainRunLoop().run();
-    }
-
-    pub(super) fn stop_main_loop() {
-        if let Some(rl) = CFRunLoopGetMain() {
-            CFRunLoopStop(&rl);
-        }
     }
 
     pub(super) fn spawn_server(
@@ -764,12 +757,6 @@ pub fn macos_prepare_appkit() {
 pub fn macos_run_main_loop() {
     macos::run_main_loop();
 }
-
-#[cfg(target_os = "macos")]
-pub fn macos_stop_main_loop() {
-    macos::stop_main_loop();
-}
-
 /// Snapshot of playback state read by the OS media thread (must stay cheap to clone for refresh).
 #[derive(Debug, Clone)]
 pub struct MprisSnapshot {
