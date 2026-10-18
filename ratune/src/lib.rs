@@ -71,27 +71,39 @@ pub async fn run_daemon() -> Result<()> {
 ///
 /// Call this instead of [`run_daemon`] from `main` on macOS so Control Center
 /// and media keys can attach to the process.
+///
+/// Never returns: the process exits from the async thread once the daemon
+/// finishes, because `NSRunLoop::run` cannot be stopped from another thread.
 #[cfg(all(unix, target_os = "macos"))]
-pub fn run_daemon_macos() -> Result<()> {
+pub fn run_daemon_macos() -> ! {
     mpris::macos_prepare_appkit();
-    let (done_tx, done_rx) = std::sync::mpsc::channel::<Result<()>>();
     std::thread::Builder::new()
         .name("ratune-daemon-async".into())
         .spawn(move || {
-            let result = (|| {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()?;
-                rt.block_on(daemon::run_daemon())
-            })();
-            mpris::macos_stop_main_loop();
-            let _ = done_tx.send(result);
+            let result = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(anyhow::Error::from)
+                .and_then(|rt| {
+                    let result = rt.block_on(daemon::run_daemon());
+                    // Dropping the runtime waits on any in-flight blocking tasks.
+                    std::mem::forget(rt);
+                    result
+                });
+            match result {
+                Ok(()) => process::exit(0),
+                Err(e) => {
+                    eprintln!("Error: {e:?}");
+                    process::exit(1);
+                }
+            }
         })
         .expect("spawn daemon async thread");
     mpris::macos_run_main_loop();
-    done_rx
-        .recv()
-        .unwrap_or_else(|_| Err(anyhow::anyhow!("daemon thread ended without a result")))
+    // `NSRunLoop::run` returns immediately when the main run loop has no input sources.
+    loop {
+        std::thread::park();
+    }
 }
 
 /// Stop a running playback daemon (`ratune stop`).
