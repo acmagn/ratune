@@ -306,6 +306,7 @@ pub struct PlaylistDetail {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InternetRadioStation {
+    #[serde(deserialize_with = "deserialize_flexible_id")]
     pub id: String,
     pub name: String,
     pub stream_url: String,
@@ -1075,6 +1076,13 @@ mod tests {
         let j = r#"{"id":"1","name":"FM","streamUrl":"http://x/aac","coverArt":"ra-1_0"}"#;
         let s: InternetRadioStation = serde_json::from_str(j).unwrap();
         assert_eq!(s.cover_art.as_deref(), Some("ra-1_0"));
+    }
+
+    #[test]
+    fn deserialize_radio_station_with_integer_id() {
+        let j = r#"{"id":1,"name":"FM","streamUrl":"http://x/aac","homePageUrl":null}"#;
+        let s: InternetRadioStation = serde_json::from_str(j).unwrap();
+        assert_eq!(s.id, "1");
     }
 
     #[test]
