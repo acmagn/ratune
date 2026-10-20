@@ -1,15 +1,16 @@
 //! Streaming HTTP → growing-buffer reader for the audio pipeline.
 //!
-//! `open_stream` starts a background thread that downloads `url` via
-//! `reqwest::blocking`, appending chunks to a shared `Vec<u8>`.  The
-//! `StreamingReader` returned immediately exposes that buffer as a `Read +
-//! Seek` handle that blocks only when the read position overtakes the download.
+//! `open_stream` sends the request, then a background thread appends the body
+//! to a shared `Vec<u8>`.  The `StreamingReader` returned exposes that buffer
+//! as a `Read + Seek` handle that blocks only when the read position overtakes
+//! the download.
 //!
 //! Keeping all bytes (never freeing) means backward seeks always succeed
 //! without re-fetching.  Trade-off: memory grows with the file (~14–30 MB for
 //! a typical song), which is acceptable for a music player.
 //!
 //! Playback starts as soon as enough bytes have been buffered (see constants).
+//! The download stops early once every reader has been dropped.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,7 +18,9 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE};
+use reqwest::blocking::{Client, Response};
+use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, RANGE};
+use reqwest::StatusCode;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -42,7 +45,20 @@ const LIVE_PREBUFFER_WAIT: Duration = Duration::from_secs(20);
 /// Longer wait for AAC. Icecast can be slow to deliver the first audio frame.
 const LIVE_AAC_PREBUFFER_WAIT: Duration = Duration::from_secs(35);
 
+/// Max wait for the library-track prebuffer before giving up.
+const TRACK_PREBUFFER_WAIT: Duration = Duration::from_secs(30);
+
+/// Range-request retries after a library track's body is cut off mid-download.
+const TRACK_MAX_RESUMES: u32 = 3;
+
 // ── Shared inner state ────────────────────────────────────────────────────────
+
+/// Library tracks are finite and may be resumed; live radio never ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamKind {
+    Live,
+    Track,
+}
 
 struct StreamInner {
     /// Append-only byte buffer.  Never shrinks.
@@ -54,9 +70,31 @@ struct StreamInner {
     error: Mutex<Option<String>>,
     /// HTTP `Content-Type` from the stream response, when present.
     content_type: Mutex<Option<String>>,
+    /// `Content-Length` of a library track (never set for live radio).
+    total_len: Option<u64>,
+}
+
+impl StreamInner {
+    fn new(content_type: Option<String>, total_len: Option<u64>) -> Self {
+        Self {
+            buf: Mutex::new(Vec::new()),
+            cond: Condvar::new(),
+            done: AtomicBool::new(false),
+            error: Mutex::new(None),
+            content_type: Mutex::new(content_type),
+            total_len,
+        }
+    }
 }
 
 // ── Public reader ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadStatus {
+    InProgress,
+    Complete,
+    Failed,
+}
 
 /// A `Read + Seek` handle to a streaming HTTP response.
 pub struct StreamingReader {
@@ -77,11 +115,11 @@ impl Read for StreamingReader {
                 })
                 .unwrap()
         };
-        if let Some(err) = self.inner.error.lock().unwrap().clone() {
-            return Err(std::io::Error::other(err));
-        }
         let available = buf.len().saturating_sub(pos);
         if available == 0 {
+            if let Some(err) = self.inner.error.lock().unwrap().clone() {
+                return Err(std::io::Error::other(err));
+            }
             return Ok(0); // EOF
         }
         let n = out.len().min(available);
@@ -98,11 +136,13 @@ impl Seek for StreamingReader {
             SeekFrom::Start(off) => off as i64,
             SeekFrom::Current(off) => self.pos as i64 + off,
             SeekFrom::End(off) => {
-                // Use bytes received so far. Waiting for `done` hangs on live radio
-                // streams (symphonia probes with SeekFrom::End during format detection).
-                let guard = self.inner.buf.lock().unwrap();
-                let len = guard.len() as i64;
-                drop(guard);
+                // Without a Content-Length, use bytes received so far. Waiting for
+                // `done` hangs on live radio streams (symphonia probes with
+                // SeekFrom::End during format detection).
+                let len = match self.inner.total_len {
+                    Some(total) => total as i64,
+                    None => self.inner.buf.lock().unwrap().len() as i64,
+                };
                 len + off
             }
         };
@@ -119,13 +159,20 @@ impl Seek for StreamingReader {
 
 // ── Public constructor ────────────────────────────────────────────────────────
 
-/// Start streaming `url` in a background thread and return a reader that
-/// blocks only when the read position overtakes the download.
+/// Start streaming a library track and return a reader that blocks only when
+/// the read position overtakes the download.
 ///
 /// Returns after `PREBUFFER_BYTES` have been buffered (or the download
-/// completes, whichever comes first).
+/// completes, whichever comes first). [`StreamingReader::content_length`]
+/// reports the server's `Content-Length`, when it sent one.
 pub fn open_stream(url: &str) -> Result<StreamingReader> {
-    open_stream_with_prebuffer(url, PREBUFFER_BYTES, None, PrebufferMode::MinBytes)
+    open_stream_with_prebuffer(
+        url,
+        StreamKind::Track,
+        PREBUFFER_BYTES,
+        Some(TRACK_PREBUFFER_WAIT),
+        PrebufferMode::MinBytes,
+    )
 }
 
 /// Max playlist indirections (M3U/PLS wrappers) before giving up.
@@ -149,6 +196,7 @@ fn open_live_stream_resolved(url: &str, depth: u8) -> Result<StreamingReader> {
     } else {
         open_stream_with_prebuffer(
             url,
+            StreamKind::Live,
             LIVE_PREBUFFER_BYTES,
             Some(LIVE_PREBUFFER_WAIT),
             PrebufferMode::MinBytes,
@@ -170,6 +218,7 @@ enum PrebufferMode {
 fn open_stream_with_aac_prebuffer(url: &str) -> Result<StreamingReader> {
     open_stream_with_prebuffer(
         url,
+        StreamKind::Live,
         LIVE_AAC_PREBUFFER_BYTES,
         Some(LIVE_AAC_PREBUFFER_WAIT),
         PrebufferMode::AdtsSync,
@@ -178,23 +227,32 @@ fn open_stream_with_aac_prebuffer(url: &str) -> Result<StreamingReader> {
 
 fn open_stream_with_prebuffer(
     url: &str,
+    kind: StreamKind,
     prebuffer: usize,
     max_wait: Option<Duration>,
     mode: PrebufferMode,
 ) -> Result<StreamingReader> {
-    let inner = Arc::new(StreamInner {
-        buf: Mutex::new(Vec::new()),
-        cond: Condvar::new(),
-        done: AtomicBool::new(false),
-        error: Mutex::new(None),
-        content_type: Mutex::new(None),
-    });
+    let response = send_request(url, kind, None)?;
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let total_len = match kind {
+        StreamKind::Track => response.content_length(),
+        StreamKind::Live => None,
+    };
+    let inner = Arc::new(StreamInner::new(content_type, total_len));
+    let min_bytes = match kind {
+        StreamKind::Track => 1,
+        StreamKind::Live => MIN_LIVE_BYTES,
+    };
 
     let inner_dl = inner.clone();
     let fetch_url = url.to_owned();
     std::thread::Builder::new()
         .name("ratune-stream".into())
-        .spawn(move || download_thread(&fetch_url, inner_dl))
+        .spawn(move || download_thread(&fetch_url, kind, response, inner_dl))
         .context("failed to spawn stream thread")?;
 
     let deadline = max_wait.map(|d| Instant::now() + d);
@@ -208,7 +266,7 @@ fn open_stream_with_prebuffer(
         };
         let active_mode = effective_prebuffer_mode(mode, &inner, url);
         let ready = match active_mode {
-            PrebufferMode::MinBytes => len >= prebuffer || (done && len >= MIN_LIVE_BYTES),
+            PrebufferMode::MinBytes => len >= prebuffer || (done && len >= min_bytes),
             PrebufferMode::AdtsSync => {
                 find_adts_sync_offset(&inner.buf.lock().unwrap()).is_some()
                     || len >= LIVE_AAC_PREBUFFER_MAX
@@ -261,6 +319,66 @@ pub enum StreamFormatHint {
 }
 
 impl StreamingReader {
+    /// `Content-Length` of a library track, when the server sent one.
+    #[must_use]
+    pub fn content_length(&self) -> Option<u64> {
+        self.inner.total_len
+    }
+
+    /// Bytes downloaded so far.
+    #[must_use]
+    pub fn buffered_len(&self) -> u64 {
+        self.inner.buf.lock().unwrap().len() as u64
+    }
+
+    /// `true` once the whole body has been downloaded without error.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.status() == DownloadStatus::Complete
+    }
+
+    #[must_use]
+    pub fn status(&self) -> DownloadStatus {
+        if !self.inner.done.load(Ordering::Acquire) {
+            DownloadStatus::InProgress
+        } else if self.inner.error.lock().unwrap().is_some() {
+            DownloadStatus::Failed
+        } else {
+            DownloadStatus::Complete
+        }
+    }
+
+    /// Copy of every byte downloaded so far.
+    #[must_use]
+    pub fn snapshot(&self) -> Vec<u8> {
+        self.inner.buf.lock().unwrap().clone()
+    }
+
+    /// Block until the download finishes; returns the total byte length.
+    pub fn wait_complete(&self) -> Result<u64> {
+        let guard = self.inner.buf.lock().unwrap();
+        let guard = self
+            .inner
+            .cond
+            .wait_while(guard, |_| !self.inner.done.load(Ordering::Acquire))
+            .unwrap();
+        let len = guard.len() as u64;
+        drop(guard);
+        match self.inner.error.lock().unwrap().clone() {
+            Some(err) => Err(anyhow!(err)),
+            None => Ok(len),
+        }
+    }
+
+    /// Another reader over the same download, positioned at the start.
+    #[must_use]
+    pub fn reopen(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            pos: 0,
+        }
+    }
+
     /// Inspect bytes downloaded so far without consuming them.
     pub fn format_hint(&self) -> StreamFormatHint {
         let guard = self.inner.buf.lock().unwrap();
@@ -504,12 +622,35 @@ fn parse_bare_stream_url(buf: &[u8]) -> Option<String> {
 
 // ── Download thread ───────────────────────────────────────────────────────────
 
-fn download_thread(url: &str, inner: Arc<StreamInner>) {
-    if let Err(e) = download_into(url, &inner) {
-        *inner.error.lock().unwrap() = Some(e.to_string());
+fn download_thread(url: &str, kind: StreamKind, response: Response, inner: Arc<StreamInner>) {
+    if let Err(e) = download_into(url, kind, response, &inner) {
+        *inner.error.lock().unwrap() = Some(format!("{e:#}"));
     }
-    inner.done.store(true, Ordering::Release);
+    {
+        // Set under the buffer lock so a waiter can't miss the wakeup.
+        let _guard = inner.buf.lock().unwrap();
+        inner.done.store(true, Ordering::Release);
+    }
     inner.cond.notify_all();
+}
+
+/// Shared client for library tracks: default `get()` uses short timeouts and can
+/// truncate large or slow streams; long tracks need a generous read deadline.
+pub(crate) fn track_http_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            // Whole request including body (large lossless files over slow links).
+            .timeout(Duration::from_secs(900))
+            // Keep a dead server from monopolizing the player thread. This is no
+            // longer than the app's connectivity probe, so cached commands are not
+            // left queued behind a stale online request after entering offline mode.
+            .connect_timeout(Duration::from_secs(4))
+            .pool_idle_timeout(Some(Duration::from_secs(90)))
+            .user_agent(concat!("ratune/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("stream HTTP client")
+    })
 }
 
 fn live_http_client() -> &'static reqwest::blocking::Client {
@@ -528,29 +669,44 @@ fn live_http_client() -> &'static reqwest::blocking::Client {
     })
 }
 
-fn download_into(url: &str, inner: &StreamInner) -> Result<()> {
-    use std::io::Read as _;
-    let response = live_http_client()
+/// Send the GET for `url`, optionally resuming at byte `offset`.
+///
+/// Identity encoding keeps `Content-Length` equal to the audio byte length.
+fn send_request(url: &str, kind: StreamKind, offset: Option<u64>) -> Result<Response> {
+    let client = match kind {
+        StreamKind::Track => track_http_client(),
+        StreamKind::Live => live_http_client(),
+    };
+    let mut req = client
         .get(url)
         .header(ACCEPT, "*/*")
-        .header(ACCEPT_ENCODING, "identity")
-        .send()
-        .context("HTTP request failed")?
-        .error_for_status()
-        .with_context(|| format!("stream HTTP error for {url}"))?;
-    if let Some(ct) = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-    {
-        *inner.content_type.lock().unwrap() = Some(ct.to_string());
+        .header(ACCEPT_ENCODING, "identity");
+    if let Some(offset) = offset {
+        req = req.header(RANGE, format!("bytes={offset}-"));
     }
-    let mut response = response;
+    let response = req.send().context("connecting to stream URL")?;
+    let status = response.status();
+    // Never put `url` in errors: library stream URLs carry the auth token.
+    response
+        .error_for_status()
+        .with_context(|| format!("stream HTTP {status}"))
+}
+
+enum PumpEnd {
+    Eof,
+    /// Every reader was dropped; nobody needs the rest of the body.
+    Abandoned,
+}
+
+fn pump_body(response: &mut Response, inner: &Arc<StreamInner>) -> Result<PumpEnd> {
     let mut chunk = vec![0u8; 32 * 1024];
     loop {
+        if Arc::strong_count(inner) == 1 {
+            return Ok(PumpEnd::Abandoned);
+        }
         let n = response.read(&mut chunk).context("stream read error")?;
         if n == 0 {
-            break;
+            return Ok(PumpEnd::Eof);
         }
         {
             let mut buf = inner.buf.lock().unwrap();
@@ -558,7 +714,43 @@ fn download_into(url: &str, inner: &StreamInner) -> Result<()> {
         }
         inner.cond.notify_all();
     }
-    Ok(())
+}
+
+fn download_into(
+    url: &str,
+    kind: StreamKind,
+    mut response: Response,
+    inner: &Arc<StreamInner>,
+) -> Result<()> {
+    let mut resumes = 0u32;
+    loop {
+        let err = match pump_body(&mut response, inner) {
+            Ok(PumpEnd::Abandoned) => return Ok(()),
+            Ok(PumpEnd::Eof) => {
+                let got = inner.buf.lock().unwrap().len() as u64;
+                match inner.total_len {
+                    Some(total) if got < total => {
+                        anyhow!("stream ended early ({got} of {total} bytes)")
+                    }
+                    _ => return Ok(()),
+                }
+            }
+            Err(e) => e,
+        };
+        // Only a library track with a known length can be resumed by byte offset.
+        if kind != StreamKind::Track || inner.total_len.is_none() || resumes >= TRACK_MAX_RESUMES {
+            return Err(err);
+        }
+        resumes += 1;
+        std::thread::sleep(Duration::from_millis(250 * u64::from(resumes)));
+        let offset = inner.buf.lock().unwrap().len() as u64;
+        response = match send_request(url, kind, Some(offset)) {
+            Ok(r) if r.status() == StatusCode::PARTIAL_CONTENT => r,
+            // A 200 would restart from byte 0; we can't splice that onto the buffer.
+            Ok(_) => return Err(err.context("server does not support resuming downloads")),
+            Err(_) => return Err(err),
+        };
+    }
 }
 
 #[cfg(test)]
@@ -569,17 +761,42 @@ mod stream_tests {
     /// Regression: symphonia probes with SeekFrom::End; waiting for EOF hung live radio.
     #[test]
     fn live_stream_end_seek_does_not_wait_for_eof() {
-        let inner = Arc::new(StreamInner {
-            buf: Mutex::new(vec![0u8; 4096]),
-            cond: Condvar::new(),
-            done: AtomicBool::new(false),
-            error: Mutex::new(None),
-            content_type: Mutex::new(None),
-        });
-        let mut reader = StreamingReader { inner, pos: 0 };
+        let inner = StreamInner::new(None, None);
+        *inner.buf.lock().unwrap() = vec![0u8; 4096];
+        let mut reader = StreamingReader {
+            inner: Arc::new(inner),
+            pos: 0,
+        };
         let start = Instant::now();
         reader.seek(SeekFrom::End(0)).unwrap();
         assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn track_end_seek_uses_content_length() {
+        let inner = StreamInner::new(None, Some(10_000));
+        *inner.buf.lock().unwrap() = vec![0u8; 4096];
+        let mut reader = StreamingReader {
+            inner: Arc::new(inner),
+            pos: 0,
+        };
+        assert_eq!(reader.seek(SeekFrom::End(-100)).unwrap(), 9_900);
+    }
+
+    #[test]
+    fn read_returns_buffered_bytes_before_download_error() {
+        let inner = StreamInner::new(None, None);
+        *inner.buf.lock().unwrap() = vec![7u8; 8];
+        *inner.error.lock().unwrap() = Some("dropped".into());
+        inner.done.store(true, Ordering::Release);
+        let mut reader = StreamingReader {
+            inner: Arc::new(inner),
+            pos: 0,
+        };
+        let mut out = [0u8; 16];
+        assert_eq!(reader.read(&mut out).unwrap(), 8);
+        assert!(reader.read(&mut out).is_err());
+        assert!(!reader.is_complete());
     }
 
     #[test]
