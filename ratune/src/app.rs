@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -682,6 +682,9 @@ pub struct App {
     playback_from_cache: Option<(String, u64)>,
     /// Song id last gapless-enqueued from disk cache (invalidate on enqueue decode failure).
     gapless_cached_song_id: Option<String>,
+    /// Recent `(stream_url, song_id, album_id)` sent to the player, newest last.
+    /// Maps `PlayerEvent::TrackDownloaded` back to a song for the offline cache.
+    streamed_songs: VecDeque<(String, String, String)>,
 
     // ── Library metadata index (Milestone 2) ───────────────────────────────────
     /// Cached tracks for fzf (text only; persisted under `~/.cache/ratune/` by default).
@@ -1022,6 +1025,7 @@ impl App {
             play_gen: 0,
             playback_from_cache: None,
             gapless_cached_song_id: None,
+            streamed_songs: VecDeque::new(),
             library_index_tracks,
             library_index_by_id,
             library_index_refreshed_at,
@@ -4620,29 +4624,10 @@ impl App {
                         }
                     }
                     if !client {
-                        if self.config.cache_enabled {
-                            let mut to_download: Vec<(String, String)> = Vec::new();
-                            if !self.cache.get_const(&song.id) {
-                                to_download.push((
-                                    song.id.clone(),
-                                    song.album_id.clone().unwrap_or_default(),
-                                ));
-                            }
-                            let cursor = self.queue.cursor;
-                            for offset in 1..=2usize {
-                                let idx = cursor + offset;
-                                if idx < self.queue.songs.len() {
-                                    let s_id = self.queue.songs[idx].id.clone();
-                                    let a_id =
-                                        self.queue.songs[idx].album_id.clone().unwrap_or_default();
-                                    if !self.cache.get_const(&s_id) {
-                                        to_download.push((s_id, a_id));
-                                    }
-                                }
-                            }
-                            for (s_id, a_id) in to_download {
-                                self.spawn_cache_download(&s_id, &a_id);
-                            }
+                        // A streamed track is cached from the player's own download
+                        // (`TrackDownloaded`), which then prefetches what comes next.
+                        if self.cache.get_const(&song.id) {
+                            self.prefetch_upcoming();
                         }
                         self.scrobble_track_started(&song);
                     }
@@ -4720,11 +4705,15 @@ impl App {
                                 }
                             }
                         }
+                        if self.cache.get_const(&song.id) {
+                            self.prefetch_upcoming();
+                        }
                         self.scrobble_track_started(&song);
                         self.playback.current_song = Some(song);
                     }
                 }
             }
+            PlayerEvent::TrackDownloaded(track) => self.cache_streamed_track(&track),
             PlayerEvent::TrackEnded => {
                 if client {
                     // Queue advance is applied from the daemon snapshot.
@@ -4745,6 +4734,9 @@ impl App {
                     self.playback.current_song = None;
                     self.playback.elapsed = std::time::Duration::ZERO;
                 }
+            }
+            PlayerEvent::SeekUnavailable => {
+                self.flash_status("Can't seek there yet — track still downloading");
             }
             PlayerEvent::Error(e) => {
                 // Corrupt / unreadable cache: drop the bad file and re-stream once when online.
@@ -5017,7 +5009,7 @@ impl App {
             let duration = next
                 .duration
                 .map(|s| std::time::Duration::from_secs(u64::from(s)));
-            let url = self.subsonic.stream_url(&next.id, self.config.max_bit_rate);
+            let url = self.song_stream_url(&next.id, &next.album_id.clone().unwrap_or_default());
             self.send_player(PlayerCommand::EnqueueNext { url, duration });
             self.flash_status_secs("Next track: bad cache — re-streaming", 5);
             return true;
@@ -5059,7 +5051,13 @@ impl App {
             .as_ref()
             .and_then(|s| s.duration)
             .map(|s| std::time::Duration::from_secs(u64::from(s)));
-        let url = self.subsonic.stream_url(&song_id, self.config.max_bit_rate);
+        let album_id = self
+            .playback
+            .current_song
+            .as_ref()
+            .and_then(|s| s.album_id.clone())
+            .unwrap_or_default();
+        let url = self.song_stream_url(&song_id, &album_id);
         let gen = self.play_gen;
         self.playback.player_loaded = true;
         self.playback_from_cache = None;
@@ -5081,7 +5079,72 @@ impl App {
         if !self.remote_available() {
             return ResolvedPlayback::UnavailableOffline;
         }
-        ResolvedPlayback::Url(self.subsonic.stream_url(&song.id, self.config.max_bit_rate))
+        let album_id = song.album_id.clone().unwrap_or_default();
+        ResolvedPlayback::Url(self.song_stream_url(&song.id, &album_id))
+    }
+
+    /// Stream URL for the player; remembered so the finished download can be cached.
+    fn song_stream_url(&mut self, song_id: &str, album_id: &str) -> String {
+        const REMEMBERED: usize = 8;
+        let url = self.subsonic.stream_url(song_id, self.config.max_bit_rate);
+        if self.streamed_songs.len() >= REMEMBERED {
+            self.streamed_songs.pop_front();
+        }
+        self.streamed_songs
+            .push_back((url.clone(), song_id.to_string(), album_id.to_string()));
+        url
+    }
+
+    /// Cache a track the player finished streaming, instead of downloading it again.
+    fn cache_streamed_track(&mut self, track: &ratune_player::DownloadedTrack) {
+        let Some(idx) = self
+            .streamed_songs
+            .iter()
+            .position(|(u, _, _)| *u == track.url)
+        else {
+            return;
+        };
+        let Some((_, song_id, album_id)) = self.streamed_songs.remove(idx) else {
+            return;
+        };
+        if !self.caching_tracks() {
+            return;
+        }
+        if !self.cache.get_const(&song_id) {
+            let _ = self.cache.put(&song_id, &album_id, &track.bytes());
+        }
+        let is_current = self
+            .playback
+            .current_song
+            .as_ref()
+            .is_some_and(|s| s.id == song_id);
+        if is_current {
+            self.prefetch_upcoming();
+        }
+    }
+
+    /// Enabled in config and the cache directory is usable.
+    fn caching_tracks(&self) -> bool {
+        self.config.cache_enabled && self.cache.enabled
+    }
+
+    /// Cache the next two queued tracks in the background.
+    ///
+    /// Called once the current track is on disk, so these downloads don't compete
+    /// with its stream for bandwidth.
+    fn prefetch_upcoming(&mut self) {
+        if !self.caching_tracks() {
+            return;
+        }
+        let cursor = self.queue.cursor;
+        let upcoming: Vec<(String, String)> = (1..=2usize)
+            .filter_map(|offset| self.queue.songs.get(cursor + offset))
+            .filter(|s| !self.cache.get_const(&s.id))
+            .map(|s| (s.id.clone(), s.album_id.clone().unwrap_or_default()))
+            .collect();
+        for (song_id, album_id) in upcoming {
+            self.spawn_cache_download(&song_id, &album_id);
+        }
     }
 
     #[must_use]
@@ -7857,9 +7920,7 @@ impl App {
                     let sid = record.song_id.clone();
                     let resolved = match self.queue.current().cloned() {
                         Some(s) => self.resolve_playback(&s),
-                        None => ResolvedPlayback::Url(
-                            self.subsonic.stream_url(&sid, self.config.max_bit_rate),
-                        ),
+                        None => ResolvedPlayback::Url(self.song_stream_url(&sid, "")),
                     };
                     self.playback.player_loaded = true;
                     let gen = self.play_gen;

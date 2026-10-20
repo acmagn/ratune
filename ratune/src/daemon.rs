@@ -175,12 +175,14 @@ pub enum PlayerEventWire {
     AboutToFinish,
     TrackAdvanced,
     TrackEnded,
+    SeekUnavailable,
     Error(String),
 }
 
-impl From<&PlayerEvent> for PlayerEventWire {
-    fn from(e: &PlayerEvent) -> Self {
-        match e {
+impl PlayerEventWire {
+    /// `None` for daemon-internal events that clients never see.
+    fn from_event(e: &PlayerEvent) -> Option<Self> {
+        Some(match e {
             PlayerEvent::TrackStarted => Self::TrackStarted,
             PlayerEvent::Progress { elapsed, total } => Self::Progress {
                 elapsed_ms: elapsed.as_millis() as u64,
@@ -189,8 +191,11 @@ impl From<&PlayerEvent> for PlayerEventWire {
             PlayerEvent::AboutToFinish => Self::AboutToFinish,
             PlayerEvent::TrackAdvanced => Self::TrackAdvanced,
             PlayerEvent::TrackEnded => Self::TrackEnded,
+            PlayerEvent::SeekUnavailable => Self::SeekUnavailable,
+            // Cached by the daemon's own App; megabytes that clients don't need.
+            PlayerEvent::TrackDownloaded(_) => return None,
             PlayerEvent::Error(s) => Self::Error(s.clone()),
-        }
+        })
     }
 }
 
@@ -208,6 +213,7 @@ impl From<PlayerEventWire> for PlayerEvent {
             PlayerEventWire::AboutToFinish => Self::AboutToFinish,
             PlayerEventWire::TrackAdvanced => Self::TrackAdvanced,
             PlayerEventWire::TrackEnded => Self::TrackEnded,
+            PlayerEventWire::SeekUnavailable => Self::SeekUnavailable,
             PlayerEventWire::Error(s) => Self::Error(s),
         }
     }
@@ -650,13 +656,15 @@ pub async fn run_daemon() -> Result<()> {
         }
 
         while let Ok(event) = app.player_rx.try_recv() {
-            let wire = PlayerEventWire::from(&event);
+            let wire = PlayerEventWire::from_event(&event);
             let persist = matches!(
                 event,
                 PlayerEvent::TrackEnded | PlayerEvent::TrackAdvanced | PlayerEvent::TrackStarted
             );
             app.handle_player_event(event);
-            broadcast.send_all(ServerMessage::Event(wire));
+            if let Some(wire) = wire {
+                broadcast.send_all(ServerMessage::Event(wire));
+            }
             broadcast.send_all(ServerMessage::Snapshot(SessionSnapshot::from_app(&app)));
             if persist {
                 let _ = crate::persist::save_state(&app);
@@ -871,7 +879,7 @@ mod tests {
             elapsed: Duration::from_millis(500),
             total: Some(Duration::from_secs(3)),
         };
-        let w = PlayerEventWire::from(&e);
+        let w = PlayerEventWire::from_event(&e).unwrap();
         let back = PlayerEvent::from(w);
         match back {
             PlayerEvent::Progress { elapsed, total } => {

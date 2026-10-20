@@ -9,7 +9,6 @@
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -19,8 +18,12 @@ use reqwest::header::ACCEPT_ENCODING;
 use rodio::{Decoder, DeviceSinkBuilder, Player};
 
 use crate::adts_normalize::AdtsNormalizeReader;
-use crate::stream::{open_live_stream, StreamFormatHint, StreamingReader};
+use crate::stream::{
+    open_live_stream, open_stream, track_http_client, DownloadStatus, StreamFormatHint,
+    StreamingReader,
+};
 use crate::tap::SampleTap;
+use crate::track::{is_not_buffered, TrackSource};
 
 type SampleBuffer = Arc<Mutex<VecDeque<f32>>>;
 
@@ -82,13 +85,41 @@ pub enum PlayerEvent {
         elapsed: Duration,
         total: Option<Duration>,
     },
-    /// Fired ~5 s before the current track ends. The TUI should respond with
+    /// Fired ~10 s before the current track ends. The TUI should respond with
     /// `PlayerCommand::EnqueueNext` to enable gapless playback.
     AboutToFinish,
     /// Fired when a gaplessly enqueued track begins playing (elapsed resets).
     TrackAdvanced,
     TrackEnded,
+    /// A seek was refused because that part of the track hasn't downloaded yet.
+    SeekUnavailable,
+    /// A streamed track (current or gapless next) finished downloading.
+    TrackDownloaded(DownloadedTrack),
     Error(String),
+}
+
+/// Completed download of a streamed track, for the offline cache.
+pub struct DownloadedTrack {
+    /// URL from the `PlayUrl` / `EnqueueNext` command that streamed it.
+    pub url: String,
+    download: StreamingReader,
+}
+
+impl DownloadedTrack {
+    /// Copy of the whole body. Only pay for this when actually caching.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        self.download.snapshot()
+    }
+}
+
+impl std::fmt::Debug for DownloadedTrack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The URL carries the auth token, and the body is megabytes long.
+        f.debug_struct("DownloadedTrack")
+            .field("bytes", &self.download.buffered_len())
+            .finish_non_exhaustive()
+    }
 }
 
 // ── Engine spawn ──────────────────────────────────────────────────────────────
@@ -141,156 +172,57 @@ fn player_thread(
 
     let player = Player::connect_new(device.mixer());
 
-    // State for the current track.
-    let mut current_total: Option<Duration> = None;
-    // Tracks whether the previous tick saw a non-empty player (to detect natural end).
-    let mut was_playing = false;
-    // Gapless state.
-    let mut next_total: Option<Duration> = None;
-    let mut next_queued = false;
-    let mut about_to_finish_sent = false;
-    let mut prev_elapsed = Duration::ZERO;
-    // Skip-generation counter: updated every time a PlayUrl / PlayCached is received.
-    // Used to discard stale loads when the user skips rapidly.
-    let mut skip_gen: u64 = 0;
-
-    'outer: loop {
-        // ── Drain all pending commands (non-blocking) ─────────────────────────
-        loop {
-            use mpsc::TryRecvError;
-            match cmd_rx.try_recv() {
-                Ok(PlayerCommand::Quit) => break 'outer,
-                Ok(PlayerCommand::PlayUrl { url, duration, gen }) => {
-                    play_payload(
-                        PlayPayload::Url(url),
-                        duration,
-                        gen,
-                        &cmd_rx,
-                        &mut skip_gen,
-                        &player,
-                        &evt_tx,
-                        &mut current_total,
-                        &mut was_playing,
-                        &mut next_total,
-                        &mut next_queued,
-                        &mut about_to_finish_sent,
-                        &mut prev_elapsed,
-                        &sample_buffer,
-                    );
-                }
-                Ok(PlayerCommand::PlayCached {
-                    path,
-                    duration,
-                    gen,
-                }) => {
-                    play_payload(
-                        PlayPayload::Cached(path),
-                        duration,
-                        gen,
-                        &cmd_rx,
-                        &mut skip_gen,
-                        &player,
-                        &evt_tx,
-                        &mut current_total,
-                        &mut was_playing,
-                        &mut next_total,
-                        &mut next_queued,
-                        &mut about_to_finish_sent,
-                        &mut prev_elapsed,
-                        &sample_buffer,
-                    );
-                }
-                Ok(PlayerCommand::PlayLiveStream { url, gen }) => {
-                    play_live_stream(
-                        url,
-                        gen,
-                        &cmd_rx,
-                        &mut skip_gen,
-                        &player,
-                        &evt_tx,
-                        &mut current_total,
-                        &mut was_playing,
-                        &mut next_total,
-                        &mut next_queued,
-                        &mut about_to_finish_sent,
-                        &mut prev_elapsed,
-                        &sample_buffer,
-                    );
-                }
-                Ok(cmd) => handle_command(
-                    cmd,
-                    &player,
-                    &evt_tx,
-                    &mut current_total,
-                    &mut was_playing,
-                    &mut next_total,
-                    &mut next_queued,
-                    &mut about_to_finish_sent,
-                    &mut prev_elapsed,
-                    &sample_buffer,
-                ),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break 'outer,
-            }
-        }
-
-        // ── Progress tick ─────────────────────────────────────────────────────
-        if !player.is_paused() && !player.empty() {
-            let elapsed = player.get_pos();
-
-            // Detect gapless track transition: elapsed resets to near zero
-            // while we know a next track was appended.  Use a 2 s window rather
-            // than 500 ms to tolerate rodio's first-tick imprecision.
-            if next_queued
-                && prev_elapsed > Duration::from_secs(2)
-                && elapsed < Duration::from_secs(2)
-            {
-                current_total = next_total.take();
-                next_queued = false;
-                about_to_finish_sent = false;
-                let _ = evt_tx.send(PlayerEvent::TrackAdvanced);
-            }
-            prev_elapsed = elapsed;
-
-            let _ = evt_tx.send(PlayerEvent::Progress {
-                elapsed,
-                total: current_total,
-            });
-
-            // Send AboutToFinish ~10 s before the end so the TUI can enqueue next.
-            // 10 s gives enough headroom for: player-thread sleep (≤500 ms) +
-            // TUI dispatch latency + full-track download + decode.
-            if !about_to_finish_sent && !next_queued {
-                if let Some(total) = current_total {
-                    let remaining = total.saturating_sub(elapsed);
-                    if remaining <= Duration::from_secs(10) && remaining > Duration::ZERO {
-                        about_to_finish_sent = true;
-                        let _ = evt_tx.send(PlayerEvent::AboutToFinish);
-                    }
-                }
-            }
-
-            was_playing = true;
-        }
-
-        // ── Natural track end detection (no next track was enqueued) ──────────
-        if was_playing && player.empty() {
-            was_playing = false;
-            current_total = None;
-            next_total = None;
-            next_queued = false;
-            about_to_finish_sent = false;
-            prev_elapsed = Duration::ZERO;
-            let _ = evt_tx.send(PlayerEvent::TrackEnded);
-        }
-
-        std::thread::sleep(Duration::from_millis(500));
+    Engine {
+        cmd_rx: &cmd_rx,
+        evt_tx: &evt_tx,
+        player: &player,
+        sample_buffer: &sample_buffer,
+        skip_gen: 0,
+        track: TrackState::default(),
+        downloads: Vec::new(),
     }
+    .run();
 
     // Stop playback before releasing the audio device.
     player.stop();
     drop(player);
     drop(device);
+}
+
+/// Next gapless track, still loading on a background thread.
+struct PendingNext {
+    rx: mpsc::Receiver<Result<TrackSource>>,
+    total: Option<Duration>,
+    /// Stream URL, when the next track isn't from the cache.
+    url: Option<String>,
+}
+
+/// Per-track playback state, reset on every new play or stop.
+#[derive(Default)]
+struct TrackState {
+    current_total: Option<Duration>,
+    /// Whether the previous tick saw a non-empty player (to detect natural end).
+    was_playing: bool,
+    next_total: Option<Duration>,
+    next_queued: bool,
+    /// Dropping it abandons the load (and its download).
+    pending_next: Option<PendingNext>,
+    about_to_finish_sent: bool,
+    prev_elapsed: Duration,
+}
+
+struct Engine<'a> {
+    cmd_rx: &'a mpsc::Receiver<PlayerCommand>,
+    evt_tx: &'a mpsc::Sender<PlayerEvent>,
+    player: &'a Player,
+    sample_buffer: &'a SampleBuffer,
+    /// Skip-generation counter: updated every time a PlayUrl / PlayCached is received.
+    /// Used to discard stale loads when the user skips rapidly.
+    skip_gen: u64,
+    track: TrackState,
+    /// In-flight downloads of loaded tracks, reported once complete. Cleared on
+    /// every new play or stop, which also abandons unfinished ones.
+    downloads: Vec<(String, StreamingReader)>,
 }
 
 #[derive(Debug, Clone)]
@@ -299,384 +231,426 @@ enum PlayPayload {
     Cached(PathBuf),
 }
 
-/// Handle [`PlayerCommand::PlayUrl`] / [`PlayerCommand::PlayCached`] with skip-generation cancellation.
-///
-/// Before loading, drains any further play commands already queued, turning N rapid
-/// skips into one fetch/read. After the blocking load, drains again; if a newer play
-/// command arrived mid-load, discards the decoder and recurses.
-#[allow(clippy::too_many_arguments)]
-fn play_payload(
-    payload: PlayPayload,
-    duration: Option<Duration>,
-    gen: u64,
-    cmd_rx: &mpsc::Receiver<PlayerCommand>,
-    skip_gen: &mut u64,
-    player: &Player,
-    evt_tx: &mpsc::Sender<PlayerEvent>,
-    current_total: &mut Option<Duration>,
-    was_playing: &mut bool,
-    next_total: &mut Option<Duration>,
-    next_queued: &mut bool,
-    about_to_finish_sent: &mut bool,
-    prev_elapsed: &mut Duration,
-    sample_buffer: &SampleBuffer,
-) {
-    *skip_gen = gen;
+impl Engine<'_> {
+    fn run(&mut self) {
+        loop {
+            // ── Drain all pending commands (non-blocking) ─────────────────────
+            loop {
+                use mpsc::TryRecvError;
+                match self.cmd_rx.try_recv() {
+                    Ok(PlayerCommand::Quit) | Err(TryRecvError::Disconnected) => return,
+                    Ok(PlayerCommand::PlayUrl { url, duration, gen }) => {
+                        self.play_payload(PlayPayload::Url(url), duration, gen);
+                    }
+                    Ok(PlayerCommand::PlayCached {
+                        path,
+                        duration,
+                        gen,
+                    }) => self.play_payload(PlayPayload::Cached(path), duration, gen),
+                    Ok(PlayerCommand::PlayLiveStream { url, gen }) => {
+                        self.play_live_stream(url, gen);
+                    }
+                    Ok(cmd) => self.handle_command(cmd),
+                    Err(TryRecvError::Empty) => break,
+                }
+            }
 
-    // ── Pre-load drain ────────────────────────────────────────────────────────
-    let mut final_payload = payload;
-    let mut final_duration = duration;
-    let mut final_gen = gen;
-    loop {
-        match cmd_rx.try_recv() {
-            Ok(PlayerCommand::PlayUrl {
-                url: u,
-                duration: d,
-                gen: g,
-            }) => {
-                final_payload = PlayPayload::Url(u);
-                final_duration = d;
-                final_gen = g;
-                *skip_gen = g;
-            }
-            Ok(PlayerCommand::PlayCached {
-                path: p,
-                duration: d,
-                gen: g,
-            }) => {
-                final_payload = PlayPayload::Cached(p);
-                final_duration = d;
-                final_gen = g;
-                *skip_gen = g;
-            }
-            Ok(_other) => break,
-            Err(_) => break,
+            self.poll_pending_next();
+            self.poll_downloads();
+            self.tick();
+            std::thread::sleep(Duration::from_millis(500));
         }
     }
 
-    player.stop();
-    *was_playing = false;
-    *next_total = None;
-    *next_queued = false;
-    *about_to_finish_sent = false;
-    *prev_elapsed = Duration::ZERO;
+    fn send(&self, event: PlayerEvent) {
+        let _ = self.evt_tx.send(event);
+    }
 
-    // ── Load (network or disk) ──────────────────────────────────────────────
-    let source = match &final_payload {
-        PlayPayload::Url(url) => match download_and_decode(url) {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = evt_tx.send(PlayerEvent::Error(format!("playback error: {e}")));
-                return;
-            }
-        },
-        PlayPayload::Cached(path) => match read_cached_and_decode(path) {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = evt_tx.send(PlayerEvent::Error(format!("playback error: {e}")));
-                return;
-            }
-        },
-    };
-
-    // ── Post-load drain ───────────────────────────────────────────────────────
-    let mut newer: Option<(PlayPayload, Option<Duration>, u64)> = None;
-    loop {
-        match cmd_rx.try_recv() {
-            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
-                *skip_gen = g;
-                play_live_stream(
-                    u,
-                    g,
-                    cmd_rx,
-                    skip_gen,
-                    player,
-                    evt_tx,
-                    current_total,
-                    was_playing,
-                    next_total,
-                    next_queued,
-                    about_to_finish_sent,
-                    prev_elapsed,
-                    sample_buffer,
-                );
-                return;
-            }
-            Ok(PlayerCommand::PlayUrl {
-                url: u,
-                duration: d,
-                gen: g,
-            }) => {
-                *skip_gen = g;
-                newer = Some((PlayPayload::Url(u), d, g));
-            }
-            Ok(PlayerCommand::PlayCached {
-                path: p,
-                duration: d,
-                gen: g,
-            }) => {
-                *skip_gen = g;
-                newer = Some((PlayPayload::Cached(p), d, g));
-            }
-            Ok(_other) => break,
-            Err(_) => break,
+    fn watch_download(&mut self, url: Option<String>, source: &TrackSource) {
+        if let (Some(url), Some(download)) = (url, source.download()) {
+            self.downloads.push((url, download));
         }
     }
 
-    if *skip_gen != final_gen {
-        drop(source);
-        if let Some((p, d, g)) = newer {
-            play_payload(
-                p,
-                d,
-                g,
-                cmd_rx,
-                skip_gen,
-                player,
-                evt_tx,
-                current_total,
-                was_playing,
-                next_total,
-                next_queued,
-                about_to_finish_sent,
-                prev_elapsed,
-                sample_buffer,
-            );
+    fn poll_downloads(&mut self) {
+        let mut finished = Vec::new();
+        self.downloads
+            .retain(|(url, download)| match download.status() {
+                DownloadStatus::InProgress => true,
+                DownloadStatus::Complete => {
+                    finished.push(DownloadedTrack {
+                        url: url.clone(),
+                        download: download.reopen(),
+                    });
+                    false
+                }
+                DownloadStatus::Failed => false,
+            });
+        for track in finished {
+            self.send(PlayerEvent::TrackDownloaded(track));
         }
-        return;
     }
 
-    *current_total = final_duration;
-    let tapped = SampleTap::new(source, sample_buffer.clone());
-    player.append(tapped);
-    player.play();
-    let _ = evt_tx.send(PlayerEvent::TrackStarted);
-}
+    /// Forget the current and next track (new play or stop).
+    fn reset_tracks(&mut self) {
+        self.player.stop();
+        self.track = TrackState::default();
+        self.downloads.clear();
+    }
 
-/// Incrementally stream a live radio URL (no known duration, no gapless enqueue).
-#[allow(clippy::too_many_arguments)]
-fn play_live_stream(
-    url: String,
-    gen: u64,
-    cmd_rx: &mpsc::Receiver<PlayerCommand>,
-    skip_gen: &mut u64,
-    player: &Player,
-    evt_tx: &mpsc::Sender<PlayerEvent>,
-    current_total: &mut Option<Duration>,
-    was_playing: &mut bool,
-    next_total: &mut Option<Duration>,
-    next_queued: &mut bool,
-    about_to_finish_sent: &mut bool,
-    prev_elapsed: &mut Duration,
-    sample_buffer: &SampleBuffer,
-) {
-    *skip_gen = gen;
+    fn start(&mut self, source: TrackSource) {
+        let tapped = SampleTap::new(source, self.sample_buffer.clone());
+        self.player.append(tapped);
+        self.player.play();
+        self.send(PlayerEvent::TrackStarted);
+    }
 
-    let mut final_url = url;
-    let mut final_gen = gen;
-    loop {
-        match cmd_rx.try_recv() {
-            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
-                final_url = u;
-                final_gen = g;
-                *skip_gen = g;
+    /// Progress tick, gapless hand-off detection, and natural end detection.
+    fn tick(&mut self) {
+        let player = self.player;
+        if !player.is_paused() && !player.empty() {
+            let elapsed = player.get_pos();
+            let t = &mut self.track;
+
+            // Detect gapless track transition: elapsed resets to near zero
+            // while we know a next track was appended.  Use a 2 s window rather
+            // than 500 ms to tolerate rodio's first-tick imprecision.
+            if t.next_queued
+                && t.prev_elapsed > Duration::from_secs(2)
+                && elapsed < Duration::from_secs(2)
+            {
+                t.current_total = t.next_total.take();
+                t.next_queued = false;
+                t.about_to_finish_sent = false;
+                let _ = self.evt_tx.send(PlayerEvent::TrackAdvanced);
             }
-            Ok(_other) => break,
-            Err(_) => break,
+            t.prev_elapsed = elapsed;
+
+            let _ = self.evt_tx.send(PlayerEvent::Progress {
+                elapsed,
+                total: t.current_total,
+            });
+
+            // Send AboutToFinish ~10 s before the end so the TUI can enqueue next.
+            // The next track only needs its prebuffer (not the whole file) before
+            // it can be appended, and loads off this thread.
+            if !t.about_to_finish_sent && !t.next_queued && t.pending_next.is_none() {
+                if let Some(total) = t.current_total {
+                    let remaining = total.saturating_sub(elapsed);
+                    if remaining <= Duration::from_secs(10) && remaining > Duration::ZERO {
+                        t.about_to_finish_sent = true;
+                        let _ = self.evt_tx.send(PlayerEvent::AboutToFinish);
+                    }
+                }
+            }
+
+            t.was_playing = true;
+        }
+
+        // ── Natural track end detection (no next track was enqueued) ──────────
+        // While the next track is still loading, wait for it instead: it is
+        // appended late and reported as TrackAdvanced, not TrackEnded.
+        if self.track.was_playing && player.empty() && self.track.pending_next.is_none() {
+            self.track = TrackState::default();
+            self.send(PlayerEvent::TrackEnded);
         }
     }
 
-    player.stop();
-    *was_playing = false;
-    *next_total = None;
-    *next_queued = false;
-    *about_to_finish_sent = false;
-    *prev_elapsed = Duration::ZERO;
-
-    let source = match live_stream_and_decode(&final_url) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = evt_tx.send(PlayerEvent::Error(format!("playback error: {e}")));
+    /// Append the next gapless track once its background load finishes.
+    fn poll_pending_next(&mut self) {
+        let Some(pending) = &self.track.pending_next else {
             return;
-        }
-    };
-
-    match cmd_rx.try_recv() {
-        Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) if g != final_gen => {
-            drop(source);
-            play_live_stream(
-                u,
-                g,
-                cmd_rx,
-                skip_gen,
-                player,
-                evt_tx,
-                current_total,
-                was_playing,
-                next_total,
-                next_queued,
-                about_to_finish_sent,
-                prev_elapsed,
-                sample_buffer,
-            );
-            return;
-        }
-        Ok(PlayerCommand::PlayUrl {
-            url: u,
-            duration: d,
-            gen: g,
-        }) => {
-            drop(source);
-            play_payload(
-                PlayPayload::Url(u),
-                d,
-                g,
-                cmd_rx,
-                skip_gen,
-                player,
-                evt_tx,
-                current_total,
-                was_playing,
-                next_total,
-                next_queued,
-                about_to_finish_sent,
-                prev_elapsed,
-                sample_buffer,
-            );
-            return;
-        }
-        Ok(PlayerCommand::PlayCached {
-            path: p,
-            duration: d,
-            gen: g,
-        }) => {
-            drop(source);
-            play_payload(
-                PlayPayload::Cached(p),
-                d,
-                g,
-                cmd_rx,
-                skip_gen,
-                player,
-                evt_tx,
-                current_total,
-                was_playing,
-                next_total,
-                next_queued,
-                about_to_finish_sent,
-                prev_elapsed,
-                sample_buffer,
-            );
-            return;
-        }
-        Ok(_) | Err(_) => {}
-    }
-
-    if *skip_gen != final_gen {
-        drop(source);
-        return;
-    }
-
-    *current_total = None;
-    let tapped = SampleTap::new(source, sample_buffer.clone());
-    player.append(tapped);
-    player.play();
-    let _ = evt_tx.send(PlayerEvent::TrackStarted);
-}
-
-#[allow(clippy::too_many_arguments)] // Engine thread: one place for all command side-effects.
-fn handle_command(
-    cmd: PlayerCommand,
-    player: &Player,
-    evt_tx: &mpsc::Sender<PlayerEvent>,
-    current_total: &mut Option<Duration>,
-    was_playing: &mut bool,
-    next_total: &mut Option<Duration>,
-    next_queued: &mut bool,
-    about_to_finish_sent: &mut bool,
-    prev_elapsed: &mut Duration,
-    sample_buffer: &SampleBuffer,
-) {
-    match cmd {
-        PlayerCommand::PlayUrl { .. }
-        | PlayerCommand::PlayCached { .. }
-        | PlayerCommand::PlayLiveStream { .. } => {
-            unreachable!(
-                "PlayUrl / PlayCached / PlayLiveStream must be dispatched via play_payload()"
-            );
-        }
-        PlayerCommand::EnqueueNext { url, duration } => match download_and_decode(&url) {
+        };
+        let result = match pending.rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Err(anyhow!("track loader exited")),
+        };
+        let total = pending.total;
+        let url = pending.url.clone();
+        self.track.pending_next = None;
+        match result {
             Ok(source) => {
-                *next_total = duration;
-                *next_queued = true;
-                let tapped = SampleTap::new(source, sample_buffer.clone());
-                player.append(tapped);
+                self.track.next_total = total;
+                self.track.next_queued = true;
+                self.watch_download(url, &source);
+                let tapped = SampleTap::new(source, self.sample_buffer.clone());
+                self.player.append(tapped);
             }
+            Err(e) => self.send(PlayerEvent::Error(format!("enqueue error: {e}"))),
+        }
+    }
+
+    fn spawn_enqueue(
+        &mut self,
+        total: Option<Duration>,
+        url: Option<String>,
+        load: impl FnOnce() -> Result<TrackSource> + Send + 'static,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let spawned = thread::Builder::new()
+            .name("ratune-enqueue".into())
+            .spawn(move || {
+                let _ = tx.send(load());
+            });
+        match spawned {
+            Ok(_) => self.track.pending_next = Some(PendingNext { rx, total, url }),
+            Err(e) => self.send(PlayerEvent::Error(format!("enqueue error: {e}"))),
+        }
+    }
+
+    /// Handle [`PlayerCommand::PlayUrl`] / [`PlayerCommand::PlayCached`] with skip-generation cancellation.
+    ///
+    /// Before loading, drains any further play commands already queued, turning N rapid
+    /// skips into one fetch/read. After the blocking load, drains again; if a newer play
+    /// command arrived mid-load, discards the decoder and recurses.
+    fn play_payload(&mut self, payload: PlayPayload, duration: Option<Duration>, gen: u64) {
+        self.skip_gen = gen;
+
+        // ── Pre-load drain ────────────────────────────────────────────────────
+        let mut final_payload = payload;
+        let mut final_duration = duration;
+        let mut final_gen = gen;
+        loop {
+            match self.cmd_rx.try_recv() {
+                Ok(PlayerCommand::PlayUrl {
+                    url: u,
+                    duration: d,
+                    gen: g,
+                }) => {
+                    final_payload = PlayPayload::Url(u);
+                    final_duration = d;
+                    final_gen = g;
+                    self.skip_gen = g;
+                }
+                Ok(PlayerCommand::PlayCached {
+                    path: p,
+                    duration: d,
+                    gen: g,
+                }) => {
+                    final_payload = PlayPayload::Cached(p);
+                    final_duration = d;
+                    final_gen = g;
+                    self.skip_gen = g;
+                }
+                Ok(_other) => break,
+                Err(_) => break,
+            }
+        }
+
+        self.reset_tracks();
+
+        // ── Load (network or disk) ──────────────────────────────────────────
+        let loaded = match &final_payload {
+            PlayPayload::Url(url) => load_url_track(url),
+            PlayPayload::Cached(path) => read_cached_and_decode(path).map(TrackSource::from_memory),
+        };
+        let source = match loaded {
+            Ok(s) => s,
             Err(e) => {
-                let _ = evt_tx.send(PlayerEvent::Error(format!("enqueue error: {e}")));
+                self.send(PlayerEvent::Error(format!("playback error: {e}")));
+                return;
             }
-        },
-        PlayerCommand::EnqueueNextCached { path, duration } => {
-            match read_cached_and_decode(&path) {
-                Ok(source) => {
-                    *next_total = duration;
-                    *next_queued = true;
-                    let tapped = SampleTap::new(source, sample_buffer.clone());
-                    player.append(tapped);
+        };
+
+        // ── Post-load drain ───────────────────────────────────────────────────
+        let mut newer: Option<(PlayPayload, Option<Duration>, u64)> = None;
+        loop {
+            match self.cmd_rx.try_recv() {
+                Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
+                    self.skip_gen = g;
+                    drop(source);
+                    self.play_live_stream(u, g);
+                    return;
                 }
-                Err(e) => {
-                    let _ = evt_tx.send(PlayerEvent::Error(format!("enqueue error: {e}")));
+                Ok(PlayerCommand::PlayUrl {
+                    url: u,
+                    duration: d,
+                    gen: g,
+                }) => {
+                    self.skip_gen = g;
+                    newer = Some((PlayPayload::Url(u), d, g));
                 }
+                Ok(PlayerCommand::PlayCached {
+                    path: p,
+                    duration: d,
+                    gen: g,
+                }) => {
+                    self.skip_gen = g;
+                    newer = Some((PlayPayload::Cached(p), d, g));
+                }
+                Ok(_other) => break,
+                Err(_) => break,
             }
         }
-        PlayerCommand::Pause => player.pause(),
-        PlayerCommand::Resume => player.play(),
-        PlayerCommand::Stop => {
-            player.stop();
-            *current_total = None;
-            *next_total = None;
-            *next_queued = false;
-            *about_to_finish_sent = false;
-            *prev_elapsed = Duration::ZERO;
-            *was_playing = false;
+
+        if self.skip_gen != final_gen {
+            drop(source);
+            if let Some((p, d, g)) = newer {
+                self.play_payload(p, d, g);
+            }
+            return;
         }
-        PlayerCommand::SetVolume(v) => player.set_volume(v),
-        PlayerCommand::Seek(pos) => {
-            let _ = player.try_seek(pos);
-            // Update prev_elapsed so the gapless-transition heuristic isn't
-            // confused by the sudden position jump.
-            *prev_elapsed = pos;
+
+        self.track.current_total = final_duration;
+        if let PlayPayload::Url(url) = final_payload {
+            self.watch_download(Some(url), &source);
         }
-        PlayerCommand::Quit => {
-            // Handled by the 'outer break in player_thread.
-            unreachable!("Quit must be handled in the outer command-drain loop");
+        self.start(source);
+    }
+
+    /// Incrementally stream a live radio URL (no known duration, no gapless enqueue).
+    fn play_live_stream(&mut self, url: String, gen: u64) {
+        self.skip_gen = gen;
+
+        let mut final_url = url;
+        let mut final_gen = gen;
+        loop {
+            match self.cmd_rx.try_recv() {
+                Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
+                    final_url = u;
+                    final_gen = g;
+                    self.skip_gen = g;
+                }
+                Ok(_other) => break,
+                Err(_) => break,
+            }
+        }
+
+        self.reset_tracks();
+
+        let source = match live_stream_and_decode(&final_url) {
+            Ok(s) => s,
+            Err(e) => {
+                self.send(PlayerEvent::Error(format!("playback error: {e}")));
+                return;
+            }
+        };
+
+        match self.cmd_rx.try_recv() {
+            Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) if g != final_gen => {
+                drop(source);
+                self.play_live_stream(u, g);
+                return;
+            }
+            Ok(PlayerCommand::PlayUrl {
+                url: u,
+                duration: d,
+                gen: g,
+            }) => {
+                drop(source);
+                self.play_payload(PlayPayload::Url(u), d, g);
+                return;
+            }
+            Ok(PlayerCommand::PlayCached {
+                path: p,
+                duration: d,
+                gen: g,
+            }) => {
+                drop(source);
+                self.play_payload(PlayPayload::Cached(p), d, g);
+                return;
+            }
+            Ok(_) | Err(_) => {}
+        }
+
+        if self.skip_gen != final_gen {
+            drop(source);
+            return;
+        }
+
+        self.track.current_total = None;
+        let tapped = SampleTap::new(source, self.sample_buffer.clone());
+        self.player.append(tapped);
+        self.player.play();
+        self.send(PlayerEvent::TrackStarted);
+    }
+
+    fn handle_command(&mut self, cmd: PlayerCommand) {
+        match cmd {
+            PlayerCommand::PlayUrl { .. }
+            | PlayerCommand::PlayCached { .. }
+            | PlayerCommand::PlayLiveStream { .. } => {
+                unreachable!(
+                    "PlayUrl / PlayCached / PlayLiveStream must be dispatched via play_payload()"
+                );
+            }
+            PlayerCommand::EnqueueNext { url, duration } => {
+                let watch_url = url.clone();
+                self.spawn_enqueue(duration, Some(watch_url), move || load_url_track(&url));
+            }
+            PlayerCommand::EnqueueNextCached { path, duration } => {
+                self.spawn_enqueue(duration, None, move || {
+                    read_cached_and_decode(&path).map(TrackSource::from_memory)
+                });
+            }
+            PlayerCommand::Pause => self.player.pause(),
+            PlayerCommand::Resume => self.player.play(),
+            PlayerCommand::Stop => self.reset_tracks(),
+            PlayerCommand::SetVolume(v) => self.player.set_volume(v),
+            PlayerCommand::Seek(pos) => match self.player.try_seek(pos) {
+                // Update prev_elapsed so the gapless-transition heuristic isn't
+                // confused by the sudden position jump.
+                Ok(()) => self.track.prev_elapsed = pos,
+                Err(e) if is_not_buffered(&e) => self.send(PlayerEvent::SeekUnavailable),
+                Err(_) => {}
+            },
+            PlayerCommand::Quit => {
+                // Handled by the command-drain loop in `run`.
+                unreachable!("Quit must be handled in the command-drain loop");
+            }
         }
     }
 }
 
 // ── Stream + decode ───────────────────────────────────────────────────────────
 
-/// Shared client: default `get()` uses short timeouts and can truncate large or
-/// slow streams; long tracks need a generous read deadline and occasional retries.
-fn stream_http_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            // Whole request including body (large lossless files over slow links).
-            .timeout(Duration::from_secs(900))
-            // Keep a dead server from monopolizing the player thread. This is no
-            // longer than the app's connectivity probe, so cached commands are not
-            // left queued behind a stale online request after entering offline mode.
-            .connect_timeout(Duration::from_secs(4))
-            .pool_idle_timeout(Some(Duration::from_secs(90)))
-            .user_agent(concat!("ratune/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .expect("stream HTTP client")
+/// Retrying an unreachable host keeps the single player thread blocked and
+/// prevents a subsequent cached track from starting, so callers fail fast on these.
+fn is_connectivity_failure(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|request| request.is_connect() || request.is_timeout())
     })
 }
 
+/// Start a library track as soon as its prebuffer arrives.
+///
+/// Falls back to decoding after the whole body has arrived (formats symphonia
+/// can't probe unseekable), then to a fresh whole-body download.
+fn load_url_track(url: &str) -> Result<TrackSource> {
+    let reader = open_track_stream(url)?;
+    let fallback = reader.reopen();
+    match TrackSource::from_stream(reader) {
+        Ok(source) => Ok(source),
+        Err(_) => TrackSource::from_completed_stream(fallback)
+            .or_else(|_| download_and_decode(url).map(TrackSource::from_memory)),
+    }
+}
+
+fn open_track_stream(url: &str) -> Result<StreamingReader> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            thread::sleep(Duration::from_millis(200 * u64::from(attempt)));
+        }
+        match open_stream(url) {
+            Ok(reader) => return Ok(reader),
+            Err(e) => {
+                let connectivity_failure = is_connectivity_failure(&e);
+                last_err = Some(e);
+                if connectivity_failure {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last_err.expect("loop runs at least once"))
+}
+
 fn fetch_track_bytes(url: &str, accept_identity: bool) -> Result<Vec<u8>> {
-    let mut req = stream_http_client().get(url);
+    let mut req = track_http_client().get(url);
     if accept_identity {
         // Some proxies / servers serve odd combinations of Content-Encoding and
         // body bytes; asking for identity avoids reqwest's decompress errors on
@@ -788,16 +762,13 @@ fn live_stream_and_decode(url: &str) -> Result<Decoder<LiveDecodeReader>> {
     }
 }
 
+/// Whole-body download into RAM: the last-resort path when streaming decode fails.
+///
+/// with_byte_len: tells symphonia the exact byte length, which also sets
+///   is_seekable = true internally.
+/// with_coarse_seek: bypasses the time_base requirement for accurate seeking
+///   (unavailable on transcoded MP3 streams); seeks to the nearest keyframe.
 fn download_and_decode(url: &str) -> Result<Decoder<Cursor<Vec<u8>>>> {
-    // Download the full track into RAM so symphonia gets an unambiguously
-    // seekable Cursor<Vec<u8>>.  StreamingReader over a BufReader was technically
-    // seekable but symphonia's demuxer cached seekability as false during probe,
-    // causing every try_seek to return Err(Unseekable).
-    //
-    // with_byte_len: tells symphonia the exact byte length, which also sets
-    //   is_seekable = true internally.
-    // with_coarse_seek: bypasses the time_base requirement for accurate seeking
-    //   (unavailable on transcoded MP3 streams); seeks to the nearest keyframe.
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..4u32 {
         if attempt > 0 {
@@ -808,15 +779,9 @@ fn download_and_decode(url: &str) -> Result<Decoder<Cursor<Vec<u8>>>> {
         match fetch_track_bytes(url, identity).and_then(build_symphonia_decoder) {
             Ok(decoder) => return Ok(decoder),
             Err(e) => {
-                // Retrying an unreachable host four times keeps the single player
-                // thread blocked and prevents a subsequent cached track from
-                // starting. Preserve retries for truncated bodies, HTTP failures,
-                // and decode quirks, but fail fast for connect/timeout errors.
-                let connectivity_failure = e.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<reqwest::Error>()
-                        .is_some_and(|request| request.is_connect() || request.is_timeout())
-                });
+                // Preserve retries for truncated bodies, HTTP failures, and decode
+                // quirks, but fail fast for connect/timeout errors.
+                let connectivity_failure = is_connectivity_failure(&e);
                 last_err = Some(e);
                 if connectivity_failure {
                     break;
