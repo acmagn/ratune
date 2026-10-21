@@ -128,6 +128,9 @@ pub fn wait_for_input(poll_ms: u64, should_quit: &mut bool) -> anyhow::Result<bo
             *should_quit = true;
             return Ok(false);
         }
+        if stdin_has_input() {
+            return Ok(true);
+        }
 
         let fd = io::stdin().as_raw_fd();
         let mut pfd = libc::pollfd {
@@ -178,11 +181,14 @@ pub fn wait_for_input(poll_ms: u64, should_quit: &mut bool) -> anyhow::Result<bo
     }
 }
 
-/// Non-blocking check for more stdin data (burst keypresses).
+/// Non-blocking check for more input: unread stdin bytes, or events crossterm has
+/// already read and parsed but not yet returned (one `read(2)` can yield many keys).
 pub fn stdin_has_input() -> bool {
     #[cfg(unix)]
     {
+        use crossterm::event;
         use std::os::unix::io::AsRawFd;
+        use std::time::Duration;
 
         if terminal_disconnected() {
             return false;
@@ -197,10 +203,12 @@ pub fn stdin_has_input() -> bool {
             Ok(n) => n,
             Err(_) => return false,
         };
-        if ret <= 0 {
-            return false;
+        if ret > 0 {
+            return pfd.revents & libc::POLLIN != 0 && !pty_fd_eof_pending(fd);
         }
-        pfd.revents & libc::POLLIN != 0 && !pty_fd_eof_pending(fd)
+        // Only safe while the fd is idle: crossterm then checks its queue without
+        // reading, whereas a read hitting EOF/EIO makes it spin forever.
+        event::poll(Duration::ZERO).unwrap_or(false)
     }
     #[cfg(not(unix))]
     {

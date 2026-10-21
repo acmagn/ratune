@@ -215,6 +215,32 @@ pub(crate) fn take_expired(slot: &mut Option<Instant>, now: Instant) -> bool {
     }
 }
 
+/// Apply cached starred marks to one freshly loaded browse list. Use this rather than
+/// `merge_server_starred` on per-keypress loads, which walks the whole library index.
+fn mark_starred_albums(
+    starred: Option<&ratune_subsonic::Starred2>,
+    albums: &mut [ratune_subsonic::Album],
+) {
+    let Some(starred) = starred else { return };
+    for a in albums {
+        if let Some(s) = starred.album.iter().find(|s| s.id == a.id) {
+            a.starred = Some(s.starred.clone().unwrap_or_default());
+        }
+    }
+}
+
+fn mark_starred_songs(
+    starred: Option<&ratune_subsonic::Starred2>,
+    songs: &mut [ratune_subsonic::Song],
+) {
+    let Some(starred) = starred else { return };
+    for t in songs {
+        if let Some(s) = starred.songs().iter().find(|s| s.id == t.id) {
+            t.starred = Some(s.starred.clone().unwrap_or_default());
+        }
+    }
+}
+
 /// True when a redraw was requested or the idle fallback interval has passed.
 pub(crate) fn redraw_due(needs: bool, last: Instant, now: Instant, idle: Duration) -> bool {
     needs || now.duration_since(last) >= idle
@@ -3716,7 +3742,7 @@ impl App {
                     .unwrap_or(false);
 
                 let mut prefetch_tracks: Option<String> = None;
-                let state = match result {
+                let mut state = match result {
                     Ok(albums) if !albums.is_empty() => {
                         if is_selected_artist {
                             if self.library.selected_album.is_none() {
@@ -3738,11 +3764,13 @@ impl App {
                     Ok(albums) => LoadingState::Loaded(albums),
                     Err(e) => LoadingState::Error(e),
                 };
+                if let LoadingState::Loaded(list) = &mut state {
+                    mark_starred_albums(self.server_starred.as_ref(), list);
+                }
                 self.library.albums.insert(artist_id, state);
                 if let Some(album_id) = prefetch_tracks {
                     self.fetch_tracks(album_id);
                 }
-                self.merge_server_starred();
             }
             LibraryUpdate::FlatAlbums(result) => {
                 let mut prefetch_tracks: Option<String> = None;
@@ -3782,7 +3810,8 @@ impl App {
                     .map(|a| a.id == album_id)
                     .unwrap_or(false);
                 let loaded = match result {
-                    Ok(songs) => {
+                    Ok(mut songs) => {
+                        mark_starred_songs(self.server_starred.as_ref(), &mut songs);
                         if is_current_album && !songs.is_empty() {
                             // Clamp restored index (or default to 0) to actual song count.
                             if self.library.selected_track.is_none() {
@@ -3798,7 +3827,6 @@ impl App {
                     Err(e) => LoadingState::Error(e),
                 };
                 self.library.tracks.insert(album_id, loaded);
-                self.merge_server_starred();
             }
             LibraryUpdate::AllTracksForArtist {
                 mut songs,
