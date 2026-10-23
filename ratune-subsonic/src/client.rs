@@ -32,10 +32,10 @@ use crate::error::check_status;
 use crate::models::{
     parse_music_library_root_folder_id, structured_lyrics_to_lines, Album, AlbumEnvelope,
     AlbumList2Envelope, Artist, ArtistEnvelope, ArtistRef, Artists, ArtistsEnvelope,
-    DirectoryChild, IndexesEnvelope, InternetRadioStation, InternetRadioStationsEnvelope,
-    LegacyLyricsEnvelope, LyricLine, LyricsBySongIdEnvelope, MusicDirectory,
-    MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope, PingEnvelope, Playlist,
-    PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
+    DirectoryChild, DiscTitle, IndexesEnvelope, InternetRadioStation,
+    InternetRadioStationsEnvelope, LegacyLyricsEnvelope, LyricLine, LyricsBySongIdEnvelope,
+    MusicDirectory, MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope, PingEnvelope,
+    Playlist, PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
     SearchEnvelope, SearchResult3, Song, SongEnvelope, Starred2, Starred2Envelope, SubsonicLibrary,
 };
 
@@ -1023,6 +1023,8 @@ impl Default for FetchLibraryOptions {
 #[derive(Debug, Clone, Default)]
 pub struct FetchLibraryResult {
     pub songs: Vec<Song>,
+    /// OpenSubsonic disc subtitles keyed by album id (albums without any are omitted).
+    pub disc_titles: HashMap<String, Vec<DiscTitle>>,
     /// Skipped `getArtist` / `getAlbum` / join errors (auth tokens redacted).
     pub warnings: Vec<String>,
 }
@@ -1063,7 +1065,7 @@ async fn fetch_songs_for_artist_inner(
     client: &SubsonicClient,
     artist: &Artist,
     album_parallelism: usize,
-) -> (Vec<Song>, Vec<String>) {
+) -> (Vec<Song>, HashMap<String, Vec<DiscTitle>>, Vec<String>) {
     let mut warnings = Vec::new();
     let artist_detail = match client.get_artist(&artist.id).await {
         Ok(a) => a,
@@ -1072,7 +1074,7 @@ async fn fetch_songs_for_artist_inner(
                 "get_artist({}) failed — {e}",
                 artist.id
             )));
-            return (Vec::new(), warnings);
+            return (Vec::new(), HashMap::new(), warnings);
         }
     };
 
@@ -1102,9 +1104,13 @@ async fn fetch_songs_for_artist_inner(
     }
 
     let mut songs: Vec<Song> = Vec::new();
+    let mut disc_titles: HashMap<String, Vec<DiscTitle>> = HashMap::new();
     while let Some(joined) = set.join_next().await {
         match joined {
             Ok((_album_id, Ok(album), stub_rating)) => {
+                if !album.disc_titles.is_empty() {
+                    disc_titles.insert(album.id.clone(), album.disc_titles.clone());
+                }
                 let album_artist_owned = album.artist.clone();
                 let album_artist = album_artist_owned.as_deref();
                 let stamp_artist_id = album
@@ -1182,7 +1188,7 @@ async fn fetch_songs_for_artist_inner(
     }
 
     songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
-    (songs, warnings)
+    (songs, disc_titles, warnings)
 }
 
 /// Subsonic/Navidrome use `userRating` 0 (or omit) for unrated; only 1–5 are real ratings.
@@ -1275,11 +1281,13 @@ pub async fn fetch_all_library_songs_with_options(
     }
 
     let mut by_id: HashMap<String, Song> = HashMap::new();
+    let mut disc_titles: HashMap<String, Vec<DiscTitle>> = HashMap::new();
     let mut warnings = Vec::new();
     while let Some(joined) = set.join_next().await {
         match joined {
-            Ok((song_vecs, artist_warnings)) => {
+            Ok((song_vecs, artist_disc_titles, artist_warnings)) => {
                 warnings.extend(artist_warnings);
+                disc_titles.extend(artist_disc_titles);
                 for s in song_vecs {
                     match by_id.get_mut(&s.id) {
                         Some(existing) => merge_indexed_song(existing, s),
@@ -1306,6 +1314,7 @@ pub async fn fetch_all_library_songs_with_options(
     });
     Ok(FetchLibraryResult {
         songs: tracks,
+        disc_titles,
         warnings,
     })
 }

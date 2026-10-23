@@ -3007,20 +3007,12 @@ fn handle_mouse_click(x: u16, y: u16, app: &mut App, terminal_size: ratatui::lay
                         };
                         if let Some(LoadingState::Loaded(songs)) = app.library.tracks.get(&album_id)
                         {
-                            let visible: Vec<usize> = if let Some(q) =
-                                app.browser_column_filter(crate::app::BrowserColumn::Tracks)
-                            {
-                                songs
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, s)| s.title.to_lowercase().contains(q))
-                                    .map(|(i, _)| i)
-                                    .collect()
-                            } else {
-                                (0..songs.len()).collect()
-                            };
+                            let rows = crate::state::album_track_rows(
+                                songs,
+                                app.browser_column_filter(crate::app::BrowserColumn::Tracks),
+                            );
                             let clicked = app.library.tracks_scroll + visible_row;
-                            visible.get(clicked).copied()
+                            rows.get(clicked).and_then(|r| r.track())
                         } else {
                             None
                         }

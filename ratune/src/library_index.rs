@@ -4,12 +4,13 @@
 //! Stored as JSON under `~/.cache/ratune/library_index.json` by default (see
 //! config). Text only. No art or audio.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use ratune_subsonic::Song;
+use ratune_subsonic::{DiscTitle, Song};
 use serde::{Deserialize, Serialize};
 
 use crate::text_width::{self, Align};
@@ -64,6 +65,10 @@ pub struct LibraryIndexFile {
     /// redundant refreshes when `[library] navidrome_skip_unchanged_scan` is enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub navidrome_last_scan: Option<String>,
+    /// OpenSubsonic disc subtitles keyed by album id. Missing in indexes written before
+    /// this field existed; a forced refresh fills it in.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub disc_titles: HashMap<String, Vec<DiscTitle>>,
 }
 
 impl LibraryIndexFile {
@@ -71,12 +76,14 @@ impl LibraryIndexFile {
         tracks: Vec<Song>,
         refreshed_at_unix: u64,
         navidrome_last_scan: Option<String>,
+        disc_titles: HashMap<String, Vec<DiscTitle>>,
     ) -> Self {
         Self {
             version: FORMAT_VERSION,
             refreshed_at_unix,
             tracks,
             navidrome_last_scan,
+            disc_titles,
         }
     }
 }
@@ -144,6 +151,7 @@ pub fn save(
     tracks: &[Song],
     refreshed_at_unix: u64,
     navidrome_last_scan: Option<&str>,
+    disc_titles: &HashMap<String, Vec<DiscTitle>>,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
@@ -152,6 +160,7 @@ pub fn save(
         tracks.to_vec(),
         refreshed_at_unix,
         navidrome_last_scan.map(String::from),
+        disc_titles.clone(),
     );
     let json = serde_json::to_string_pretty(&file).context("serialize library index")?;
     let nanos = std::time::SystemTime::now()
@@ -649,6 +658,7 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
                 release_date: None,
                 created: album_acc.created,
                 play_count: album_acc.play_count,
+                disc_titles: Vec::new(),
                 song: Vec::new(),
             })
             .collect();
@@ -679,6 +689,7 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
             release_date: None,
             created: album_acc.created,
             play_count: album_acc.play_count,
+            disc_titles: Vec::new(),
             song: Vec::new(),
         })
         .collect();
@@ -695,6 +706,30 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_file_without_disc_titles_still_loads() {
+        let j = r#"{"version":1,"refreshed_at_unix":5,"tracks":[]}"#;
+        let f: LibraryIndexFile = serde_json::from_str(j).unwrap();
+        assert!(f.disc_titles.is_empty());
+    }
+
+    #[test]
+    fn index_save_load_round_trips_disc_titles() {
+        let dir = std::env::temp_dir().join(format!("ratune-index-test-{}", std::process::id()));
+        let path = dir.join("library_index.json");
+        let titles = HashMap::from([(
+            "al1".to_string(),
+            vec![DiscTitle {
+                disc: 2,
+                title: "Live".into(),
+            }],
+        )]);
+        save(&path, &[], 7, None, &titles).unwrap();
+        let loaded = load(&path).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(loaded.disc_titles, titles);
+    }
 
     #[test]
     fn browse_snapshot_groups_artists_albums_tracks() {
