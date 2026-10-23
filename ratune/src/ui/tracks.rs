@@ -4,7 +4,9 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::app::{App, BrowserColumn};
-use crate::state::{LibraryState, LoadingState};
+use crate::state::{
+    album_track_rows, disc_header_label, AlbumTrackRow, LibraryState, LoadingState,
+};
 use crate::theme::style_with_bg;
 
 pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
@@ -90,29 +92,24 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 format!("{}{}{}{}{}", num, star, s.title, dur, rating_suffix)
             };
 
-            let visible: Vec<(usize, String)> =
-                if let Some(q) = app.browser_column_filter(BrowserColumn::Tracks) {
-                    songs
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, s)| s.title.to_lowercase().contains(q))
-                        .map(|(i, s)| (i, make_label(s)))
-                        .collect()
-                } else {
-                    songs
-                        .iter()
-                        .enumerate()
-                        .map(|(i, s)| (i, make_label(s)))
-                        .collect()
-                };
+            let disc_titles = app
+                .library
+                .disc_titles
+                .get(&album_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let visible = album_track_rows(songs, app.browser_column_filter(BrowserColumn::Tracks));
 
             let items: Vec<ListItem> = if visible.is_empty() {
                 vec![ListItem::new("No matches").style(Style::default().fg(t.dimmed))]
             } else {
                 visible
                     .iter()
-                    .map(|(_, label)| {
-                        ListItem::new(label.as_str()).style(Style::default().fg(t.foreground))
+                    .map(|row| match *row {
+                        AlbumTrackRow::Disc(n) => ListItem::new(disc_header_label(n, disc_titles))
+                            .style(Style::default().fg(t.dimmed).add_modifier(Modifier::BOLD)),
+                        AlbumTrackRow::Track(i) => ListItem::new(make_label(&songs[i]))
+                            .style(Style::default().fg(t.foreground)),
                     })
                     .collect()
             };
@@ -120,7 +117,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
             let sel = app
                 .library
                 .selected_track
-                .and_then(|s| visible.iter().position(|(i, _)| *i == s));
+                .and_then(|s| visible.iter().position(|r| *r == AlbumTrackRow::Track(s)));
 
             let list = List::new(items)
                 .block(block)
@@ -146,6 +143,14 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                         visible.len(),
                         vh,
                     );
+                    // Keep a disc's header on screen when its first track is selected.
+                    if sel_ix > 0
+                        && vh > 1
+                        && app.library.tracks_scroll == sel_ix
+                        && matches!(visible[sel_ix - 1], AlbumTrackRow::Disc(_))
+                    {
+                        app.library.tracks_scroll = sel_ix - 1;
+                    }
                     state = ListState::default().with_offset(app.library.tracks_scroll);
                     state.select(Some(sel_ix));
                 } else {

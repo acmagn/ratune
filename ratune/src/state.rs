@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use ratune_subsonic::models::{Album, Artist, InternetRadioStation, MusicFolder, Song};
+use ratune_subsonic::models::{Album, Artist, DiscTitle, InternetRadioStation, MusicFolder, Song};
 use serde::{Deserialize, Serialize};
 
 // ── LoadingState ──────────────────────────────────────────────────────────────
@@ -34,6 +34,8 @@ pub struct LibraryState {
 
     /// Songs keyed by album ID.
     pub tracks: HashMap<String, LoadingState<Vec<Song>>>,
+    /// OpenSubsonic disc subtitles keyed by album ID (only from live `getAlbum`).
+    pub disc_titles: HashMap<String, Vec<DiscTitle>>,
     pub selected_track: Option<usize>,
 
     /// First visible row index in the artist column (filtered list coordinates).
@@ -93,6 +95,55 @@ impl LibraryState {
         } else {
             None
         }
+    }
+}
+
+/// One row in the album tracks column: a non-selectable disc header or a track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlbumTrackRow {
+    Disc(u32),
+    Track(usize),
+}
+
+impl AlbumTrackRow {
+    pub fn track(self) -> Option<usize> {
+        match self {
+            Self::Track(i) => Some(i),
+            Self::Disc(_) => None,
+        }
+    }
+}
+
+/// Build filtered rows for an album's tracks, inserting a disc header wherever the disc
+/// number changes. Headers are only added when the album spans more than one disc.
+pub fn album_track_rows(songs: &[Song], filter: Option<&str>) -> Vec<AlbumTrackRow> {
+    let disc_of = |s: &Song| s.disc_number.unwrap_or(1);
+    let multi_disc = songs
+        .first()
+        .is_some_and(|first| songs.iter().any(|s| disc_of(s) != disc_of(first)));
+    let mut out = Vec::new();
+    let mut last_disc = None;
+    for (i, s) in songs.iter().enumerate() {
+        if filter.is_some_and(|q| !s.title.to_lowercase().contains(q)) {
+            continue;
+        }
+        if multi_disc && last_disc != Some(disc_of(s)) {
+            last_disc = Some(disc_of(s));
+            out.push(AlbumTrackRow::Disc(disc_of(s)));
+        }
+        out.push(AlbumTrackRow::Track(i));
+    }
+    out
+}
+
+/// Header label for `disc`, e.g. `Disc 2 · Live` when the server provides a subtitle.
+pub fn disc_header_label(disc: u32, titles: &[DiscTitle]) -> String {
+    match titles
+        .iter()
+        .find(|t| t.disc == disc && !t.title.trim().is_empty())
+    {
+        Some(t) => format!("Disc {disc} · {}", t.title.trim()),
+        None => format!("Disc {disc}"),
     }
 }
 
@@ -1120,5 +1171,72 @@ mod queue_tests {
         q.append_block(vec![song("a")], true);
         assert!(!q.is_shuffled());
         assert_eq!(q.songs[0].id, "a");
+    }
+}
+
+#[cfg(test)]
+mod album_track_rows_tests {
+    use super::{album_track_rows, disc_header_label, AlbumTrackRow};
+    use ratune_subsonic::{DiscTitle, Song};
+
+    fn song(title: &str, disc: Option<u32>) -> Song {
+        let mut s: Song = serde_json::from_str(r#"{"id":"x","title":""}"#).unwrap();
+        s.title = title.to_string();
+        s.disc_number = disc;
+        s
+    }
+
+    #[test]
+    fn single_disc_has_no_headers() {
+        let songs = vec![song("a", Some(1)), song("b", Some(1)), song("c", None)];
+        assert_eq!(
+            album_track_rows(&songs, None),
+            vec![
+                AlbumTrackRow::Track(0),
+                AlbumTrackRow::Track(1),
+                AlbumTrackRow::Track(2)
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_disc_inserts_header_at_each_change() {
+        let songs = vec![song("a", None), song("b", Some(1)), song("c", Some(2))];
+        assert_eq!(
+            album_track_rows(&songs, None),
+            vec![
+                AlbumTrackRow::Disc(1),
+                AlbumTrackRow::Track(0),
+                AlbumTrackRow::Track(1),
+                AlbumTrackRow::Disc(2),
+                AlbumTrackRow::Track(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_drops_headers_for_discs_without_matches() {
+        let songs = vec![song("intro", Some(1)), song("live jam", Some(2))];
+        assert_eq!(
+            album_track_rows(&songs, Some("jam")),
+            vec![AlbumTrackRow::Disc(2), AlbumTrackRow::Track(1)]
+        );
+    }
+
+    #[test]
+    fn header_label_uses_subtitle_when_present() {
+        let titles = vec![
+            DiscTitle {
+                disc: 2,
+                title: " Live ".into(),
+            },
+            DiscTitle {
+                disc: 3,
+                title: "".into(),
+            },
+        ];
+        assert_eq!(disc_header_label(1, &titles), "Disc 1");
+        assert_eq!(disc_header_label(2, &titles), "Disc 2 · Live");
+        assert_eq!(disc_header_label(3, &titles), "Disc 3");
     }
 }

@@ -262,9 +262,20 @@ pub struct Album {
     /// Server play count when provided (`getAlbum` / `getAlbumList2`).
     #[serde(default)]
     pub play_count: Option<u64>,
+    /// OpenSubsonic: per-disc subtitles (e.g. disc 2 "Live").
+    #[serde(default)]
+    pub disc_titles: Vec<DiscTitle>,
     /// Tracks. Populated only by `getAlbum`, empty for search results.
     #[serde(default)]
     pub song: Vec<Song>,
+}
+
+/// OpenSubsonic `discTitles` entry on AlbumID3.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscTitle {
+    pub disc: u32,
+    #[serde(default)]
+    pub title: String,
 }
 
 /// OpenSubsonic date with optional precision (`releaseDate` on AlbumID3).
@@ -1150,6 +1161,27 @@ mod tests {
         assert_eq!(s.album_id.as_deref(), Some("al1"));
         assert_eq!(s.disc_number, Some(1));
         assert_eq!(s.track, Some(3));
+    }
+
+    #[test]
+    fn deserialize_album_disc_titles() {
+        let j = r#"{"id":"al1","name":"Album","discTitles":[{"disc":1,"title":"Studio"},{"disc":2,"title":"Live"}]}"#;
+        let a: Album = serde_json::from_str(j).unwrap();
+        assert_eq!(
+            a.disc_titles,
+            vec![
+                DiscTitle {
+                    disc: 1,
+                    title: "Studio".into()
+                },
+                DiscTitle {
+                    disc: 2,
+                    title: "Live".into()
+                },
+            ]
+        );
+        let bare: Album = serde_json::from_str(r#"{"id":"al2","name":"B"}"#).unwrap();
+        assert!(bare.disc_titles.is_empty());
     }
 
     #[test]

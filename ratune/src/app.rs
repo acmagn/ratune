@@ -22,11 +22,11 @@ use crate::config::{AlbumArtBackend, BrowseMode, Config};
 use crate::history::PlayRecord;
 use crate::keybinds::Keybinds;
 use crate::state::{
-    folder_left_default_row, folder_preview_rows, ConfirmAction, DirectoryListing,
-    FavoritesCategory, FavoritesFocus, FavoritesOverlay, FolderBrowseState, FolderPreviewRow,
-    GlobalConfirm, LibraryState, LoadingState, NowPlayingPaneFocus, PlaybackState, PlaylistFocus,
-    PlaylistInputMode, PlaylistOverlay, QueueState, RadioField, RadioInputMode, RadioState,
-    ServerSearchFocus, ServerSearchOverlay,
+    album_track_rows, folder_left_default_row, folder_preview_rows, AlbumTrackRow, ConfirmAction,
+    DirectoryListing, FavoritesCategory, FavoritesFocus, FavoritesOverlay, FolderBrowseState,
+    FolderPreviewRow, GlobalConfirm, LibraryState, LoadingState, NowPlayingPaneFocus,
+    PlaybackState, PlaylistFocus, PlaylistInputMode, PlaylistOverlay, QueueState, RadioField,
+    RadioInputMode, RadioState, ServerSearchFocus, ServerSearchOverlay,
 };
 use crate::theme::Theme;
 use image::{imageops::FilterType, DynamicImage};
@@ -371,6 +371,7 @@ pub enum LibraryUpdate {
     Tracks {
         album_id: String,
         result: Result<Vec<ratune_subsonic::Song>, String>,
+        disc_titles: Vec<ratune_subsonic::DiscTitle>,
     },
     /// All tracks across every album for an artist; carries whether playback
     /// should auto-start (true when the queue was empty at dispatch time).
@@ -456,6 +457,7 @@ pub enum LibraryUpdate {
     /// - bool: whether this refresh was explicitly forced by the user (e.g. Ctrl+g).
     /// - BrowseSnapshot: artist/album/track tree built off the UI thread.
     /// - usize: non-fatal fetch warning count (details in library_index_refresh.log).
+    /// - HashMap: disc subtitles keyed by album id.
     LibraryIndexRefreshComplete {
         result: Result<
             (
@@ -464,6 +466,7 @@ pub enum LibraryUpdate {
                 bool,
                 std::sync::Arc<crate::library_index::BrowseSnapshot>,
                 usize,
+                HashMap<String, Vec<ratune_subsonic::DiscTitle>>,
             ),
             String,
         >,
@@ -716,6 +719,8 @@ pub struct App {
     /// Cached tracks for fzf (text only; persisted under `~/.cache/ratune/` by default).
     pub library_index_tracks: Vec<ratune_subsonic::Song>,
     library_index_by_id: HashMap<String, ratune_subsonic::Song>,
+    /// Disc subtitles from the index, keyed by album id.
+    library_index_disc_titles: HashMap<String, Vec<ratune_subsonic::DiscTitle>>,
     /// Unix seconds when the index was last fully refreshed, if known.
     pub library_index_refreshed_at: Option<u64>,
     /// Full-library browse tree from the index. Used for online Browse (and offline when
@@ -972,15 +977,16 @@ impl App {
         let track_cache =
             crate::cache::TrackCache::load(config.cache_enabled, config.cache_max_size_gb);
         let lyrics_disk_cache = crate::lyrics_cache::LyricsDiskCache::load();
-        let (library_index_tracks, library_index_refreshed_at) = if mode == PlayerMode::Daemon {
-            (Vec::new(), None)
-        } else {
-            let index_path = config.resolved_library_index_path();
-            match crate::library_index::load(&index_path) {
-                Some(f) => (f.tracks, Some(f.refreshed_at_unix)),
-                None => (Vec::new(), None),
-            }
-        };
+        let (library_index_tracks, library_index_refreshed_at, library_index_disc_titles) =
+            if mode == PlayerMode::Daemon {
+                (Vec::new(), None, HashMap::new())
+            } else {
+                let index_path = config.resolved_library_index_path();
+                match crate::library_index::load(&index_path) {
+                    Some(f) => (f.tracks, Some(f.refreshed_at_unix), f.disc_titles),
+                    None => (Vec::new(), None, HashMap::new()),
+                }
+            };
         let library_index_by_id = crate::library_index::index_by_id(&library_index_tracks);
         let browser_browse_mode = match config.browse_mode {
             BrowseMode::Genre => BrowseMode::Genre,
@@ -1054,6 +1060,7 @@ impl App {
             streamed_songs: VecDeque::new(),
             library_index_tracks,
             library_index_by_id,
+            library_index_disc_titles,
             library_index_refreshed_at,
             index_browse: None,
             offline_browse: None,
@@ -2933,6 +2940,7 @@ impl App {
                     bool,
                     std::sync::Arc<crate::library_index::BrowseSnapshot>,
                     usize,
+                    HashMap<String, Vec<ratune_subsonic::DiscTitle>>,
                 ),
                 String,
             > = async {
@@ -2950,17 +2958,19 @@ impl App {
                                     let path = index_path;
                                     let scan_save = Some(tok.clone());
                                     let tracks = file.tracks;
+                                    let disc_titles = file.disc_titles;
                                     let save_out = tokio::task::spawn_blocking(move || {
                                         let res = crate::library_index::save(
                                             &path,
                                             &tracks,
                                             now,
                                             scan_save.as_deref(),
+                                            &disc_titles,
                                         );
                                         let snapshot = std::sync::Arc::new(
                                             crate::library_index::build_browse_snapshot(&tracks),
                                         );
-                                        (res, tracks, snapshot)
+                                        (res, tracks, snapshot, disc_titles)
                                     })
                                     .await
                                     .map_err(|e| e.to_string())?;
@@ -2981,6 +2991,7 @@ impl App {
                                         false,
                                         save_out.2,
                                         0,
+                                        save_out.3,
                                     ));
                                 }
                             }
@@ -3006,6 +3017,7 @@ impl App {
                     .await;
                 }
                 let tracks = fetched.songs;
+                let disc_titles = fetched.disc_titles;
                 let scan_tok = if nav_skip {
                     client
                         .get_scan_status()
@@ -3023,10 +3035,16 @@ impl App {
                 let path = index_path;
                 let scan_save = scan_tok.clone();
                 let save_out = tokio::task::spawn_blocking(move || {
-                    let res = crate::library_index::save(&path, &tracks, now, scan_save.as_deref());
+                    let res = crate::library_index::save(
+                        &path,
+                        &tracks,
+                        now,
+                        scan_save.as_deref(),
+                        &disc_titles,
+                    );
                     let snapshot =
                         std::sync::Arc::new(crate::library_index::build_browse_snapshot(&tracks));
-                    (res, tracks, snapshot)
+                    (res, tracks, snapshot, disc_titles)
                 })
                 .await
                 .map_err(|e| e.to_string())?;
@@ -3038,7 +3056,14 @@ impl App {
                         let _ = crate::library_index::write_refresh_log(&log_path, &[msg]);
                     }
                 }
-                Ok((save_out.1, scan_tok, force, save_out.2, warning_count))
+                Ok((
+                    save_out.1,
+                    scan_tok,
+                    force,
+                    save_out.2,
+                    warning_count,
+                    save_out.3,
+                ))
             }
             .await;
             let _ = tx
@@ -3327,9 +3352,15 @@ impl App {
                 .get(&album_id)
                 .cloned()
                 .unwrap_or_default();
+            let disc_titles = self
+                .library_index_disc_titles
+                .get(&album_id)
+                .cloned()
+                .unwrap_or_default();
             self.apply_library_update(LibraryUpdate::Tracks {
                 album_id,
                 result: Ok(songs),
+                disc_titles,
             });
             return;
         }
@@ -3337,6 +3368,7 @@ impl App {
             self.apply_library_update(LibraryUpdate::Tracks {
                 album_id,
                 result: Ok(Vec::new()),
+                disc_titles: Vec::new(),
             });
             return;
         }
@@ -3347,12 +3379,17 @@ impl App {
         let tx = self.library_tx.clone();
         let fetch_id = album_id.clone();
         let handle = tokio::spawn(async move {
-            let result = client
-                .get_album(&album_id)
-                .await
-                .map(|a| a.song)
-                .map_err(|e| e.to_string());
-            let _ = tx.send(LibraryUpdate::Tracks { album_id, result }).await;
+            let (result, disc_titles) = match client.get_album(&album_id).await {
+                Ok(a) => (Ok(a.song), a.disc_titles),
+                Err(e) => (Err(e.to_string()), Vec::new()),
+            };
+            let _ = tx
+                .send(LibraryUpdate::Tracks {
+                    album_id,
+                    result,
+                    disc_titles,
+                })
+                .await;
         });
         self.browse_track_fetches
             .insert(fetch_id, handle.abort_handle());
@@ -3800,8 +3837,19 @@ impl App {
                 }
                 self.merge_server_starred();
             }
-            LibraryUpdate::Tracks { album_id, result } => {
+            LibraryUpdate::Tracks {
+                album_id,
+                result,
+                disc_titles,
+            } => {
                 self.browse_track_fetches.remove(&album_id);
+                if disc_titles.is_empty() {
+                    self.library.disc_titles.remove(&album_id);
+                } else {
+                    self.library
+                        .disc_titles
+                        .insert(album_id.clone(), disc_titles);
+                }
 
                 // Is this update for the currently-selected album?
                 let is_current_album = self
@@ -4153,10 +4201,18 @@ impl App {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 match result {
-                    Ok((tracks, _navidrome_last_scan, forced, snapshot, warning_count)) => {
+                    Ok((
+                        tracks,
+                        _navidrome_last_scan,
+                        forced,
+                        snapshot,
+                        warning_count,
+                        disc_titles,
+                    )) => {
                         // Disk save already ran off the UI thread in the refresh task.
                         self.library_index_refreshed_at = Some(now);
                         self.library_index_tracks = tracks;
+                        self.library_index_disc_titles = disc_titles;
                         self.library_index_by_id =
                             crate::library_index::index_by_id(&self.library_index_tracks);
                         self.index_browse = Some(snapshot);
@@ -7702,16 +7758,10 @@ impl App {
                 };
                 if let Some(LoadingState::Loaded(songs)) = self.library.tracks.get(&album_id) {
                     let indices: Vec<usize> =
-                        if let Some(q) = self.browser_column_filter(BrowserColumn::Tracks) {
-                            songs
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, s)| s.title.to_lowercase().contains(q))
-                                .map(|(i, _)| i)
-                                .collect()
-                        } else {
-                            (0..songs.len()).collect()
-                        };
+                        album_track_rows(songs, self.browser_column_filter(BrowserColumn::Tracks))
+                            .into_iter()
+                            .filter_map(AlbumTrackRow::track)
+                            .collect();
                     if indices.is_empty() {
                         return;
                     }
