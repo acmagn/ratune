@@ -366,6 +366,45 @@ pub struct HomeState {
 
 // ── LibraryUpdate: messages sent back from background fetch tasks ─────────────
 
+/// Successful library metadata index refresh.
+#[derive(Debug)]
+pub struct LibraryIndexRefreshed {
+    /// Fresh index contents. `None` when the on-disk index the UI already holds is unchanged.
+    pub index: Option<RefreshedLibraryIndex>,
+    /// Whether this refresh was explicitly forced by the user (e.g. Ctrl+g).
+    pub forced: bool,
+    /// Non-fatal fetch warning count (details in library_index_refresh.log).
+    pub warning_count: usize,
+    /// `refreshed_at_unix` written to disk, when the save succeeded.
+    pub saved_at: Option<u64>,
+}
+
+#[derive(Debug)]
+pub struct RefreshedLibraryIndex {
+    pub tracks: Vec<ratune_subsonic::Song>,
+    /// Artist/album/track tree built off the UI thread from `tracks`.
+    pub snapshot: std::sync::Arc<crate::library_index::BrowseSnapshot>,
+    /// Disc subtitles keyed by album id.
+    pub disc_titles: HashMap<String, Vec<ratune_subsonic::DiscTitle>>,
+}
+
+/// Save errors stay off the TUI; the refresh log is the place for diagnostics.
+fn log_library_index_save_error(e: &anyhow::Error) {
+    if let Some(log_path) = crate::library_index::default_refresh_log_path() {
+        let msg = format!("library index save: {e}");
+        let _ = crate::library_index::write_refresh_log(&log_path, &[msg]);
+    }
+}
+
+/// Hand freed heap pages back to the OS. glibc keeps them in per-thread arenas otherwise,
+/// which after a large library index swap leaves hundreds of MB resident.
+fn release_freed_heap() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
 #[derive(Debug)]
 pub enum LibraryUpdate {
     Artists(Result<Vec<ratune_subsonic::Artist>, String>),
@@ -458,25 +497,8 @@ pub enum LibraryUpdate {
     /// Playlist list fetched for the picker (separate from the overlay's list).
     PlaylistsForPicker(Vec<ratune_subsonic::Playlist>),
     /// Full library metadata index finished refreshing (background task).
-    /// Tuple:
-    /// - Vec<Song>: fresh index contents
-    /// - Option<String>: Navidrome `lastScan` token to persist when scan-skip is enabled.
-    /// - bool: whether this refresh was explicitly forced by the user (e.g. Ctrl+g).
-    /// - BrowseSnapshot: artist/album/track tree built off the UI thread.
-    /// - usize: non-fatal fetch warning count (details in library_index_refresh.log).
-    /// - HashMap: disc subtitles keyed by album id.
     LibraryIndexRefreshComplete {
-        result: Result<
-            (
-                Vec<ratune_subsonic::Song>,
-                Option<String>,
-                bool,
-                std::sync::Arc<crate::library_index::BrowseSnapshot>,
-                usize,
-                HashMap<String, Vec<ratune_subsonic::DiscTitle>>,
-            ),
-            String,
-        >,
+        result: Result<LibraryIndexRefreshed, String>,
     },
     /// Full-library fetch (from server) finished for "append whole library" when index is disabled.
     LibraryServerAppendQueueComplete {
@@ -725,16 +747,19 @@ pub struct App {
     // ── Library metadata index (Milestone 2) ───────────────────────────────────
     /// Cached tracks for fzf (text only; persisted under `~/.cache/ratune/` by default).
     pub library_index_tracks: Vec<ratune_subsonic::Song>,
-    library_index_by_id: HashMap<String, ratune_subsonic::Song>,
+    /// Song id → position in `library_index_tracks`.
+    library_index_by_id: HashMap<String, usize>,
     /// Disc subtitles from the index, keyed by album id.
     library_index_disc_titles: HashMap<String, Vec<ratune_subsonic::DiscTitle>>,
     /// Unix seconds when the index was last fully refreshed, if known.
     pub library_index_refreshed_at: Option<u64>,
+    /// `refreshed_at_unix` of the on-disk index that `library_index_tracks` matches.
+    library_index_saved_at: Option<u64>,
     /// Full-library browse tree from the index. Used for online Browse (and offline when
-    /// audio cache filtering is not needed).
+    /// audio cache filtering is not needed). Positions refer to `library_index_tracks`.
     index_browse: Option<std::sync::Arc<crate::library_index::BrowseSnapshot>>,
     /// Cache-filtered browse hierarchy for offline artist/album/track columns when caching
-    /// is enabled (only tracks with audio on disk).
+    /// is enabled (only tracks with audio on disk). Positions refer to `library_index_tracks`.
     offline_browse: Option<std::sync::Arc<crate::library_index::BrowseSnapshot>>,
     /// In-flight online `getArtist` fetches; aborted when the user navigates away.
     browse_album_fetches: HashMap<String, tokio::task::AbortHandle>,
@@ -1071,6 +1096,7 @@ impl App {
             library_index_by_id,
             library_index_disc_titles,
             library_index_refreshed_at,
+            library_index_saved_at: library_index_refreshed_at,
             index_browse: None,
             offline_browse: None,
             browse_album_fetches: HashMap::new(),
@@ -1754,6 +1780,7 @@ impl App {
             .collect();
         self.home_strip_thumb_prepared
             .retain(|id, _| keep_ids.contains(id));
+        self.home_art_cache.retain(|id, _| keep_ids.contains(id));
 
         // Recent tracks: last 15 from history (most recent first).
         let total = self.history.records.len();
@@ -2717,18 +2744,16 @@ impl App {
             self.offline_browse = None;
             return;
         }
-        let tracks = if self.cache.enabled {
-            self.cache.filter_cached_tracks(&self.library_index_tracks)
+        let cache = &self.cache;
+        let snapshot =
+            crate::library_index::build_browse_snapshot_filtered(&self.library_index_tracks, |s| {
+                !cache.enabled || cache.get_const(&s.id)
+            });
+        self.offline_browse = if snapshot.is_empty() {
+            None
         } else {
-            self.library_index_tracks.clone()
+            Some(std::sync::Arc::new(snapshot))
         };
-        if tracks.is_empty() {
-            self.offline_browse = None;
-            return;
-        }
-        self.offline_browse = Some(std::sync::Arc::new(
-            crate::library_index::build_browse_snapshot(&tracks),
-        ));
     }
 
     fn offline_browse_empty_message(&self) -> &'static str {
@@ -2954,21 +2979,12 @@ impl App {
         let nav_skip = self.config.library_navidrome_skip_unchanged_scan;
         let album_p = self.config.library_fetch_album_parallelism;
         let artist_p = self.config.library_fetch_artist_parallelism;
+        let saved_at = self.library_index_saved_at;
         tokio::spawn(async move {
-            let result: Result<
-                (
-                    Vec<ratune_subsonic::Song>,
-                    Option<String>,
-                    bool,
-                    std::sync::Arc<crate::library_index::BrowseSnapshot>,
-                    usize,
-                    HashMap<String, Vec<ratune_subsonic::DiscTitle>>,
-                ),
-                String,
-            > = async {
+            let result: Result<LibraryIndexRefreshed, String> = async {
                 if nav_skip && !force {
-                    if let Some(file) = crate::library_index::load(&index_path) {
-                        if let Some(ref tok) = file.navidrome_last_scan {
+                    if let Some(head) = crate::library_index::load_header(&index_path) {
+                        if let Some(tok) = head.navidrome_last_scan {
                             if let Ok(status) = client.get_scan_status().await {
                                 if !status.scanning
                                     && status.last_scan.as_deref() == Some(tok.as_str())
@@ -2977,44 +2993,67 @@ impl App {
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .map(|d| d.as_secs())
                                         .unwrap_or(0);
-                                    let path = index_path;
-                                    let scan_save = Some(tok.clone());
-                                    let tracks = file.tracks;
-                                    let disc_titles = file.disc_titles;
-                                    let save_out = tokio::task::spawn_blocking(move || {
-                                        let res = crate::library_index::save(
-                                            &path,
-                                            &tracks,
-                                            now,
-                                            scan_save.as_deref(),
-                                            &disc_titles,
-                                        );
-                                        let snapshot = std::sync::Arc::new(
-                                            crate::library_index::build_browse_snapshot(&tracks),
-                                        );
-                                        (res, tracks, snapshot, disc_titles)
-                                    })
-                                    .await
-                                    .map_err(|e| e.to_string())?;
-                                    if let Err(e) = save_out.0 {
-                                        let log_path =
-                                            crate::library_index::default_refresh_log_path();
-                                        if let Some(log_path) = log_path {
-                                            let msg = format!("library index save: {e}");
-                                            let _ = crate::library_index::write_refresh_log(
-                                                &log_path,
-                                                &[msg],
-                                            );
+                                    // The UI already holds this exact file: only bump its timestamp.
+                                    if saved_at == Some(head.refreshed_at_unix) {
+                                        let path = index_path.clone();
+                                        let scan_save = tok.clone();
+                                        let res = tokio::task::spawn_blocking(move || {
+                                            crate::library_index::save_refreshed_at(
+                                                &path,
+                                                now,
+                                                Some(&scan_save),
+                                            )
+                                        })
+                                        .await
+                                        .map_err(|e| e.to_string())?;
+                                        match res {
+                                            Ok(()) => {
+                                                return Ok(LibraryIndexRefreshed {
+                                                    index: None,
+                                                    forced: false,
+                                                    warning_count: 0,
+                                                    saved_at: Some(now),
+                                                });
+                                            }
+                                            Err(e) => log_library_index_save_error(&e),
                                         }
                                     }
-                                    return Ok((
-                                        save_out.1,
-                                        Some(tok.clone()),
-                                        false,
-                                        save_out.2,
-                                        0,
-                                        save_out.3,
-                                    ));
+                                    if let Some(file) = crate::library_index::load(&index_path) {
+                                        let path = index_path;
+                                        let tracks = file.tracks;
+                                        let disc_titles = file.disc_titles;
+                                        let save_out = tokio::task::spawn_blocking(move || {
+                                            let res = crate::library_index::save(
+                                                &path,
+                                                &tracks,
+                                                now,
+                                                Some(&tok),
+                                                &disc_titles,
+                                            );
+                                            let snapshot = std::sync::Arc::new(
+                                                crate::library_index::build_browse_snapshot(
+                                                    &tracks,
+                                                ),
+                                            );
+                                            (res, tracks, snapshot, disc_titles)
+                                        })
+                                        .await
+                                        .map_err(|e| e.to_string())?;
+                                        let (res, tracks, snapshot, disc_titles) = save_out;
+                                        if let Err(e) = &res {
+                                            log_library_index_save_error(e);
+                                        }
+                                        return Ok(LibraryIndexRefreshed {
+                                            index: Some(RefreshedLibraryIndex {
+                                                tracks,
+                                                snapshot,
+                                                disc_titles,
+                                            }),
+                                            forced: false,
+                                            warning_count: 0,
+                                            saved_at: res.is_ok().then_some(now),
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -3055,13 +3094,12 @@ impl App {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 let path = index_path;
-                let scan_save = scan_tok.clone();
                 let save_out = tokio::task::spawn_blocking(move || {
                     let res = crate::library_index::save(
                         &path,
                         &tracks,
                         now,
-                        scan_save.as_deref(),
+                        scan_tok.as_deref(),
                         &disc_titles,
                     );
                     let snapshot =
@@ -3070,22 +3108,20 @@ impl App {
                 })
                 .await
                 .map_err(|e| e.to_string())?;
-                if let Err(e) = save_out.0 {
-                    // Save errors stay off the TUI; refresh log is the place for diagnostics.
-                    let log_path = crate::library_index::default_refresh_log_path();
-                    if let Some(log_path) = log_path {
-                        let msg = format!("library index save: {e}");
-                        let _ = crate::library_index::write_refresh_log(&log_path, &[msg]);
-                    }
+                let (res, tracks, snapshot, disc_titles) = save_out;
+                if let Err(e) = &res {
+                    log_library_index_save_error(e);
                 }
-                Ok((
-                    save_out.1,
-                    scan_tok,
-                    force,
-                    save_out.2,
+                Ok(LibraryIndexRefreshed {
+                    index: Some(RefreshedLibraryIndex {
+                        tracks,
+                        snapshot,
+                        disc_titles,
+                    }),
+                    forced: force,
                     warning_count,
-                    save_out.3,
-                ))
+                    saved_at: res.is_ok().then_some(now),
+                })
             }
             .await;
             let _ = tx
@@ -3154,8 +3190,12 @@ impl App {
         let was_empty = self.queue.songs.is_empty();
         let mut collected = Vec::new();
         for id in ids {
-            if let Some(song) = self.library_index_by_id.get(id.as_str()).cloned() {
-                collected.push(song);
+            if let Some(song) = self
+                .library_index_by_id
+                .get(id.as_str())
+                .and_then(|&i| self.library_index_tracks.get(i))
+            {
+                collected.push(song.clone());
             }
         }
         let n = collected.len();
@@ -3371,11 +3411,7 @@ impl App {
         self.abort_stale_track_fetches(Some(&album_id));
 
         if let Some(snapshot) = self.browse_snapshot() {
-            let songs = snapshot
-                .tracks_by_album
-                .get(&album_id)
-                .cloned()
-                .unwrap_or_default();
+            let songs = snapshot.album_tracks(&self.library_index_tracks, &album_id);
             let disc_titles = self
                 .library_index_disc_titles
                 .get(&album_id)
@@ -4223,21 +4259,27 @@ impl App {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 match result {
-                    Ok((
-                        tracks,
-                        _navidrome_last_scan,
+                    Ok(LibraryIndexRefreshed {
+                        index,
                         forced,
-                        snapshot,
                         warning_count,
-                        disc_titles,
-                    )) => {
+                        saved_at,
+                    }) => {
                         // Disk save already ran off the UI thread in the refresh task.
                         self.library_index_refreshed_at = Some(now);
-                        self.library_index_tracks = tracks;
-                        self.library_index_disc_titles = disc_titles;
-                        self.library_index_by_id =
-                            crate::library_index::index_by_id(&self.library_index_tracks);
-                        self.index_browse = Some(snapshot);
+                        if let Some(index) = index {
+                            self.library_index_saved_at = saved_at;
+                            self.library_index_tracks = index.tracks;
+                            self.library_index_disc_titles = index.disc_titles;
+                            self.library_index_by_id =
+                                crate::library_index::index_by_id(&self.library_index_tracks);
+                            self.index_browse = Some(index.snapshot);
+                            // Snapshot positions refer to the old track list.
+                            self.offline_browse = None;
+                        } else if saved_at.is_some() {
+                            self.library_index_saved_at = saved_at;
+                        }
+                        release_freed_heap();
                         if !self.server_reachable {
                             self.prepare_offline_browse();
                             if self.browser_browse_mode == BrowseMode::Albums {
@@ -4348,6 +4390,7 @@ impl App {
                         let album_id = self
                             .library_index_by_id
                             .get(&id)
+                            .and_then(|&i| self.library_index_tracks.get(i))
                             .and_then(|s| s.album_id.clone())
                             .or_else(|| {
                                 self.queue
@@ -6232,9 +6275,6 @@ impl App {
                 s.starred = starred.clone();
             }
         }
-        if let Some(s) = self.library_index_by_id.get_mut(song_id) {
-            s.starred = starred.clone();
-        }
         for s in self
             .library_index_tracks
             .iter_mut()
@@ -6321,9 +6361,6 @@ impl App {
             for s in tracks.iter_mut().filter(|s| s.id == song_id) {
                 s.user_rating = rating;
             }
-        }
-        if let Some(s) = self.library_index_by_id.get_mut(song_id) {
-            s.user_rating = rating;
         }
         for s in self
             .library_index_tracks

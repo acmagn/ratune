@@ -71,23 +71,6 @@ pub struct LibraryIndexFile {
     pub disc_titles: HashMap<String, Vec<DiscTitle>>,
 }
 
-impl LibraryIndexFile {
-    pub fn new(
-        tracks: Vec<Song>,
-        refreshed_at_unix: u64,
-        navidrome_last_scan: Option<String>,
-        disc_titles: HashMap<String, Vec<DiscTitle>>,
-    ) -> Self {
-        Self {
-            version: FORMAT_VERSION,
-            refreshed_at_unix,
-            tracks,
-            navidrome_last_scan,
-            disc_titles,
-        }
-    }
-}
-
 /// Default path: `~/.cache/ratune/library_index.json`.
 pub fn default_index_path() -> Option<PathBuf> {
     let base = dirs_cache_base()?;
@@ -145,6 +128,75 @@ pub fn load(path: &Path) -> Option<LibraryIndexFile> {
     serde_json::from_str(&text).ok()
 }
 
+/// Borrowing mirror of [`LibraryIndexFile`] so saving does not clone the whole library.
+/// Field order and skip rules must match [`LibraryIndexFile`].
+#[derive(Serialize)]
+struct LibraryIndexFileRef<'a> {
+    version: u32,
+    refreshed_at_unix: u64,
+    tracks: &'a [Song],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navidrome_last_scan: Option<&'a str>,
+    #[serde(skip_serializing_if = "map_is_empty")]
+    disc_titles: &'a HashMap<String, Vec<DiscTitle>>,
+}
+
+fn map_is_empty(m: &&HashMap<String, Vec<DiscTitle>>) -> bool {
+    m.is_empty()
+}
+
+/// Same layout as [`LibraryIndexFile`], but leaves the large fields as raw JSON text.
+#[derive(Serialize, Deserialize)]
+struct LibraryIndexFileRaw<'a> {
+    version: u32,
+    refreshed_at_unix: u64,
+    #[serde(borrow)]
+    tracks: &'a serde_json::value::RawValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    navidrome_last_scan: Option<String>,
+    #[serde(default, borrow, skip_serializing_if = "Option::is_none")]
+    disc_titles: Option<&'a serde_json::value::RawValue>,
+}
+
+/// Index metadata without the track list.
+#[derive(Deserialize)]
+pub struct LibraryIndexHeader {
+    pub refreshed_at_unix: u64,
+    #[serde(default)]
+    pub navidrome_last_scan: Option<String>,
+}
+
+/// Read only the index header. Track entries are skipped without being allocated.
+pub fn load_header(path: &Path) -> Option<LibraryIndexHeader> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Rewrite `refreshed_at_unix` (and the scan token) while keeping the stored tracks verbatim.
+/// Fails when the file is not the current format so the caller can fall back to a full load.
+pub fn save_refreshed_at(
+    path: &Path,
+    refreshed_at_unix: u64,
+    navidrome_last_scan: Option<&str>,
+) -> Result<()> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut file: LibraryIndexFileRaw<'_> =
+        serde_json::from_str(&text).context("parse library index")?;
+    anyhow::ensure!(
+        file.version == FORMAT_VERSION,
+        "library index version {} != {FORMAT_VERSION}",
+        file.version
+    );
+    file.refreshed_at_unix = refreshed_at_unix;
+    file.navidrome_last_scan = navidrome_last_scan.map(String::from);
+    if file.disc_titles.is_some_and(|d| d.get().trim() == "{}") {
+        file.disc_titles = None;
+    }
+    write_atomic(path, |w| {
+        serde_json::to_writer_pretty(w, &file).context("serialize library index")
+    })
+}
+
 /// Atomically write the index (temp + rename).
 pub fn save(
     path: &Path,
@@ -153,23 +205,42 @@ pub fn save(
     navidrome_last_scan: Option<&str>,
     disc_titles: &HashMap<String, Vec<DiscTitle>>,
 ) -> Result<()> {
+    let file = LibraryIndexFileRef {
+        version: FORMAT_VERSION,
+        refreshed_at_unix,
+        tracks,
+        navidrome_last_scan,
+        disc_titles,
+    };
+    write_atomic(path, |w| {
+        serde_json::to_writer_pretty(w, &file).context("serialize library index")
+    })
+}
+
+fn write_atomic(
+    path: &Path,
+    write: impl FnOnce(&mut std::io::BufWriter<&mut fs::File>) -> Result<()>,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
-    let file = LibraryIndexFile::new(
-        tracks.to_vec(),
-        refreshed_at_unix,
-        navidrome_last_scan.map(String::from),
-        disc_titles.clone(),
-    );
-    let json = serde_json::to_string_pretty(&file).context("serialize library index")?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let temp = path.with_extension(format!("json.{nanos}.part"));
     let mut f = fs::File::create(&temp).with_context(|| format!("writing {}", temp.display()))?;
-    f.write_all(json.as_bytes())?;
+    let written = (|| {
+        let mut w = std::io::BufWriter::new(&mut f);
+        write(&mut w)?;
+        w.flush()?;
+        Ok(())
+    })();
+    if let Err(e) = written {
+        drop(f);
+        let _ = fs::remove_file(&temp);
+        return Err(e);
+    }
     f.sync_all().ok();
     drop(f);
     fs::rename(&temp, path).with_context(|| format!("renaming to {}", path.display()))?;
@@ -233,7 +304,7 @@ fn fzf_field_header(field: usize, cols: FzfColumns) -> Option<String> {
     Some(format_fzf_column(label, width))
 }
 
-/// Tab-separated header labels padded to match [`fzf_input_lines`] columns in the order
+/// Tab-separated header labels padded to match [`write_fzf_input_lines`] columns in the order
 /// given by fzf's `--with-nth` (defaults to artist, album, title, time). Pass as
 /// `fzf --header=…` so labels line up with data rows.
 pub fn fzf_header_line(cols: FzfColumns, with_nth: &[usize]) -> String {
@@ -249,8 +320,11 @@ pub fn fzf_header_line(cols: FzfColumns, with_nth: &[usize]) -> String {
 /// Default `[library.fzf].args` uses `--nth=1,2,3` (artist, album, title; duration is
 /// shown but excluded from fuzzy search). Column widths come from [`FzfColumns`]; set a
 /// width to `0` to send the full field (needed for searching long titles).
-pub fn fzf_input_lines(tracks: &[Song], cols: FzfColumns) -> String {
-    let mut out = String::new();
+pub fn write_fzf_input_lines<'a>(
+    out: &mut (impl Write + ?Sized),
+    tracks: impl IntoIterator<Item = &'a Song>,
+    cols: FzfColumns,
+) -> std::io::Result<()> {
     for s in tracks {
         let artist = s.artist.as_deref().unwrap_or("—");
         let album = s.album.as_deref().unwrap_or("—");
@@ -264,12 +338,12 @@ pub fn fzf_input_lines(tracks: &[Song], cols: FzfColumns) -> String {
         let album = format_fzf_column(&sanitize_field(album), cols.album);
         let title = format_fzf_column(&sanitize_field(title), cols.title);
         let dur = format_fzf_column(&sanitize_field(&dur), cols.duration);
-        out.push_str(&format!("{id}\t{artist}\t{album}\t{title}\t{dur}\n"));
+        writeln!(out, "{id}\t{artist}\t{album}\t{title}\t{dur}")?;
     }
-    out
+    Ok(())
 }
 
-/// Parse the first field (song id) from a line emitted by [`fzf_input_lines`].
+/// Parse the first field (song id) from a line emitted by [`write_fzf_input_lines`].
 pub fn parse_pick_line(line: &str) -> Option<String> {
     let line = line.trim_end_matches('\n');
     line.split('\t').next().map(String::from)
@@ -281,9 +355,14 @@ fn fmt_duration_ms(secs: u32) -> String {
     format!("{m}:{s:02}")
 }
 
-/// Build an id → song map for enqueue after fzf.
-pub fn index_by_id(tracks: &[Song]) -> std::collections::HashMap<String, Song> {
-    tracks.iter().cloned().map(|s| (s.id.clone(), s)).collect()
+/// Build an id → position map into `tracks` for enqueue after fzf.
+/// Duplicate ids resolve to the last occurrence.
+pub fn index_by_id(tracks: &[Song]) -> std::collections::HashMap<String, usize> {
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id.clone(), i))
+        .collect()
 }
 
 /// Artist/album/track hierarchy derived from a flat library index. Used to drive the
@@ -294,7 +373,26 @@ pub struct BrowseSnapshot {
     pub albums_by_artist: std::collections::HashMap<String, Vec<ratune_subsonic::Album>>,
     /// Deduped flat album list (one entry per album id) for Albums browse mode.
     pub flat_albums: Vec<ratune_subsonic::Album>,
-    pub tracks_by_album: std::collections::HashMap<String, Vec<Song>>,
+    /// Positions into the track slice the snapshot was built from, in disc/track order.
+    tracks_by_album: std::collections::HashMap<String, Vec<usize>>,
+}
+
+impl BrowseSnapshot {
+    /// Songs of `album_id`. `tracks` must be the slice this snapshot was built from.
+    pub fn album_tracks(&self, tracks: &[Song], album_id: &str) -> Vec<Song> {
+        self.tracks_by_album
+            .get(album_id)
+            .map(|idxs| {
+                idxs.iter()
+                    .filter_map(|&i| tracks.get(i).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tracks_by_album.is_empty()
+    }
 }
 
 /// Sort order for the flat Albums browse list.
@@ -434,7 +532,7 @@ fn offline_album_id(song: &Song) -> String {
 ///
 /// Returns **all** album artists when OpenSubsonic `albumArtists` lists several (classical
 /// composer + performer). Falls back to a single album-artist / legacy grouping.
-fn browse_artists_for_album(songs: &[Song]) -> Vec<(String, String)> {
+fn browse_artists_for_album(songs: &[&Song]) -> Vec<(String, String)> {
     let mut by_id: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for s in songs {
         for a in &s.album_artists {
@@ -456,7 +554,7 @@ fn browse_artists_for_album(songs: &[Song]) -> Vec<(String, String)> {
     vec![browse_artist_for_album_fallback(songs)]
 }
 
-fn browse_artist_for_album_fallback(songs: &[Song]) -> (String, String) {
+fn browse_artist_for_album_fallback(songs: &[&Song]) -> (String, String) {
     for s in songs {
         if let Some(id) = non_empty(&s.album_artist_id) {
             let name = non_empty(&s.album_artist)
@@ -497,8 +595,11 @@ fn album_sort_key(a: &ratune_subsonic::Album) -> (u32, String) {
     (a.year.unwrap_or(0), a.name.to_lowercase())
 }
 
-fn sort_songs(songs: &mut [Song]) {
-    songs.sort_by_key(|s| (s.disc_number.unwrap_or(1), s.track.unwrap_or(0)));
+fn sort_songs(songs: &mut [usize], tracks: &[Song]) {
+    songs.sort_by_key(|&i| {
+        let s = &tracks[i];
+        (s.disc_number.unwrap_or(1), s.track.unwrap_or(0))
+    });
 }
 
 /// Derive browse columns from the on-disk library index (same data as the fzf picker).
@@ -506,6 +607,15 @@ fn sort_songs(songs: &mut [Song]) {
 /// Albums are grouped under **album artist** (not track artist) so Browse matches the
 /// live Subsonic `getArtists` / `getArtist` hierarchy.
 pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
+    build_browse_snapshot_filtered(tracks, |_| true)
+}
+
+/// [`build_browse_snapshot`] over only the songs where `keep` returns true.
+/// Track positions still refer to the full `tracks` slice.
+pub fn build_browse_snapshot_filtered(
+    tracks: &[Song],
+    keep: impl Fn(&Song) -> bool,
+) -> BrowseSnapshot {
     use ratune_subsonic::{Album, Artist};
     use std::collections::HashMap;
 
@@ -526,9 +636,12 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
     }
 
     // Phase 1: gather songs by album id (shared album_id stays one album even on compilations).
-    let mut by_album: HashMap<String, Vec<Song>> = HashMap::new();
+    let mut by_album: HashMap<String, Vec<usize>> = HashMap::new();
     let mut album_order_names: HashMap<String, String> = HashMap::new();
-    for song in tracks {
+    for (i, song) in tracks.iter().enumerate() {
+        if !keep(song) {
+            continue;
+        }
         let album_id = offline_album_id(song);
         album_order_names
             .entry(album_id.clone())
@@ -537,16 +650,17 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
                     .clone()
                     .unwrap_or_else(|| "Unknown Album".to_string())
             });
-        by_album.entry(album_id).or_default().push(song.clone());
+        by_album.entry(album_id).or_default().push(i);
     }
 
     // Phase 2: list each album under every album artist (classical composer + performer).
     let mut by_artist: HashMap<String, (String, HashMap<String, AlbumAcc>)> = HashMap::new();
-    let mut tracks_by_album: HashMap<String, Vec<Song>> = HashMap::new();
+    let mut tracks_by_album: HashMap<String, Vec<usize>> = HashMap::new();
     let mut flat_by_id: HashMap<String, AlbumAcc> = HashMap::new();
 
-    for (album_id, mut songs) in by_album {
-        sort_songs(&mut songs);
+    for (album_id, mut song_idxs) in by_album {
+        sort_songs(&mut song_idxs, tracks);
+        let songs: Vec<&Song> = song_idxs.iter().map(|&i| &tracks[i]).collect();
         let owners = browse_artists_for_album(&songs);
         let album_name = album_order_names
             .remove(&album_id)
@@ -568,7 +682,7 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
         let user_rating = songs.iter().find_map(|s| s.album_user_rating);
         let created = songs.iter().find_map(|s| s.album_created.clone());
         let play_count = songs.iter().find_map(|s| s.album_play_count);
-        tracks_by_album.insert(album_id.clone(), songs);
+        tracks_by_album.insert(album_id.clone(), song_idxs);
 
         let primary_artist_id = owners
             .first()
@@ -707,6 +821,12 @@ pub fn build_browse_snapshot(tracks: &[Song]) -> BrowseSnapshot {
 mod tests {
     use super::*;
 
+    fn fzf_input_lines(tracks: &[Song], cols: FzfColumns) -> String {
+        let mut out = Vec::new();
+        write_fzf_input_lines(&mut out, tracks, cols).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
     #[test]
     fn index_file_without_disc_titles_still_loads() {
         let j = r#"{"version":1,"refreshed_at_unix":5,"tracks":[]}"#;
@@ -729,6 +849,101 @@ mod tests {
         let loaded = load(&path).unwrap();
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(loaded.disc_titles, titles);
+    }
+
+    fn plain_song(id: &str, album: &str, track: u32) -> Song {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "title": format!("T{track} \"q\" é"),
+            "album": album,
+            "albumId": format!("al-{album}"),
+            "albumArtist": "A",
+            "albumArtistId": "ar-a",
+            "track": track,
+        }))
+        .unwrap()
+    }
+
+    fn temp_index_path(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("ratune-index-{tag}-{}-{nanos}", std::process::id()))
+            .join("library_index.json")
+    }
+
+    #[test]
+    fn save_matches_owned_pretty_serialization() {
+        let tracks = vec![plain_song("1", "X", 1), plain_song("2", "Y", 2)];
+        let titles = HashMap::from([(
+            "al-X".to_string(),
+            vec![DiscTitle {
+                disc: 1,
+                title: "One".into(),
+            }],
+        )]);
+        for (tok, titles) in [(Some("scan"), titles), (None, HashMap::new())] {
+            let path = temp_index_path("bytes");
+            save(&path, &tracks, 9, tok, &titles).unwrap();
+            let expected = serde_json::to_string_pretty(&LibraryIndexFile {
+                version: FORMAT_VERSION,
+                refreshed_at_unix: 9,
+                tracks: tracks.clone(),
+                navidrome_last_scan: tok.map(String::from),
+                disc_titles: titles.clone(),
+            })
+            .unwrap();
+            let written = fs::read_to_string(&path).unwrap();
+            let _ = fs::remove_dir_all(path.parent().unwrap());
+            assert_eq!(written, expected);
+        }
+    }
+
+    #[test]
+    fn save_refreshed_at_matches_full_resave() {
+        let tracks = vec![plain_song("1", "X", 1), plain_song("2", "Y", 2)];
+        let titles = HashMap::from([(
+            "al-X".to_string(),
+            vec![DiscTitle {
+                disc: 2,
+                title: "Live".into(),
+            }],
+        )]);
+        for titles in [titles, HashMap::new()] {
+            let path = temp_index_path("touch");
+            save(&path, &tracks, 5, Some("old"), &titles).unwrap();
+            save_refreshed_at(&path, 42, Some("new")).unwrap();
+            let touched = fs::read_to_string(&path).unwrap();
+            save(&path, &tracks, 42, Some("new"), &titles).unwrap();
+            let full = fs::read_to_string(&path).unwrap();
+            let header = load_header(&path).unwrap();
+            let _ = fs::remove_dir_all(path.parent().unwrap());
+            assert_eq!(touched, full);
+            assert_eq!(header.refreshed_at_unix, 42);
+            assert_eq!(header.navidrome_last_scan.as_deref(), Some("new"));
+        }
+    }
+
+    #[test]
+    fn filtered_snapshot_positions_refer_to_full_slice() {
+        let tracks = vec![
+            plain_song("1", "X", 1),
+            plain_song("2", "Y", 2),
+            plain_song("3", "Y", 1),
+        ];
+        let snap = build_browse_snapshot_filtered(&tracks, |s| s.id != "1");
+        assert!(snap.album_tracks(&tracks, "al-X").is_empty());
+        let ids: Vec<String> = snap
+            .album_tracks(&tracks, "al-Y")
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ids, ["3", "2"]);
+        assert!(build_browse_snapshot_filtered(&tracks, |_| false).is_empty());
+        let by_id = index_by_id(&tracks);
+        assert_eq!(tracks[by_id["2"]].id, "2");
     }
 
     #[test]
@@ -777,7 +992,7 @@ mod tests {
         let albums = snap.albums_by_artist.get(&alice).unwrap();
         assert_eq!(albums.len(), 1);
         assert_eq!(albums[0].name, "Alpha");
-        let album_tracks = snap.tracks_by_album.get(&albums[0].id).unwrap();
+        let album_tracks = snap.album_tracks(&tracks, &albums[0].id);
         assert_eq!(album_tracks.len(), 2);
         assert_eq!(album_tracks[0].track, Some(1));
         assert_eq!(album_tracks[1].track, Some(2));
@@ -838,7 +1053,7 @@ mod tests {
         assert_eq!(snap.artists[0].id, "ar-va");
         let albums = snap.albums_by_artist.get("ar-va").unwrap();
         assert_eq!(albums.len(), 1);
-        assert_eq!(snap.tracks_by_album.get(&albums[0].id).unwrap().len(), 3);
+        assert_eq!(snap.album_tracks(&tracks, &albums[0].id).len(), 3);
     }
 
     #[test]
@@ -971,11 +1186,12 @@ mod tests {
             }
         }
 
-        let snap = build_browse_snapshot(&[track("1", "Alice", "Alpha", 1)]);
+        let tracks = [track("1", "Alice", "Alpha", 1)];
+        let snap = build_browse_snapshot(&tracks);
         // Artist 1–5 ratings are overlaid live from getArtists; album ratings come from the index.
         let albums = snap.albums_by_artist.get(&snap.artists[0].id).unwrap();
         assert_eq!(albums[0].user_rating, Some(4));
-        let songs = snap.tracks_by_album.get(&albums[0].id).unwrap();
+        let songs = snap.album_tracks(&tracks, &albums[0].id);
         assert_eq!(songs[0].user_rating, Some(3));
     }
 

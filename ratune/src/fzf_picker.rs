@@ -126,9 +126,13 @@ pub fn resume_tui<W: Write>(
     Ok(())
 }
 
-/// Pipe `input` to `binary` with `args`. With `--multi`, fzf prints one selected
-/// line per row. Returns `None` on cancel / empty / non-zero exit (e.g. 130).
-pub fn run_fzf(binary: &str, args: &[String], input: &str) -> Result<Option<Vec<String>>> {
+/// Stream the lines produced by `write_input` to `binary` with `args`. With `--multi`, fzf
+/// prints one selected line per row. Returns `None` on cancel / empty / non-zero exit (e.g. 130).
+pub fn run_fzf(
+    binary: &str,
+    args: &[String],
+    write_input: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+) -> Result<Option<Vec<String>>> {
     let mut child = Command::new(binary)
         .args(args)
         .stdin(Stdio::piped())
@@ -137,8 +141,10 @@ pub fn run_fzf(binary: &str, args: &[String], input: &str) -> Result<Option<Vec<
         .spawn()
         .with_context(|| format!("failed to spawn {binary}"))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(input.as_bytes())?;
+    if let Some(stdin) = child.stdin.take() {
+        let mut stdin = std::io::BufWriter::new(stdin);
+        write_input(&mut stdin)?;
+        stdin.flush()?;
     }
 
     let mut stdout = child.stdout.take().context("fzf stdout")?;
