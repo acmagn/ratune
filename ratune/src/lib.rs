@@ -404,19 +404,20 @@ fn run_library_fzf_picker(
         return Ok(());
     }
 
-    let tracks = if !app.server_reachable && app.config.cache_enabled {
-        app.cache.filter_cached_tracks(&app.library_index_tracks)
-    } else {
-        app.library_index_tracks.clone()
+    let cached_only = !app.server_reachable && app.config.cache_enabled && app.cache.enabled;
+    let cache = &app.cache;
+    let picker_tracks = || {
+        app.library_index_tracks
+            .iter()
+            .filter(move |s| !cached_only || cache.get_const(&s.id))
     };
-    if tracks.is_empty() {
+    if picker_tracks().next().is_none() {
         app.flash_status("No cached tracks — play online to download audio");
         return Ok(());
     }
 
     fzf_picker::suspend_tui(terminal, app.in_tmux)?;
     let cols = app.config.fzf.columns;
-    let input = library_index::fzf_input_lines(&tracks, cols);
     let mut fzf_args = app.config.fzf.args.clone();
     if !fzf_args.iter().any(|a| a.starts_with("--header")) {
         let with_nth = library_index::parse_fzf_with_nth(&fzf_args);
@@ -429,7 +430,9 @@ fn run_library_fzf_picker(
         );
     }
     let fzf_args = fzf_picker::prepare_library_fuzzy_picker_args(&app.config.fzf.binary, fzf_args);
-    let res = fzf_picker::run_fzf(&app.config.fzf.binary, &fzf_args, &input);
+    let res = fzf_picker::run_fzf(&app.config.fzf.binary, &fzf_args, |w| {
+        library_index::write_fzf_input_lines(w, picker_tracks(), cols)
+    });
     if let Err(e) = fzf_picker::resume_tui(terminal, app.in_tmux) {
         eprintln!("resume terminal after fzf: {e}");
     }
