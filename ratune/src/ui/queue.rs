@@ -92,10 +92,11 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
                 &favorite_prefix,
             );
             let playing = idx == app.queue.cursor;
+            let (play_mark, blank_mark) = app.theme.icons.queue_playing_gutter();
             let label = if playing {
-                format!("▶ {body}")
+                format!("{play_mark}{body}")
             } else {
-                format!("  {body}")
+                format!("{blank_mark}{body}")
             };
 
             let style = if idx == app.queue.selection {

@@ -1178,6 +1178,9 @@ impl ThemeBorderShuffleModeSection {
 pub struct ThemeIconSection {
     /// Label while a track is playing (default: `( ⏸ )`).
     pub playing: Option<String>,
+    /// Marker on the queue row that is currently playing.
+    /// Omitted: same glyph as [`Self::stopped`]. Empty string hides it.
+    pub queue_playing: Option<String>,
     /// Label while paused (default: `( ▶ )`).
     pub paused: Option<String>,
     /// Label when nothing is loaded (default: `▶`).
@@ -3062,6 +3065,7 @@ type = "ascii"
 
 [theme.icon]
 playing = "||"
+queue_playing = ">"
 paused = "( > )"
 stopped = ">"
 next_song = ">>"
@@ -3077,6 +3081,7 @@ tab_separator = " | "
         .expect("toml");
         assert_eq!(fc.theme.border_lines.style.as_deref(), Some("ascii"));
         assert_eq!(fc.theme.icon.playing.as_deref(), Some("||"));
+        assert_eq!(fc.theme.icon.queue_playing.as_deref(), Some(">"));
         assert_eq!(fc.theme.icon.paused.as_deref(), Some("( > )"));
         assert_eq!(fc.theme.icon.stopped.as_deref(), Some(">"));
         assert_eq!(fc.theme.icon.next_song.as_deref(), Some(">>"));

@@ -289,6 +289,8 @@ preset = "dynamic"
 #
 # playing / paused / stopped — shown for those playback states (defaults match the
 #   prior Unicode controls: pause while playing, play while paused, bare play idle).
+# queue_playing — Marker on the queue row that is currently playing.
+#   Omitted: same glyph as `stopped` (default ▶). Empty string hides it.
 # favorite — starred marker in lists / queue (default ★).
 # rating_* — 1–5 user-rating display (defaults ⭑ / ⭒ with [ ]). Legacy: [ratings].star_*.
 # Progress bar glyphs are not here — use `[ui.row_now_playing].progress_style`
@@ -300,6 +302,7 @@ preset = "dynamic"
 # playing = "( || )"
 # paused = "( > )"
 # stopped = ">"
+# queue_playing = ">"
 # next_song = ">>"
 # previous_song = "<<"
 # mode_shuffle = "><"
