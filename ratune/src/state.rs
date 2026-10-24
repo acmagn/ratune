@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use ratune_subsonic::models::{Album, Artist, DiscTitle, InternetRadioStation, MusicFolder, Song};
@@ -373,8 +373,12 @@ impl FolderBrowseState {
 pub struct QueueState {
     pub songs: Vec<Song>,
     /// Index of the currently playing (or next-to-play) song.
+    /// Playback (`next` / `prev` / end of track) follows this, not [`Self::selection`].
     pub cursor: usize,
-    /// Offset for list rendering (scroll).
+    /// Highlighted row. Moves with [`Self::cursor`] only while it still points at the
+    /// playing track; once the user highlights something else, playback leaves it alone.
+    pub selection: usize,
+    /// Offset for list rendering (scroll). Tracks [`Self::selection`].
     pub scroll: usize,
     /// Snapshot of the queue order taken just before the last shuffle.
     /// `None` means no unshuffle is available.
@@ -390,6 +394,7 @@ impl Default for QueueState {
         Self {
             songs: Vec::new(),
             cursor: 0,
+            selection: 0,
             scroll: 0,
             pre_shuffle_order: None,
             shuffle_active: false,
@@ -516,13 +521,14 @@ impl QueueState {
         for s in play.into_iter().rev() {
             self.songs.insert(0, s);
         }
+        // Every existing row shifted down, including the playhead and the highlight.
         self.cursor += n;
+        self.selection += n;
     }
 
     /// Replace the queue with `baseline`, optionally shuffling play order.
     pub fn replace_with_block(&mut self, baseline: Vec<Song>, shuffled_play: bool) {
-        self.cursor = 0;
-        self.scroll = 0;
+        self.zero_position();
         if baseline.is_empty() {
             self.songs.clear();
             self.clear_shuffle_state();
@@ -547,12 +553,19 @@ impl QueueState {
         if self.songs.is_empty() {
             return false;
         }
+        let following = self.selection_follows_playhead();
         if self.cursor + 1 < self.songs.len() {
             self.cursor += 1;
+            if following {
+                self.selection = self.cursor;
+            }
             true
         } else if self.loop_enabled {
             self.cursor = 0;
-            self.scroll = 0;
+            if following {
+                self.selection = 0;
+                self.scroll = 0;
+            }
             true
         } else {
             false
@@ -580,25 +593,56 @@ impl QueueState {
         if self.songs.is_empty() {
             return false;
         }
+        let following = self.selection_follows_playhead();
         if self.cursor > 0 {
             self.cursor -= 1;
+            if following {
+                self.selection = self.cursor;
+            }
             true
         } else if self.loop_enabled {
             self.cursor = self.songs.len() - 1;
+            if following {
+                self.selection = self.cursor;
+            }
             true
         } else {
             false
         }
     }
 
-    /// Keep the playback cursor row visible in a list with `visible` rows (excluding borders).
-    /// Does not force the cursor to the top of the viewport; scroll only moves when needed.
-    pub fn scroll_clamp_cursor_visible(&mut self, visible: usize) {
+    /// True when the highlight is still on the playing row, so playback moves should
+    /// carry the highlight along.
+    pub fn selection_follows_playhead(&self) -> bool {
+        self.selection == self.cursor
+    }
+
+    /// Reset playhead, highlight, and scroll after the queue is cleared.
+    pub fn zero_position(&mut self) {
+        self.cursor = 0;
+        self.selection = 0;
+        self.scroll = 0;
+    }
+
+    /// Clamp playhead and highlight into the current song list.
+    pub fn clamp_indices(&mut self) {
+        if self.songs.is_empty() {
+            self.zero_position();
+            return;
+        }
+        let last = self.songs.len() - 1;
+        self.cursor = self.cursor.min(last);
+        self.selection = self.selection.min(last);
+    }
+
+    /// Keep the highlighted row visible in a list with `visible` rows (excluding borders).
+    /// Scroll only moves when the highlight is outside the window.
+    pub fn scroll_clamp_selection_visible(&mut self, visible: usize) {
         let len = self.songs.len();
         if len == 0 || visible == 0 {
             return;
         }
-        let c = self.cursor.min(len - 1);
+        let c = self.selection.min(len - 1);
         let max_first = len.saturating_sub(visible);
         if self.scroll > max_first {
             self.scroll = max_first;
@@ -610,17 +654,65 @@ impl QueueState {
         }
     }
 
+    /// Put `index` in the middle of a `visible`-row window, clamped to the list ends.
+    pub fn center_selection(&mut self, index: usize, visible: usize) {
+        let len = self.songs.len();
+        if len == 0 {
+            self.zero_position();
+            return;
+        }
+        self.selection = index.min(len - 1);
+        if visible == 0 {
+            return;
+        }
+        let max_first = len.saturating_sub(visible);
+        let ideal = self.selection.saturating_sub(visible / 2);
+        self.scroll = ideal.min(max_first);
+    }
+
+    /// When `skip_duplicates` is set, drop ids already in the queue and repeated ids
+    /// inside `songs`. The third value is the queue index of the first skipped song
+    /// that was already queued (`None` when every skip was only a repeat inside `songs`
+    /// or nothing was skipped).
+    pub fn filter_duplicate_adds(
+        &self,
+        songs: Vec<Song>,
+        skip_duplicates: bool,
+    ) -> (Vec<Song>, usize, Option<usize>) {
+        if !skip_duplicates {
+            return (songs, 0, None);
+        }
+        let mut seen = HashSet::new();
+        let mut fresh = Vec::with_capacity(songs.len());
+        let mut skipped = 0usize;
+        let mut first_existing = None;
+        for song in songs {
+            let existing = self.songs.iter().position(|s| s.id == song.id);
+            let repeated = !seen.insert(song.id.clone());
+            if existing.is_some() || repeated {
+                skipped += 1;
+                if first_existing.is_none() {
+                    first_existing = existing;
+                }
+            } else {
+                fresh.push(song);
+            }
+        }
+        (fresh, skipped, first_existing)
+    }
+
     /// Insert `incoming` at the front of the queue in order; advances `cursor` so the
     /// currently playing track index still refers to the same song.
     pub fn prepend_songs(&mut self, incoming: Vec<Song>) {
         self.prepend_block(incoming, false);
     }
 
-    /// Remove the song at `idx`, adjusting `cursor` and `pre_shuffle_order`.
+    /// Remove the song at `idx`, adjusting the playhead, highlight, and `pre_shuffle_order`.
     pub fn remove_at(&mut self, idx: usize) -> Option<Song> {
         if idx >= self.songs.len() {
             return None;
         }
+        let was_following = self.selection_follows_playhead();
         let removed = self.songs.remove(idx);
         if let Some(orig) = &mut self.pre_shuffle_order {
             if let Some(orig_idx) = orig.iter().position(|s| s.id == removed.id) {
@@ -628,12 +720,21 @@ impl QueueState {
             }
         }
         if self.songs.is_empty() {
-            self.cursor = 0;
-            self.scroll = 0;
-        } else if idx < self.cursor {
-            self.cursor -= 1;
-        } else if idx == self.cursor && self.cursor >= self.songs.len() {
-            self.cursor = self.songs.len() - 1;
+            self.zero_position();
+        } else {
+            if idx < self.cursor {
+                self.cursor -= 1;
+            } else if idx == self.cursor && self.cursor >= self.songs.len() {
+                self.cursor = self.songs.len() - 1;
+            }
+            if was_following {
+                self.selection = self.cursor;
+            } else if idx < self.selection {
+                self.selection -= 1;
+            } else if idx == self.selection && self.selection >= self.songs.len() {
+                self.selection = self.songs.len() - 1;
+            }
+            self.selection = self.selection.min(self.songs.len() - 1);
         }
         Some(removed)
     }
@@ -1051,6 +1152,84 @@ mod queue_tests {
         assert!(q.next());
         assert_eq!(q.cursor, 0);
         assert_eq!(q.current().map(|s| s.id.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn next_carries_highlight_only_while_it_follows_playhead() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 0;
+        q.selection = 0;
+        assert!(q.next());
+        assert_eq!(q.cursor, 1);
+        assert_eq!(q.selection, 1);
+
+        q.selection = 0;
+        assert!(q.next());
+        assert_eq!(q.cursor, 2);
+        assert_eq!(q.selection, 0);
+    }
+
+    #[test]
+    fn next_wrap_leaves_detached_highlight() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 2;
+        q.selection = 1;
+        q.scroll = 1;
+        assert!(q.next());
+        assert_eq!(q.cursor, 0);
+        assert_eq!(q.selection, 1);
+        assert_eq!(q.scroll, 1);
+    }
+
+    #[test]
+    fn center_selection_puts_row_near_middle() {
+        let mut q = QueueState::default();
+        for id in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+            q.push(song(id));
+        }
+        q.center_selection(6, 5);
+        assert_eq!(q.selection, 6);
+        // 6 - 5/2 = 4, and the window still fits (len 8, visible 5, max first 3).
+        assert_eq!(q.scroll, 3);
+    }
+
+    #[test]
+    fn filter_duplicate_adds_skips_queued_and_repeated_ids() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        let (fresh, skipped, existing) =
+            q.filter_duplicate_adds(vec![song("b"), song("c"), song("c"), song("d")], true);
+        assert_eq!(skipped, 2);
+        assert_eq!(existing, Some(1));
+        assert_eq!(
+            fresh.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["c", "d"]
+        );
+        let (all, skipped, existing) = q.filter_duplicate_adds(vec![song("b"), song("a")], false);
+        assert_eq!(skipped, 0);
+        assert!(existing.is_none());
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn remove_detached_highlight_does_not_follow_playhead() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 0;
+        q.selection = 2;
+        assert!(q.remove_at(2).is_some());
+        assert_eq!(q.cursor, 0);
+        assert_eq!(q.selection, 1);
+        assert_eq!(q.songs[q.selection].id, "b");
     }
 
     #[test]

@@ -2290,6 +2290,9 @@ fn map_key(
     if active_tab == Tab::NowPlaying && kb.remove_from_queue.matches(code, modifiers) {
         return Action::RemoveFromQueue;
     }
+    if active_tab == Tab::NowPlaying && kb.queue_show_playing.matches(code, modifiers) {
+        return Action::QueueShowPlaying;
+    }
     if kb.search.matches(code, modifiers) {
         return Action::SearchStart;
     }
@@ -3184,6 +3187,36 @@ mod map_key_tests {
             false,
         );
         assert!(matches!(action, Action::ToggleShuffleMode));
+    }
+
+    #[test]
+    fn dot_centers_playing_track_on_now_playing() {
+        let mut pending = false;
+        let action = map_key(
+            KeyCode::Char('.'),
+            KeyModifiers::empty(),
+            Tab::NowPlaying,
+            &kb(),
+            &mut pending,
+            false,
+            false,
+        );
+        assert!(matches!(action, Action::QueueShowPlaying));
+    }
+
+    #[test]
+    fn dot_is_unbound_off_now_playing() {
+        let mut pending = false;
+        let action = map_key(
+            KeyCode::Char('.'),
+            KeyModifiers::empty(),
+            Tab::Browser,
+            &kb(),
+            &mut pending,
+            false,
+            false,
+        );
+        assert!(matches!(action, Action::None));
     }
 
     #[test]

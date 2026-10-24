@@ -53,6 +53,8 @@ pub enum Action {
     ClearQueue,
     /// Remove the highlighted track from the queue (Now Playing tab).
     RemoveFromQueue,
+    /// Move the queue highlight onto the playing track and center it.
+    QueueShowPlaying,
     Shuffle,
     Unshuffle,
     /// Toggle sticky shuffle mode for incoming adds (does not reorder the queue).

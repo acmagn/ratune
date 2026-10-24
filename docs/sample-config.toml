@@ -88,6 +88,11 @@ password = ""
 #                  Default: true.
 # queue_loop     — When true, playback wraps to the first queue track after the
 #                  last one ends. Default: true. Toggle at runtime with R / ↻.
+# queue_skip_duplicates — When true, adding a song whose id is already in the
+#                  queue does not append another copy. The highlight moves to
+#                  the existing row and the list scrolls so that row sits near
+#                  the middle of the screen. A song that is not queued is still
+#                  appended and highlighted at the bottom. Default: false.
 # daemon         — Unix only: keep a background playback process so music
 #                  continues after the TUI closes (`q` detaches, Ctrl+q /
 #                  `ratune stop` quits the daemon). Default: true.
@@ -99,6 +104,7 @@ default_volume = 70
 max_bit_rate = 0
 mpris = true
 queue_loop = true
+# queue_skip_duplicates = false
 # daemon = true
 
 # -----------------------------------------------------------------------------
@@ -152,6 +158,7 @@ queue_loop = true
 # toggle_radio        = "Shift+r"     # open/close internet radio picker
 # clear_queue         = "Shift+d"     # clear entire queue
 # remove_from_queue   = "d"           # now playing: remove highlighted track
+# queue_show_playing  = "."           # now playing: center the playing track in the queue
 # search              = "/"           # filter lists where supported
 # volume_up           = "+"
 # volume_down         = "-"
@@ -326,10 +333,13 @@ preset = "dynamic"
 #
 # tab_bar_position — "bottom" (default) or "top". Tab strip is always 1 row high;
 #                    status bar stays at the bottom of the terminal.
+# show_volume_indicator — Show the in-app level (N%) at the bottom-right of the
+#                    status bar. false hides it. This is the in-app level, not
+#                    the OS volume. Default: true.
 
 [ui.general]
 tab_bar_position = "bottom"
-# show_volume_indicator = true   # false = hide N% in the bottom-right status bar (in-app level only)
+# show_volume_indicator = true
 
 # -----------------------------------------------------------------------------
 # [ui.row_now_playing] — shared bottom strip defaults (Home + Browse + NP row mode)
@@ -396,8 +406,9 @@ panels = ["recent_albums", "recent_tracks", "rediscover"]
 #   cycle (Artists → Albums → Folders). Uses getMusicFolders / getIndexes /
 #   getMusicDirectory. Default: false.
 # mode — Default Browse layout on startup: "artists" | "albums" | "files".
-#   "albums" is a flat album list (default sort: newest). "files" needs
-#   folder_navigation = true. "genre" is still a stub.
+#   "albums" is a flat album list. Default sort is newest; press s to cycle
+#   (newest / name / artist / …). "files" needs folder_navigation = true.
+#   "genre" is still a stub.
 # mouse_wheel_scroll_lines — Rows to move per mouse wheel tick in Browse lists
 #   (artists, albums, tracks, and folder browse). Default: 1. Keyboard j/k always
 #   moves one row.
@@ -405,7 +416,7 @@ panels = ["recent_albums", "recent_tracks", "rediscover"]
 [ui.browsetab]
 folder_navigation = false
 mode = "artists"
-# mode = "albums"   # flat album browser (newest / name / artist / …; press s to cycle)
+# mode = "albums"
 # mouse_wheel_scroll_lines = 10
 
 # -----------------------------------------------------------------------------

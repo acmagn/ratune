@@ -13,7 +13,13 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
     let visible = area.height.saturating_sub(2) as usize;
     let visible = visible.max(1);
     app.queue_viewport_rows = visible;
-    app.queue.scroll_clamp_cursor_visible(visible);
+    if app.queue_recenter_selection {
+        let index = app.queue.selection;
+        app.queue.center_selection(index, visible);
+        app.queue_recenter_selection = false;
+    } else {
+        app.queue.scroll_clamp_selection_visible(visible);
+    }
 
     let t = &app.theme;
     let border_color = if is_active { t.border_active } else { t.border };
@@ -78,18 +84,26 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
         .enumerate()
         .map(|(offset, s)| {
             let idx = start + offset;
-            let label = format_queue_line(
+            let body = format_queue_line(
                 template,
                 s,
                 app.config.ratings_enabled,
                 &app.config.rating_stars,
                 &favorite_prefix,
             );
+            let playing = idx == app.queue.cursor;
+            let label = if playing {
+                format!("▶ {body}")
+            } else {
+                format!("  {body}")
+            };
 
-            let style = if idx == app.queue.cursor {
+            let style = if idx == app.queue.selection {
                 Style::default()
                     .fg(app.accent())
                     .add_modifier(Modifier::BOLD)
+            } else if playing {
+                Style::default().fg(app.accent())
             } else {
                 Style::default().fg(t.foreground)
             };
@@ -108,7 +122,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect, is_active: bool) {
 
     // Offset is handled by slicing, so keep ListState offset at 0 and select within window.
     let mut state = ListState::default();
-    let selected = app.queue.cursor.saturating_sub(start);
+    let selected = app.queue.selection.saturating_sub(start);
     state.select(Some(selected));
     frame.render_stateful_widget(list, area, &mut state);
 }

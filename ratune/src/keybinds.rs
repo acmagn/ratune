@@ -186,6 +186,8 @@ pub struct Keybinds {
     pub np_focus_queue: KeySpec,
     pub clear_queue: KeySpec,
     pub remove_from_queue: KeySpec,
+    /// Now Playing: move the queue highlight to the playing track and center it. Default: `.`
+    pub queue_show_playing: KeySpec,
     pub search: KeySpec,
     pub volume_up: KeySpec,
     pub volume_down: KeySpec,
@@ -412,6 +414,10 @@ impl Keybinds {
             remove_from_queue: resolve(
                 sec.remove_from_queue.as_deref(),
                 KeySpec::new(KeyCode::Char('d')),
+            ),
+            queue_show_playing: resolve(
+                sec.queue_show_playing.as_deref(),
+                KeySpec::new(KeyCode::Char('.')),
             ),
             search: resolve(sec.search.as_deref(), KeySpec::new(KeyCode::Char('/'))),
             volume_up: resolve(sec.volume_up.as_deref(), KeySpec::new(KeyCode::Char('+'))),

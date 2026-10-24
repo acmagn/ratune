@@ -129,6 +129,7 @@ pub fn restore_state(app: &mut App) -> Result<()> {
     app.queue.cursor = state
         .queue_cursor
         .min(app.queue.songs.len().saturating_sub(1));
+    app.queue.selection = app.queue.cursor;
     app.queue.scroll = app.queue.cursor;
     app.queue.adopt_current_order_as_shuffle_baseline();
 
