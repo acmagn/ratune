@@ -260,6 +260,7 @@ export SUBSONIC_PASS="your_password"
 default_volume = 70
 max_bit_rate = 0
 queue_loop = true
+# queue_skip_duplicates = false  # skip a queue add when that song id is already queued
 # daemon = true
 
 [cache]
@@ -465,6 +466,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `Ctrl+r` | Replace queue |
 | `p` / `Space` | Play / pause |
 | `n` / `N` | Next / previous |
+| `.` | Now playing: center the playing track in the queue |
 | `f` / `F` | Toggle favorite / toggle favorites panel (Browse) |
 | `x` | Now Playing: shuffle queue · Home/Browse: toggle shuffle mode |
 | `Ctrl+x` | Toggle shuffle mode (incoming adds land shuffled) |

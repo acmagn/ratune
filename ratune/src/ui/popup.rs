@@ -81,6 +81,7 @@ fn sections(
                 ("Ctrl+a", "Append full index to queue (y/n)"),
                 ("D", "Clear queue"),
                 ("d", "Remove highlighted track (Now Playing)"),
+                (".", "Center the playing track in the queue"),
             ],
         ),
         (

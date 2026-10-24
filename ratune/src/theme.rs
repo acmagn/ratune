@@ -32,6 +32,8 @@ pub const ASCII_BORDER_SET: border::Set = border::Set {
 pub struct ThemeIcons {
     /// Shown while a track is playing.
     pub playing: String,
+    /// Marker on the queue row that is currently playing. Empty hides the gutter.
+    pub queue_playing: String,
     /// Shown while paused.
     pub paused: String,
     /// Shown when nothing is loaded.
@@ -54,6 +56,7 @@ impl Default for ThemeIcons {
     fn default() -> Self {
         Self {
             playing: "( ⏸ )".into(),
+            queue_playing: "▶".into(),
             paused: "( ▶ )".into(),
             stopped: "▶".into(),
             next_song: "⏭".into(),
@@ -72,10 +75,15 @@ impl Default for ThemeIcons {
 impl ThemeIcons {
     pub fn from_section(sec: &ThemeIconSection) -> Self {
         let d = Self::default();
+        let stopped = sec.stopped.clone().unwrap_or(d.stopped);
+        // Unset queue mark follows `stopped`, so an ASCII transport set does not
+        // leave a Unicode play glyph on the queue row.
+        let queue_playing = sec.queue_playing.clone().unwrap_or_else(|| stopped.clone());
         Self {
             playing: sec.playing.clone().unwrap_or(d.playing),
+            queue_playing,
             paused: sec.paused.clone().unwrap_or(d.paused),
-            stopped: sec.stopped.clone().unwrap_or(d.stopped),
+            stopped,
             next_song: sec.next_song.clone().unwrap_or(d.next_song),
             previous_song: sec.previous_song.clone().unwrap_or(d.previous_song),
             mode_shuffle: sec.mode_shuffle.clone().unwrap_or(d.mode_shuffle),
@@ -86,6 +94,16 @@ impl ThemeIcons {
             offline: sec.offline.clone().unwrap_or(d.offline),
             live: sec.live.clone().unwrap_or(d.live),
         }
+    }
+
+    /// `(playing row prefix, same-width blank)` so queue columns stay aligned.
+    /// Both are empty when [`Self::queue_playing`] is empty.
+    pub fn queue_playing_gutter(&self) -> (String, String) {
+        if self.queue_playing.is_empty() {
+            return (String::new(), String::new());
+        }
+        let cols = crate::text_width::str_width(&self.queue_playing) + 1;
+        (format!("{} ", self.queue_playing), " ".repeat(cols))
     }
 
     /// `"★ "` when favorite is non-empty, else `""`.
@@ -498,8 +516,10 @@ mod tests {
         };
         let t = Theme::from_section(&sec);
         assert_eq!(t.icons.playing, "||");
-        assert_eq!(t.icons.paused, "( > )");
         assert_eq!(t.icons.stopped, ">");
+        assert_eq!(t.icons.queue_playing, ">");
+        assert_eq!(t.icons.queue_playing_gutter(), ("> ".into(), "  ".into()));
+        assert_eq!(t.icons.paused, "( > )");
         assert_eq!(t.icons.next_song, ">>");
         assert_eq!(t.icons.previous_song, "<<");
         assert_eq!(t.icons.mode_shuffle, "><");
@@ -507,6 +527,21 @@ mod tests {
         assert_eq!(t.icons.favorite, "*");
         assert_eq!(t.icons.tab_separator, " | ");
         assert_eq!(t.icons.favorite_prefix(), "* ");
+    }
+
+    #[test]
+    fn queue_playing_override_does_not_follow_stopped() {
+        let sec = crate::config::ThemeSection {
+            icon: crate::config::ThemeIconSection {
+                stopped: Some(">".into()),
+                queue_playing: Some("*".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let t = Theme::from_section(&sec);
+        assert_eq!(t.icons.stopped, ">");
+        assert_eq!(t.icons.queue_playing, "*");
     }
 
     #[test]

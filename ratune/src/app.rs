@@ -241,6 +241,13 @@ fn mark_starred_songs(
     }
 }
 
+/// Outcome of a queue add. `focus` is the row the highlight moved to.
+struct QueueAddResult {
+    added: usize,
+    skipped: usize,
+    focus: Option<usize>,
+}
+
 /// True when a redraw was requested or the idle fallback interval has passed.
 pub(crate) fn redraw_due(needs: bool, last: Instant, now: Instant, idle: Duration) -> bool {
     needs || now.duration_since(last) >= idle
@@ -826,6 +833,8 @@ pub struct App {
 
     /// Last measured height (inner rows) of the queue list; used when clamping scroll outside render.
     pub queue_viewport_rows: usize,
+    /// Next queue paint should center [`QueueState::selection`] in the viewport.
+    pub(crate) queue_recenter_selection: bool,
     /// Last measured inner height of each Browse column list (page up/down).
     pub browser_list_viewport_rows: usize,
     /// Saw a lone `g`; next `g` dispatches go-to-top (vim-style `gg`).
@@ -1091,6 +1100,7 @@ impl App {
             playlist_picker: None,
             status_flash: None,
             queue_viewport_rows: 12,
+            queue_recenter_selection: false,
             browser_list_viewport_rows: 12,
             pending_gg: false,
             pending_global_confirm: None,
@@ -1242,13 +1252,21 @@ impl App {
         apply_progress: bool,
     ) {
         let prev_id = self.playback.current_song.as_ref().map(|s| s.id.clone());
+        let following = self.queue.selection_follows_playhead();
         self.queue.songs = snap.songs;
-        self.queue.cursor = snap.cursor.min(self.queue.songs.len().saturating_sub(1));
+        self.queue.cursor = snap.cursor;
+        if following {
+            self.queue.selection = self.queue.cursor;
+        }
+        self.queue.clamp_indices();
+        if following {
+            self.queue.selection = self.queue.cursor;
+        }
         self.queue.loop_enabled = snap.loop_enabled;
         self.queue.shuffle_active = snap.shuffle_active;
         self.queue.pre_shuffle_order = snap.pre_shuffle_order;
         self.queue
-            .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
+            .scroll_clamp_selection_visible(self.queue_viewport_rows.max(1));
         self.config.default_volume = snap.volume.min(100);
         self.np_pane_focus = snap.np_pane_focus;
         self.playback.current_song = snap.current_song;
@@ -1869,8 +1887,7 @@ impl App {
     /// Stop playback, clear the queue, and fetch+play `album_id`.
     fn play_album_replacing_queue(&mut self, album_id: String) {
         self.queue.songs.clear();
-        self.queue.cursor = 0;
-        self.queue.scroll = 0;
+        self.queue.zero_position();
         self.queue.clear_shuffle_state();
         self.send_player(PlayerCommand::Stop);
         self.playback.current_song = None;
@@ -2217,11 +2234,8 @@ impl App {
             FolderPreviewRow::Track(i) => {
                 let song = listing.tracks[i].clone();
                 let was_empty = self.queue.songs.is_empty();
-                self.queue.push(song);
-                if was_empty {
-                    self.queue.cursor = 0;
-                    self.play_current();
-                }
+                self.enqueue_one(song);
+                self.play_if_queue_was_empty(was_empty);
             }
         }
     }
@@ -2271,17 +2285,25 @@ impl App {
         Some(songs)
     }
 
-    fn flash_queue_bulk_add(&mut self, n: usize, replaced: bool) {
+    fn flash_queue_bulk_add(&mut self, added: usize, skipped: usize, replaced: bool) {
+        if !replaced && added == 0 {
+            return;
+        }
         if replaced {
-            if n == 1 {
+            if added == 1 {
                 self.flash_status_secs("Replaced queue with 1 track", 3);
             } else {
-                self.flash_status_secs(format!("Replaced queue with {n} tracks"), 3);
+                self.flash_status_secs(format!("Replaced queue with {added} tracks"), 3);
             }
-        } else if n == 1 {
+        } else if skipped > 0 {
+            self.flash_status_secs(
+                format!("Added {added} tracks ({skipped} already in queue)"),
+                3,
+            );
+        } else if added == 1 {
             self.flash_status_secs("Added 1 track to queue", 3);
         } else {
-            self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
+            self.flash_status_secs(format!("Added {added} tracks to queue"), 3);
         }
     }
 
@@ -3121,8 +3143,7 @@ impl App {
         }
         if replace {
             self.queue.songs.clear();
-            self.queue.cursor = 0;
-            self.queue.scroll = 0;
+            self.queue.zero_position();
             self.queue.clear_shuffle_state();
             self.send_player(PlayerCommand::Stop);
             self.playback.current_song = None;
@@ -3147,15 +3168,13 @@ impl App {
             self.flash_status(msg);
             return 0;
         }
-        if replace {
-            self.enqueue_replace(collected);
+        let result = if replace {
+            self.enqueue_replace(collected)
         } else {
-            self.enqueue_append(collected);
-        }
-        if was_empty && !self.queue.songs.is_empty() {
-            self.queue.cursor = 0;
-            self.play_current();
-        }
+            self.enqueue_append(collected)
+        };
+        self.play_if_queue_was_empty(was_empty);
+        let n = result.added;
         if replace {
             self.flash_status_secs(
                 if n == 1 {
@@ -3166,7 +3185,12 @@ impl App {
                 3,
             );
         } else if n > 1 {
-            self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
+            let msg = if result.skipped > 0 {
+                format!("Added {n} tracks ({} already in queue)", result.skipped)
+            } else {
+                format!("Added {n} tracks to queue")
+            };
+            self.flash_status_secs(msg, 3);
         }
         n
     }
@@ -3895,10 +3919,8 @@ impl App {
                 } else {
                     self.enqueue_append(songs);
                 }
-                if start_playing && was_empty && !self.queue.songs.is_empty() {
-                    self.queue.cursor = 0;
-                    self.queue.scroll = 0;
-                    self.play_current();
+                if start_playing {
+                    self.play_if_queue_was_empty(was_empty);
                 }
             }
             LibraryUpdate::CoverArt { cover_id, bytes } => {
@@ -4277,13 +4299,14 @@ impl App {
                             return;
                         }
                         let was_empty = self.queue.songs.is_empty();
-                        self.enqueue_append(tracks);
-                        if was_empty && !self.queue.songs.is_empty() {
-                            self.queue.cursor = 0;
-                            self.queue.scroll = 0;
-                            self.play_current();
+                        let added = self.enqueue_append(tracks);
+                        self.play_if_queue_was_empty(was_empty);
+                        if added.added > 0 {
+                            self.flash_status_secs(
+                                format!("Added {} tracks to queue", added.added),
+                                3,
+                            );
                         }
-                        self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
                     }
                     Err(e) => {
                         self.flash_status_secs(format!("Library fetch failed: {e}"), 6);
@@ -5595,6 +5618,11 @@ impl App {
         if self.queue.songs.is_empty() {
             return;
         }
+        self.queue.cursor = self
+            .queue
+            .selection
+            .min(self.queue.songs.len().saturating_sub(1));
+        self.queue.selection = self.queue.cursor;
         self.np_pane_focus = NowPlayingPaneFocus::Queue;
         self.play_current();
     }
@@ -5969,7 +5997,7 @@ impl App {
             return None;
         }
         if self.active_tab == Tab::NowPlaying {
-            if let Some(song) = self.queue.songs.get(self.queue.cursor) {
+            if let Some(song) = self.queue.songs.get(self.queue.selection) {
                 return Some(FavoriteTarget {
                     id: song.id.clone(),
                     kind: FavoriteKind::Song,
@@ -6097,7 +6125,7 @@ impl App {
             return None;
         }
         if self.active_tab == Tab::NowPlaying {
-            if let Some(song) = self.queue.songs.get(self.queue.cursor) {
+            if let Some(song) = self.queue.songs.get(self.queue.selection) {
                 return Some(RatingTarget {
                     id: song.id.clone(),
                     kind: FavoriteKind::Song,
@@ -6939,6 +6967,7 @@ impl App {
             }
             Action::ClearQueue => self.handle_clear_queue(),
             Action::RemoveFromQueue => self.handle_remove_from_queue(),
+            Action::QueueShowPlaying => self.handle_queue_show_playing(),
             Action::Shuffle => self.handle_shuffle(),
             Action::Unshuffle => self.handle_unshuffle(),
             Action::ToggleShuffleMode => self.handle_toggle_shuffle_mode(),
@@ -7871,13 +7900,13 @@ impl App {
             return;
         }
         let page = self.queue_viewport_rows.max(1);
-        self.queue.cursor = match dir {
-            Direction::Up => self.queue.cursor.saturating_sub(1),
-            Direction::Down => (self.queue.cursor + 1).min(len - 1),
+        self.queue.selection = match dir {
+            Direction::Up => self.queue.selection.saturating_sub(1),
+            Direction::Down => (self.queue.selection + 1).min(len - 1),
             Direction::Top => 0,
             Direction::Bottom => len - 1,
-            Direction::PageUp => self.queue.cursor.saturating_sub(page),
-            Direction::PageDown => (self.queue.cursor + page).min(len - 1),
+            Direction::PageUp => self.queue.selection.saturating_sub(page),
+            Direction::PageDown => (self.queue.selection + page).min(len - 1),
         };
     }
 
@@ -7980,13 +8009,10 @@ impl App {
                         starred: None,
                         user_rating: None,
                     };
-                    let was_empty = self.queue.songs.is_empty();
-                    self.queue.push(song);
-                    if was_empty {
-                        self.queue.cursor = 0;
-                    } else {
-                        // Bring the new track to the cursor position.
-                        self.queue.cursor = self.queue.songs.len() - 1;
+                    let result = self.enqueue_one(song);
+                    if let Some(idx) = result.focus {
+                        self.queue.cursor = idx;
+                        self.queue.selection = idx;
                     }
                     self.play_gen += 1;
                     let duration = record.duration_secs;
@@ -8103,11 +8129,8 @@ impl App {
             user_rating: None,
         };
         let was_empty = self.queue.songs.is_empty();
-        self.queue.push(song);
-        if was_empty {
-            self.queue.cursor = 0;
-            self.play_current();
-        }
+        self.enqueue_one(song);
+        self.play_if_queue_was_empty(was_empty);
     }
 
     /// Append all tracks for a Home-tab rediscover artist (double-click).
@@ -8126,21 +8149,15 @@ impl App {
                 .cloned()
             {
                 let was_empty = self.queue.songs.is_empty();
-                self.queue.push(song);
-                if was_empty {
-                    self.queue.cursor = 0;
-                    self.play_current();
-                }
+                self.enqueue_one(song);
+                self.play_if_queue_was_empty(was_empty);
             }
             return;
         }
         if let Some(song) = self.library.current_track().cloned() {
             let was_empty = self.queue.songs.is_empty();
-            self.queue.push(song);
-            if was_empty {
-                self.queue.cursor = 0;
-                self.play_current();
-            }
+            self.enqueue_one(song);
+            self.play_if_queue_was_empty(was_empty);
         }
     }
 
@@ -8163,18 +8180,13 @@ impl App {
             self.flash_status_secs("No cached tracks to queue", 5);
             return;
         }
-        let n = songs.len();
         let was_empty = self.queue.songs.is_empty();
-        self.enqueue_append(songs);
-        if was_empty && !self.queue.songs.is_empty() {
-            self.queue.cursor = 0;
-            self.queue.scroll = 0;
-            self.play_current();
-        }
-        if n == 1 {
+        let added = self.enqueue_append(songs);
+        self.play_if_queue_was_empty(was_empty);
+        if added.added == 1 {
             self.flash_status_secs("Added 1 track to queue", 3);
-        } else {
-            self.flash_status_secs(format!("Added {n} tracks to queue"), 3);
+        } else if added.added > 1 {
+            self.flash_status_secs(format!("Added {} tracks to queue", added.added), 3);
         }
     }
 
@@ -8183,35 +8195,33 @@ impl App {
             let Some(songs) = self.folder_preview_songs_for_queue() else {
                 return;
             };
-            let n = songs.len();
             let prepend = matches!(mode, AddAllMode::Prepend);
-            match mode {
+            let replaced = matches!(mode, AddAllMode::ReplaceAlbum | AddAllMode::ReplaceArtist);
+            let result = match mode {
                 AddAllMode::ReplaceAlbum | AddAllMode::ReplaceArtist => {
                     self.send_player(PlayerCommand::Stop);
                     self.playback.current_song = None;
                     self.playback.elapsed = std::time::Duration::ZERO;
                     self.playback.paused = false;
                     self.playback.player_loaded = false;
-                    self.enqueue_replace(songs);
+                    let result = self.enqueue_replace(songs);
                     if !self.queue.songs.is_empty() {
                         self.play_current();
                     }
-                    self.flash_queue_bulk_add(n, true);
+                    result
                 }
                 AddAllMode::Append | AddAllMode::Prepend => {
                     let was_empty = self.queue.songs.is_empty();
-                    if prepend {
-                        self.enqueue_prepend(songs);
+                    let result = if prepend {
+                        self.enqueue_prepend(songs)
                     } else {
-                        self.enqueue_append(songs);
-                    }
-                    if was_empty && !self.queue.songs.is_empty() {
-                        self.queue.cursor = 0;
-                        self.play_current();
-                    }
-                    self.flash_queue_bulk_add(n, false);
+                        self.enqueue_append(songs)
+                    };
+                    self.play_if_queue_was_empty(was_empty);
+                    result
                 }
-            }
+            };
+            self.flash_queue_bulk_add(result.added, result.skipped, replaced);
             return;
         }
         match mode {
@@ -8245,10 +8255,7 @@ impl App {
                             } else {
                                 self.enqueue_append(sorted);
                             }
-                            if was_empty && !self.queue.songs.is_empty() {
-                                self.queue.cursor = 0;
-                                self.play_current();
-                            }
+                            self.play_if_queue_was_empty(was_empty);
                         }
                     }
                 }
@@ -8345,8 +8352,7 @@ impl App {
                 self.queue.songs.swap(i, j);
             }
         }
-        self.queue.cursor = 0;
-        self.queue.scroll = 0;
+        self.queue.zero_position();
         self.queue.shuffle_active = true;
     }
 
@@ -8360,23 +8366,127 @@ impl App {
         }
     }
 
+    /// Highlight `index` and ask the next queue paint to center it.
+    fn focus_queue_selection(&mut self, index: usize) {
+        if self.queue.songs.is_empty() {
+            self.queue.zero_position();
+            return;
+        }
+        let last = self.queue.songs.len() - 1;
+        self.queue.selection = index.min(last);
+        self.queue_recenter_selection = true;
+    }
+
+    fn note_duplicate_skips(&mut self, result: &QueueAddResult) {
+        if result.added == 0 && result.skipped > 0 {
+            let msg = if result.skipped == 1 {
+                "Already in queue".to_string()
+            } else {
+                format!("{} tracks already in queue", result.skipped)
+            };
+            self.flash_status_secs(msg, 3);
+        }
+    }
+
+    /// Start playback at the first row when an add filled an empty queue.
+    /// The highlight stays on that row so later track changes keep following it.
+    fn play_if_queue_was_empty(&mut self, was_empty: bool) {
+        if was_empty && !self.queue.songs.is_empty() {
+            self.queue.cursor = 0;
+            self.focus_queue_selection(0);
+            self.play_current();
+        }
+    }
+
+    fn handle_queue_show_playing(&mut self) {
+        if self.queue.songs.is_empty() {
+            return;
+        }
+        self.focus_queue_selection(self.queue.cursor);
+    }
+
     /// Append a block, shuffling play order when shuffle mode is on.
-    fn enqueue_append(&mut self, songs: Vec<ratune_subsonic::Song>) {
+    /// Moves the highlight to the last new row. The playhead stays put.
+    fn enqueue_append(&mut self, songs: Vec<ratune_subsonic::Song>) -> QueueAddResult {
+        let (songs, skipped, first_existing) = self
+            .queue
+            .filter_duplicate_adds(songs, self.config.queue_skip_duplicates);
+        if songs.is_empty() {
+            if let Some(idx) = first_existing {
+                self.focus_queue_selection(idx);
+            }
+            let result = QueueAddResult {
+                added: 0,
+                skipped,
+                focus: first_existing,
+            };
+            self.note_duplicate_skips(&result);
+            return result;
+        }
+        let added = songs.len();
         self.queue.append_block(songs, self.shuffle_mode);
+        let focus = self.queue.songs.len().saturating_sub(1);
+        self.focus_queue_selection(focus);
+        QueueAddResult {
+            added,
+            skipped,
+            focus: Some(focus),
+        }
     }
 
     /// Prepend a block, shuffling play order when shuffle mode is on.
-    fn enqueue_prepend(&mut self, songs: Vec<ratune_subsonic::Song>) {
+    fn enqueue_prepend(&mut self, songs: Vec<ratune_subsonic::Song>) -> QueueAddResult {
+        let (songs, skipped, first_existing) = self
+            .queue
+            .filter_duplicate_adds(songs, self.config.queue_skip_duplicates);
+        if songs.is_empty() {
+            if let Some(idx) = first_existing {
+                self.focus_queue_selection(idx);
+            }
+            let result = QueueAddResult {
+                added: 0,
+                skipped,
+                focus: first_existing,
+            };
+            self.note_duplicate_skips(&result);
+            return result;
+        }
+        let added = songs.len();
         if self.shuffle_mode {
             self.queue.prepend_block(songs, true);
         } else {
             self.queue.prepend_songs(songs);
         }
+        self.focus_queue_selection(0);
+        QueueAddResult {
+            added,
+            skipped,
+            focus: Some(0),
+        }
     }
 
     /// Replace the queue contents (caller handles stop/clear playback as needed).
-    fn enqueue_replace(&mut self, songs: Vec<ratune_subsonic::Song>) {
+    fn enqueue_replace(&mut self, songs: Vec<ratune_subsonic::Song>) -> QueueAddResult {
+        // Collapse repeated ids inside the replacement only. The previous queue is discarded.
+        let (songs, skipped, _) =
+            QueueState::default().filter_duplicate_adds(songs, self.config.queue_skip_duplicates);
+        let added = songs.len();
         self.queue.replace_with_block(songs, self.shuffle_mode);
+        let focus = if added > 0 {
+            self.focus_queue_selection(0);
+            Some(0)
+        } else {
+            None
+        };
+        QueueAddResult {
+            added,
+            skipped,
+            focus,
+        }
+    }
+
+    fn enqueue_one(&mut self, song: ratune_subsonic::Song) -> QueueAddResult {
+        self.enqueue_append(vec![song])
     }
 
     /// Apply the current search: move selection to the first filtered result.
@@ -8516,9 +8626,7 @@ impl App {
                     .iter()
                     .position(|s| s.title.to_lowercase().contains(&q))
                 {
-                    self.queue.cursor = idx;
-                    self.queue
-                        .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
+                    self.focus_queue_selection(idx);
                 }
             }
         }
@@ -8526,8 +8634,7 @@ impl App {
 
     fn handle_clear_queue(&mut self) {
         self.queue.songs.clear();
-        self.queue.cursor = 0;
-        self.queue.scroll = 0;
+        self.queue.zero_position();
         self.queue.clear_shuffle_state();
         self.send_player(PlayerCommand::Stop);
         self.playback.current_song = None;
@@ -8540,20 +8647,15 @@ impl App {
         if self.queue.songs.is_empty() {
             return;
         }
-        let idx = self.queue.cursor;
-        let removed_playing = self
-            .playback
-            .current_song
-            .as_ref()
-            .zip(self.queue.songs.get(idx))
-            .is_some_and(|(cur, at_cursor)| cur.id == at_cursor.id);
+        let idx = self.queue.selection;
+        let removed_playing = self.playback.current_song.is_some() && idx == self.queue.cursor;
         let was_active = self.playback.player_loaded && !self.playback.paused;
 
         if self.queue.remove_at(idx).is_none() {
             return;
         }
         self.queue
-            .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
+            .scroll_clamp_selection_visible(self.queue_viewport_rows.max(1));
 
         if self.queue.songs.is_empty() {
             self.handle_clear_queue();
@@ -8598,15 +8700,28 @@ impl App {
             None => return,
         };
         let current_id = self.queue.current().map(|s| s.id.clone());
+        let was_following = self.queue.selection_follows_playhead();
+        let selected_id = self
+            .queue
+            .songs
+            .get(self.queue.selection)
+            .map(|s| s.id.clone());
         self.queue.songs = original;
         self.queue.shuffle_active = false;
         if let Some(id) = current_id {
             if let Some(idx) = self.queue.songs.iter().position(|s| s.id == id) {
                 self.queue.cursor = idx;
-                self.queue
-                    .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
             }
         }
+        if was_following {
+            self.queue.selection = self.queue.cursor;
+        } else if let Some(id) = selected_id {
+            if let Some(idx) = self.queue.songs.iter().position(|s| s.id == id) {
+                self.queue.selection = idx;
+            }
+        }
+        self.queue.clamp_indices();
+        self.focus_queue_selection(self.queue.selection);
     }
 
     fn handle_toggle_queue_loop(&mut self) {
@@ -8820,19 +8935,20 @@ impl App {
 
     /// Mouse click on a visible queue row in the Now Playing tab.
     pub fn click_queue_row(&mut self, idx: usize) {
-        self.set_queue_cursor(idx);
+        self.set_queue_selection(idx);
     }
 
     pub fn double_click_queue_row(&mut self, idx: usize) {
-        self.set_queue_cursor(idx);
+        self.set_queue_selection(idx);
         self.play_queue_from_np();
     }
 
-    pub fn set_queue_cursor(&mut self, idx: usize) {
+    /// Highlight a queue row without moving the playhead.
+    pub fn set_queue_selection(&mut self, idx: usize) {
         if idx < self.queue.songs.len() {
-            self.queue.cursor = idx;
+            self.queue.selection = idx;
             self.queue
-                .scroll_clamp_cursor_visible(self.queue_viewport_rows.max(1));
+                .scroll_clamp_selection_visible(self.queue_viewport_rows.max(1));
         }
     }
 
@@ -9074,11 +9190,7 @@ impl App {
                 if let LoadingState::Loaded(ref songs) = self.playlist_overlay.tracks {
                     let was_empty = self.queue.songs.is_empty();
                     self.enqueue_append(songs.clone());
-                    if was_empty && !self.queue.songs.is_empty() {
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
-                        self.play_current();
-                    }
+                    self.play_if_queue_was_empty(was_empty);
                 }
             }
             Action::PlaylistPlayTrack => {
@@ -9105,12 +9217,8 @@ impl App {
                         .cloned()
                     {
                         let was_empty = self.queue.songs.is_empty();
-                        self.queue.push(song);
-                        if was_empty {
-                            self.queue.cursor = 0;
-                            self.queue.scroll = 0;
-                            self.play_current();
-                        }
+                        self.enqueue_one(song);
+                        self.play_if_queue_was_empty(was_empty);
                     }
                 }
             }
@@ -9319,8 +9427,7 @@ impl App {
                 if let Some(album) = self.server_search_overlay.albums.get(idx) {
                     if replace {
                         self.queue.songs.clear();
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
+                        self.queue.zero_position();
                         self.queue.clear_shuffle_state();
                         self.fetch_and_replace_queue_with_album(album.id.clone(), true);
                     } else {
@@ -9332,8 +9439,7 @@ impl App {
                 if let Some(artist) = self.server_search_overlay.artists.get(idx) {
                     if replace {
                         self.queue.songs.clear();
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
+                        self.queue.zero_position();
                         self.queue.clear_shuffle_state();
                         self.fetch_all_tracks_for_artist(artist.id.clone(), true, false);
                     } else {
@@ -9440,8 +9546,7 @@ impl App {
                 if let Some(album) = self.favorites_overlay.albums.get(idx) {
                     if replace {
                         self.queue.songs.clear();
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
+                        self.queue.zero_position();
                         self.queue.clear_shuffle_state();
                         self.fetch_and_replace_queue_with_album(album.id.clone(), true);
                     } else {
@@ -9460,8 +9565,7 @@ impl App {
                 if let Some(artist) = self.favorites_overlay.artists.get(idx) {
                     if replace {
                         self.queue.songs.clear();
-                        self.queue.cursor = 0;
-                        self.queue.scroll = 0;
+                        self.queue.zero_position();
                         self.queue.clear_shuffle_state();
                         self.fetch_all_tracks_for_artist(artist.id.clone(), true, false);
                     } else {
@@ -9515,11 +9619,7 @@ impl App {
         } else {
             let was_empty = self.queue.songs.is_empty();
             self.enqueue_append(songs);
-            if was_empty && !self.queue.songs.is_empty() {
-                self.queue.cursor = 0;
-                self.queue.scroll = 0;
-                self.play_current();
-            }
+            self.play_if_queue_was_empty(was_empty);
         }
     }
 

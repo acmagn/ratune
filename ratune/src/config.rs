@@ -111,6 +111,8 @@ pub struct KeybindsSection {
     pub clear_queue: Option<String>,
     /// Remove highlighted track from queue (Now Playing tab). Default: d
     pub remove_from_queue: Option<String>,
+    /// Now Playing: center the playing track in the queue. Default: `.`
+    pub queue_show_playing: Option<String>,
     pub search: Option<String>,
     pub volume_up: Option<String>,
     pub volume_down: Option<String>,
@@ -1176,6 +1178,9 @@ impl ThemeBorderShuffleModeSection {
 pub struct ThemeIconSection {
     /// Label while a track is playing (default: `( ⏸ )`).
     pub playing: Option<String>,
+    /// Marker on the queue row that is currently playing.
+    /// Omitted: same glyph as [`Self::stopped`]. Empty string hides it.
+    pub queue_playing: Option<String>,
     /// Label while paused (default: `( ▶ )`).
     pub paused: Option<String>,
     /// Label when nothing is loaded (default: `▶`).
@@ -1324,6 +1329,10 @@ struct PlayerSection {
     /// When true, playback wraps to the first queue track after the last one ends.
     #[serde(default = "default_queue_loop")]
     queue_loop: bool,
+    /// When true, adding a song whose id is already queued does nothing and
+    /// moves the queue highlight to the existing row. Default: false.
+    #[serde(default)]
+    queue_skip_duplicates: bool,
     /// When true (default on Unix), playback continues in a background daemon
     /// after the TUI closes. Set false to restore in-process playback (music
     /// stops when ratune exits). Ignored on non-Unix platforms.
@@ -1338,6 +1347,7 @@ impl Default for PlayerSection {
             max_bit_rate: 0,
             mpris: default_mpris(),
             queue_loop: default_queue_loop(),
+            queue_skip_duplicates: false,
             daemon: default_daemon(),
         }
     }
@@ -1486,6 +1496,8 @@ pub struct Config {
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     pub queue_loop: bool,
+    /// When true, queue adds skip a song id that is already present.
+    pub queue_skip_duplicates: bool,
     /// Unix: keep a playback daemon so music continues after the TUI closes.
     pub daemon_enabled: bool,
     /// When true, show ratings in the UI and allow rating keybinds / MPRIS UserRating (`[ratings].enabled`).
@@ -1930,6 +1942,7 @@ impl Config {
             max_bit_rate: file_cfg.player.max_bit_rate,
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
+            queue_skip_duplicates: file_cfg.player.queue_skip_duplicates,
             daemon_enabled: {
                 #[cfg(unix)]
                 {
@@ -2083,6 +2096,7 @@ default_volume = 70
 max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # mpris = true     # Linux MPRIS / macOS Now Playing for media keys (default: true)
 # queue_loop = true   # wrap to first track after the last queue item (default: true)
+# queue_skip_duplicates = false  # skip a queue add when that song id is already queued
 # daemon = true       # Unix: keep playing after the TUI closes (`q` detaches, Ctrl+q / `ratune stop` quits)
 
 [ratings]
@@ -2962,6 +2976,15 @@ cache_enabled = false
     }
 
     #[test]
+    fn queue_skip_duplicates_defaults_false() {
+        let fc = FileConfig::default();
+        assert!(!fc.player.queue_skip_duplicates);
+        let fc: FileConfig =
+            toml::from_str("[player]\nqueue_skip_duplicates = true\n").expect("toml");
+        assert!(fc.player.queue_skip_duplicates);
+    }
+
+    #[test]
     fn daemon_defaults_true() {
         let fc: FileConfig = toml::from_str("").expect("toml");
         assert!(fc.player.daemon);
@@ -3042,6 +3065,7 @@ type = "ascii"
 
 [theme.icon]
 playing = "||"
+queue_playing = ">"
 paused = "( > )"
 stopped = ">"
 next_song = ">>"
@@ -3057,6 +3081,7 @@ tab_separator = " | "
         .expect("toml");
         assert_eq!(fc.theme.border_lines.style.as_deref(), Some("ascii"));
         assert_eq!(fc.theme.icon.playing.as_deref(), Some("||"));
+        assert_eq!(fc.theme.icon.queue_playing.as_deref(), Some(">"));
         assert_eq!(fc.theme.icon.paused.as_deref(), Some("( > )"));
         assert_eq!(fc.theme.icon.stopped.as_deref(), Some(">"));
         assert_eq!(fc.theme.icon.next_song.as_deref(), Some(">>"));
