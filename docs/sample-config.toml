@@ -170,6 +170,7 @@ queue_loop = true
 # quit                = "q"           # close TUI; playback continues if a track is loaded
 # quit_stop           = "Ctrl+q"      # quit TUI and stop the playback daemon; "" disables
 # library_fzf         = "Ctrl+f"      # "" disables fuzzy picker
+# library_fzf_albums  = "Alt+f"       # album picker (one row per album); "" disables
 # library_refresh     = "Ctrl+g"      # "" disables; forced refresh if still Ctrl+g
 #                       # If you set library_refresh to Ctrl+r while album replace is also Ctrl+r,
 #                       # the app treats refresh as unset so Ctrl+g default wins.
@@ -562,6 +563,10 @@ source = "lrclib"
 # args   — Picker argv (delimiter, columns, …). Auto --header follows --with-nth unless
 #          you pass your own --header=…
 # [library.fzf.columns] — max TSV field width (terminal columns); 0 = no truncation.
+# [library.fzf.albums] — album picker (Alt+f), one row per album. Shares `binary`.
+#   Fields: 1 album id (hidden), 2 artist, 3 album, 4 year, 5 tracks, 6 total time.
+#   Enter appends the album(s), Ctrl+r replaces the queue. In either picker,
+#   switch_key (default ctrl-s) flips songs ↔ albums (added to --expect).
 
 [library]
 enabled = true
@@ -574,6 +579,8 @@ notify_on_forced_index_refresh = true
 
 [library.fzf]
 binary = "fzf"
+# fzf --expect name that flips songs ↔ albums. "" disables. Use fzf names (ctrl-s, alt-a).
+switch_key = "ctrl-s"
 args = [
   "--delimiter=\t",
   "--with-nth=2,3,4,5",
@@ -588,6 +595,24 @@ args = [
 # album = 28
 # title = 36
 # duration = 6
+
+[library.fzf.albums]
+args = [
+  "--delimiter=\t",
+  "--with-nth=2,3,4,5,6",
+  "--nth=1,2",
+  "--multi",
+  "--expect=ctrl-r",
+  "--border=rounded",
+  "--prompt=Albums> ",
+]
+
+# [library.fzf.albums.columns]
+# artist = 26
+# album = 40
+# year = 4
+# tracks = 6
+# duration = 8
 
 # -----------------------------------------------------------------------------
 # [cache] — offline streamed audio cache

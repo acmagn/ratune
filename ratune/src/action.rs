@@ -202,6 +202,8 @@ pub enum Action {
     PlaylistConfirmNo,
     /// Open the fzf (or `sk`) track picker using the local metadata index.
     LibraryFzfPicker,
+    /// Open the fzf (or `sk`) album picker using the local metadata index.
+    LibraryFzfAlbumPicker,
     /// Force a full refresh of the metadata index from Subsonic.
     LibraryIndexRefresh,
     /// Confirm a pending full library index refresh.

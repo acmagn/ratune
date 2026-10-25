@@ -263,12 +263,12 @@ fn format_fzf_column(s: &str, width: usize) -> String {
 /// Default `--with-nth` when omitted from fzf argv (hide song id, show artist–duration).
 pub const FZF_DEFAULT_WITH_NTH: &[usize] = &[2, 3, 4, 5];
 
-/// Parse `--with-nth=2,3,4,5` (or `--with-nth 2,3,4,5`) from fzf argv.
-pub fn parse_fzf_with_nth(args: &[String]) -> Vec<usize> {
+/// Parse `--with-nth=2,3,4,5` (or `--with-nth 2,3,4,5`) from fzf argv; `default` when absent.
+pub fn parse_fzf_with_nth_or(args: &[String], default: &[usize]) -> Vec<usize> {
     parse_fzf_flag_value(args, "--with-nth")
         .map(|s| parse_fzf_field_indices(&s))
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| FZF_DEFAULT_WITH_NTH.to_vec())
+        .unwrap_or_else(|| default.to_vec())
 }
 
 fn parse_fzf_flag_value(args: &[String], flag: &str) -> Option<String> {
@@ -343,7 +343,113 @@ pub fn write_fzf_input_lines<'a>(
     Ok(())
 }
 
-/// Parse the first field (song id) from a line emitted by [`write_fzf_input_lines`].
+/// Display width per TSV column in the album picker. `0` = no truncation or padding.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FzfAlbumColumns {
+    #[serde(default = "default_fzf_col_artist")]
+    pub artist: usize,
+    #[serde(default = "default_fzf_album_col_album")]
+    pub album: usize,
+    #[serde(default = "default_fzf_album_col_year")]
+    pub year: usize,
+    #[serde(default = "default_fzf_album_col_tracks")]
+    pub tracks: usize,
+    #[serde(default = "default_fzf_album_col_duration")]
+    pub duration: usize,
+}
+
+impl Default for FzfAlbumColumns {
+    fn default() -> Self {
+        Self {
+            artist: default_fzf_col_artist(),
+            album: default_fzf_album_col_album(),
+            year: default_fzf_album_col_year(),
+            tracks: default_fzf_album_col_tracks(),
+            duration: default_fzf_album_col_duration(),
+        }
+    }
+}
+
+fn default_fzf_album_col_album() -> usize {
+    40
+}
+fn default_fzf_album_col_year() -> usize {
+    4
+}
+fn default_fzf_album_col_tracks() -> usize {
+    6
+}
+fn default_fzf_album_col_duration() -> usize {
+    8
+}
+
+/// Default `--with-nth` for the album picker (hide album id, show the rest).
+pub const FZF_ALBUM_DEFAULT_WITH_NTH: &[usize] = &[2, 3, 4, 5, 6];
+
+fn fzf_album_field_header(field: usize, cols: FzfAlbumColumns) -> Option<String> {
+    let (label, width) = match field {
+        2 => ("Artist", cols.artist),
+        3 => ("Album", cols.album),
+        4 => ("Year", cols.year),
+        5 => ("Tracks", cols.tracks),
+        6 => ("Time", cols.duration),
+        _ => return None,
+    };
+    Some(format_fzf_column(label, width))
+}
+
+/// [`fzf_header_line`] for [`write_fzf_album_lines`] columns.
+pub fn fzf_album_header_line(cols: FzfAlbumColumns, with_nth: &[usize]) -> String {
+    with_nth
+        .iter()
+        .filter_map(|&field| fzf_album_field_header(field, cols))
+        .collect::<Vec<_>>()
+        .join("\t")
+}
+
+/// One TSV line per album for fzf: id, album artist, album, year, track count, total time.
+/// Field 1 is the album id (hidden via `--with-nth=2,3,4,5,6`).
+pub fn write_fzf_album_lines<'a>(
+    out: &mut (impl Write + ?Sized),
+    albums: impl IntoIterator<Item = &'a ratune_subsonic::Album>,
+    cols: FzfAlbumColumns,
+) -> std::io::Result<()> {
+    for a in albums {
+        let id = sanitize_field(&a.id);
+        let artist = a.artist.as_deref().unwrap_or("—");
+        let year = a
+            .year
+            .filter(|&y| y > 0)
+            .map(|y| y.to_string())
+            .unwrap_or_else(|| "—".to_string());
+        let tracks = a
+            .song_count
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "—".to_string());
+        let dur = a
+            .duration
+            .map(fmt_long_duration)
+            .unwrap_or_else(|| "—".to_string());
+        let artist = format_fzf_column(&sanitize_field(artist), cols.artist);
+        let album = format_fzf_column(&sanitize_field(&a.name), cols.album);
+        let year = format_fzf_column(&year, cols.year);
+        let tracks = format_fzf_column(&tracks, cols.tracks);
+        let dur = format_fzf_column(&dur, cols.duration);
+        writeln!(out, "{id}\t{artist}\t{album}\t{year}\t{tracks}\t{dur}")?;
+    }
+    Ok(())
+}
+
+/// `m:ss` under an hour, `h:mm:ss` otherwise.
+fn fmt_long_duration(secs: u32) -> String {
+    if secs < 3600 {
+        return fmt_duration_ms(secs);
+    }
+    format!("{}:{:02}:{:02}", secs / 3600, (secs / 60) % 60, secs % 60)
+}
+
+/// Parse the first field (song or album id) from a line emitted by
+/// [`write_fzf_input_lines`] / [`write_fzf_album_lines`].
 pub fn parse_pick_line(line: &str) -> Option<String> {
     let line = line.trim_end_matches('\n');
     line.split('\t').next().map(String::from)
@@ -1237,10 +1343,49 @@ mod tests {
             "--with-nth=2,3,5,4".into(),
             "--nth=1,2,3".into(),
         ];
-        assert_eq!(parse_fzf_with_nth(&args), vec![2, 3, 5, 4]);
-        assert_eq!(parse_fzf_with_nth(&[]), vec![2, 3, 4, 5]);
+        let d = FZF_DEFAULT_WITH_NTH;
+        assert_eq!(parse_fzf_with_nth_or(&args, d), vec![2, 3, 5, 4]);
+        assert_eq!(parse_fzf_with_nth_or(&[], d), vec![2, 3, 4, 5]);
         let spaced = vec!["--with-nth".into(), "2,3,5,4".into()];
-        assert_eq!(parse_fzf_with_nth(&spaced), vec![2, 3, 5, 4]);
+        assert_eq!(parse_fzf_with_nth_or(&spaced, d), vec![2, 3, 5, 4]);
+        assert_eq!(
+            parse_fzf_with_nth_or(&[], FZF_ALBUM_DEFAULT_WITH_NTH),
+            vec![2, 3, 4, 5, 6]
+        );
+    }
+
+    #[test]
+    fn fzf_album_lines_one_row_per_album_with_header() {
+        let album: ratune_subsonic::Album = serde_json::from_value(serde_json::json!({
+            "id": "al1",
+            "name": "Long\tName",
+            "artist": "Artist",
+            "year": 1999,
+            "songCount": 12,
+            "duration": 3753,
+        }))
+        .unwrap();
+        let cols = FzfAlbumColumns {
+            album: 0,
+            ..FzfAlbumColumns::default()
+        };
+        let mut out = Vec::new();
+        write_fzf_album_lines(&mut out, [&album, &album], cols).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let fields: Vec<&str> = lines[0].split('\t').collect();
+        assert_eq!(fields.len(), 6);
+        assert_eq!(fields[0], "al1");
+        assert_eq!(fields[2], "Long Name");
+        assert_eq!(fields[3], "1999");
+        assert_eq!(fields[4].trim_end(), "12");
+        assert_eq!(fields[5].trim_end(), "1:02:33");
+        assert_eq!(parse_pick_line(lines[0]).as_deref(), Some("al1"));
+
+        let header = fzf_album_header_line(cols, FZF_ALBUM_DEFAULT_WITH_NTH);
+        let labels: Vec<&str> = header.split('\t').map(str::trim_end).collect();
+        assert_eq!(labels, ["Artist", "Album", "Year", "Tracks", "Time"]);
     }
 
     #[test]

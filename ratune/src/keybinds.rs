@@ -205,6 +205,8 @@ pub struct Keybinds {
     pub quit_stop: Option<KeySpec>,
     /// Fuzzy library picker (`None` = disabled).
     pub library_fzf: Option<KeySpec>,
+    /// Fuzzy album picker (`None` = disabled).
+    pub library_fzf_albums: Option<KeySpec>,
     /// Force library index refresh (`None` = disabled).
     pub library_refresh: Option<KeySpec>,
     /// Ping Subsonic and refresh online/offline mode (`None` = disabled).
@@ -310,6 +312,13 @@ impl Keybinds {
             Some(KeySpec {
                 code: KeyCode::Char('f'),
                 modifiers: KeyModifiers::CONTROL,
+            }),
+        );
+        let library_fzf_albums = resolve_opt(
+            sec.library_fzf_albums.as_deref(),
+            Some(KeySpec {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::ALT,
             }),
         );
         let library_refresh = resolve_opt(
@@ -445,6 +454,7 @@ impl Keybinds {
                 }),
             ),
             library_fzf,
+            library_fzf_albums,
             library_refresh,
             connection_check,
             library_index_append_queue,
@@ -601,6 +611,20 @@ fn parse_key(s: &str) -> Option<KeySpec> {
         return None;
     }
 
+    // Alt+x (lowercase letter after prefix).
+    if let Some(rest) = s.strip_prefix("Alt+").or_else(|| s.strip_prefix("alt+")) {
+        let mut it = rest.chars();
+        if let Some(c) = it.next() {
+            if it.next().is_none() {
+                return Some(KeySpec {
+                    code: KeyCode::Char(c.to_ascii_lowercase()),
+                    modifiers: KeyModifiers::ALT,
+                });
+            }
+        }
+        return None;
+    }
+
     // Named special keys.
     match s {
         "Tab" => Some(KeySpec::new(KeyCode::Tab)),
@@ -622,6 +646,31 @@ mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     use crate::config::KeybindsSection;
+
+    #[test]
+    fn library_fzf_albums_defaults_to_alt_f_and_parses_alt() {
+        let kb = Keybinds::from_section(&KeybindsSection::default());
+        let spec = kb.library_fzf_albums.expect("default album picker key");
+        assert!(spec.matches(KeyCode::Char('f'), KeyModifiers::ALT));
+        assert!(!spec.matches(KeyCode::Char('f'), KeyModifiers::NONE));
+        assert!(!kb
+            .library_fzf
+            .unwrap()
+            .matches(KeyCode::Char('f'), KeyModifiers::ALT));
+
+        let sec = KeybindsSection {
+            library_fzf_albums: Some("Alt+B".into()),
+            ..KeybindsSection::default()
+        };
+        let spec = Keybinds::from_section(&sec).library_fzf_albums.unwrap();
+        assert!(spec.matches(KeyCode::Char('b'), KeyModifiers::ALT));
+
+        let sec = KeybindsSection {
+            library_fzf_albums: Some(String::new()),
+            ..KeybindsSection::default()
+        };
+        assert!(Keybinds::from_section(&sec).library_fzf_albums.is_none());
+    }
 
     #[test]
     fn rate_defaults_match_us_shift_digit_symbols() {

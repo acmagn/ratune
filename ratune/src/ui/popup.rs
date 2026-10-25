@@ -88,8 +88,10 @@ fn sections(
             "Library (fzf)",
             vec![
                 ("Ctrl+f", "Open picker (Tab multi-select)"),
+                ("Alt+f", "Open album picker"),
                 ("Enter", "Append picks to queue"),
                 ("Ctrl+r", "In picker: replace queue · else: refresh index"),
+                ("Ctrl+s", "In picker: switch songs / albums"),
             ],
         ),
         (

@@ -3177,6 +3177,65 @@ impl App {
         if ids.is_empty() {
             return 0;
         }
+        let not_found = if ids.len() == 1 {
+            "Selected track not found in index"
+        } else {
+            "Selected tracks not found in index"
+        };
+        self.enqueue_library_picks(replace, not_found, |app| {
+            ids.iter()
+                .filter_map(|id| {
+                    app.library_index_by_id
+                        .get(id.as_str())
+                        .and_then(|&i| app.library_index_tracks.get(i))
+                        .cloned()
+                })
+                .collect()
+        })
+    }
+
+    /// Browse snapshot the album picker lists: cache-filtered when `cached_only`.
+    /// Positions refer to `library_index_tracks`.
+    pub(crate) fn fzf_album_snapshot(
+        &mut self,
+        cached_only: bool,
+    ) -> Option<std::sync::Arc<crate::library_index::BrowseSnapshot>> {
+        if cached_only {
+            self.ensure_offline_browse()
+        } else {
+            self.ensure_index_browse()
+        }
+    }
+
+    /// Queue every track of the picked albums (picker order; disc/track order within each).
+    pub fn apply_library_index_album_picks(
+        &mut self,
+        snapshot: &crate::library_index::BrowseSnapshot,
+        album_ids: &[String],
+        replace: bool,
+    ) -> usize {
+        if album_ids.is_empty() {
+            return 0;
+        }
+        let not_found = if album_ids.len() == 1 {
+            "Selected album not found in index"
+        } else {
+            "Selected albums not found in index"
+        };
+        self.enqueue_library_picks(replace, not_found, |app| {
+            album_ids
+                .iter()
+                .flat_map(|id| snapshot.album_tracks(&app.library_index_tracks, id))
+                .collect()
+        })
+    }
+
+    fn enqueue_library_picks(
+        &mut self,
+        replace: bool,
+        not_found: &str,
+        collect: impl FnOnce(&Self) -> Vec<ratune_subsonic::Song>,
+    ) -> usize {
         if replace {
             self.queue.songs.clear();
             self.queue.zero_position();
@@ -3188,24 +3247,9 @@ impl App {
             self.playback.player_loaded = false;
         }
         let was_empty = self.queue.songs.is_empty();
-        let mut collected = Vec::new();
-        for id in ids {
-            if let Some(song) = self
-                .library_index_by_id
-                .get(id.as_str())
-                .and_then(|&i| self.library_index_tracks.get(i))
-            {
-                collected.push(song.clone());
-            }
-        }
-        let n = collected.len();
-        if n == 0 {
-            let msg = if ids.len() == 1 {
-                "Selected track not found in index"
-            } else {
-                "Selected tracks not found in index"
-            };
-            self.flash_status(msg);
+        let collected = collect(self);
+        if collected.is_empty() {
+            self.flash_status(not_found);
             return 0;
         }
         let result = if replace {
@@ -6804,7 +6848,7 @@ impl App {
                     self.flash_status("Cancelled");
                 }
             }
-            Action::LibraryFzfPicker => {}
+            Action::LibraryFzfPicker | Action::LibraryFzfAlbumPicker => {}
             Action::Quit => self.should_quit = true,
             Action::QuitStop => {
                 self.stop_daemon_on_quit = true;
