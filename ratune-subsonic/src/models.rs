@@ -35,6 +35,42 @@ where
     })
 }
 
+/// Replace characters the terminal executes (CR, LF, tab, ESC, other controls)
+/// with a space.
+///
+/// Ratatui writes each cell symbol straight to the terminal. A carriage return
+/// has no display width, so it is stored on the previous cell. Printing that
+/// cell sends the cursor to column 0, and the rest of the string is drawn
+/// outside the widget. Later frames skip those cells when the buffer is
+/// unchanged, so the overflow stays on screen.
+#[must_use]
+pub fn sanitize_terminal_text(s: String) -> String {
+    if !s.chars().any(is_terminal_unsafe) {
+        return s;
+    }
+    s.chars()
+        .map(|c| if is_terminal_unsafe(c) { ' ' } else { c })
+        .collect()
+}
+
+fn is_terminal_unsafe(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')
+}
+
+fn deserialize_terminal_text<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(sanitize_terminal_text)
+}
+
+fn deserialize_optional_terminal_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.map(sanitize_terminal_text))
+}
+
 // ── Public domain types ───────────────────────────────────────────────────────
 
 /// A single artist entry as returned by `getArtists`, `getArtist`, or `search3`.
@@ -45,6 +81,7 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct Artist {
     pub id: String,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub name: String,
     pub album_count: Option<u32>,
     pub cover_art: Option<String>,
@@ -108,6 +145,7 @@ pub fn parse_music_library_root_folder_id(cache_id: &str) -> Option<&str> {
 #[serde(rename_all = "camelCase")]
 pub struct ArtistRef {
     pub id: String,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub name: String,
 }
 
@@ -115,14 +153,17 @@ pub struct ArtistRef {
 #[serde(rename_all = "camelCase")]
 pub struct Song {
     pub id: String,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub title: String,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub album: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub artist: Option<String>,
     pub album_id: Option<String>,
     pub artist_id: Option<String>,
     /// Album artist name. Used for Browse column grouping (matches server `getArtists`).
     /// Populated from OpenSubsonic `albumArtist` when present, or stamped during library index walks.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub album_artist: Option<String>,
     /// Album artist id for Browse grouping (OpenSubsonic / stamped from `getAlbum`).
     #[serde(default)]
@@ -146,6 +187,7 @@ pub struct Song {
     pub track: Option<u32>,
     pub disc_number: Option<u32>,
     pub year: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub genre: Option<String>,
     pub cover_art: Option<String>,
     /// Duration in seconds.
@@ -155,6 +197,7 @@ pub struct Song {
     pub content_type: Option<String>,
     pub suffix: Option<String>,
     pub size: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub path: Option<String>,
     pub starred: Option<String>,
     /// User rating 1–5 from Subsonic `userRating` (absent or 0 = unrated).
@@ -237,7 +280,9 @@ pub fn user_rating_mpris(rating: Option<u8>) -> Option<f64> {
 #[serde(rename_all = "camelCase")]
 pub struct Album {
     pub id: String,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub name: String,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub artist: Option<String>,
     pub artist_id: Option<String>,
     /// OpenSubsonic: all album artists (composer + performers, etc.).
@@ -248,6 +293,7 @@ pub struct Album {
     /// Total duration in seconds.
     pub duration: Option<u32>,
     pub year: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub genre: Option<String>,
     pub starred: Option<String>,
     /// User rating 1–5 from Subsonic `userRating`.
@@ -274,7 +320,7 @@ pub struct Album {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscTitle {
     pub disc: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_terminal_text")]
     pub title: String,
 }
 
@@ -293,9 +339,11 @@ pub struct ItemDate {
 #[serde(rename_all = "camelCase")]
 pub struct Playlist {
     pub id: String,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub name: String,
     pub song_count: Option<u32>,
     pub duration: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub owner: Option<String>,
     pub public: Option<bool>,
 }
@@ -305,6 +353,7 @@ pub struct Playlist {
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistDetail {
     pub id: String,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub name: String,
     pub song_count: Option<u32>,
     pub duration: Option<u64>,
@@ -319,6 +368,7 @@ pub struct PlaylistDetail {
 pub struct InternetRadioStation {
     #[serde(deserialize_with = "deserialize_flexible_id")]
     pub id: String,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub name: String,
     pub stream_url: String,
     pub home_page_url: Option<String>,
@@ -427,8 +477,11 @@ pub struct DirectoryChild {
     pub parent: Option<String>,
     #[serde(rename = "isDir", default)]
     pub is_dir: bool,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub title: String,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub artist: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub album: Option<String>,
     pub album_id: Option<String>,
     pub artist_id: Option<String>,
@@ -436,6 +489,7 @@ pub struct DirectoryChild {
     pub disc_number: Option<u32>,
     pub duration: Option<u32>,
     pub cover_art: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub path: Option<String>,
     pub suffix: Option<String>,
     pub content_type: Option<String>,
@@ -587,6 +641,7 @@ pub(crate) struct StructuredLyricsRaw {
 pub(crate) struct StructuredLyricLineRaw {
     #[serde(default)]
     pub(crate) start: Option<u32>,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub(crate) value: String,
 }
 
@@ -885,6 +940,7 @@ where
 pub(crate) struct MusicFolderRaw {
     #[serde(deserialize_with = "deserialize_flexible_id")]
     pub(crate) id: String,
+    #[serde(deserialize_with = "deserialize_terminal_text")]
     pub(crate) name: String,
 }
 
@@ -916,7 +972,7 @@ pub(crate) struct MusicFoldersBody {
 pub(crate) struct DirectoryRaw {
     #[serde(deserialize_with = "deserialize_flexible_id")]
     pub(crate) id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_terminal_text")]
     pub(crate) name: Option<String>,
     #[serde(default)]
     pub(crate) child: Vec<DirectoryChild>,
@@ -1006,6 +1062,43 @@ pub(crate) struct ScanStatusBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_text_replaces_carriage_returns() {
+        let song: Song = serde_json::from_value(serde_json::json!({
+            "id": "1",
+            "title": "T'amo mia vita",
+            "artist": "Sergio Vartolo\rMarinella Pennicchi\rCristina Miatello\rHelena Afonso",
+            "albumArtist": "Sergio Vartolo\rMarinella Pennicchi\rCristina Miatello\rHelena Afonso",
+            "albumArtists": [{
+                "id": "ar-1",
+                "name": "Helena\rAfonso"
+            }],
+            "path": "Sergio Vartolo\rHelena Afonso/track.ape"
+        }))
+        .unwrap();
+        let artist = "Sergio Vartolo Marinella Pennicchi Cristina Miatello Helena Afonso";
+        assert_eq!(song.artist.as_deref(), Some(artist));
+        assert_eq!(song.album_artist.as_deref(), Some(artist));
+        assert_eq!(song.album_artists[0].name, "Helena Afonso");
+        assert_eq!(
+            song.path.as_deref(),
+            Some("Sergio Vartolo Helena Afonso/track.ape")
+        );
+        assert!(!artist.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn display_text_keeps_ordinary_unicode() {
+        let song: Song = serde_json::from_value(serde_json::json!({
+            "id": "1",
+            "title": "José"
+        }))
+        .unwrap();
+        assert_eq!(song.title, "José");
+        assert!(song.artist.is_none());
+        assert!(song.album_artist.is_none());
+    }
 
     #[test]
     fn deserialize_ping_ok_envelope() {

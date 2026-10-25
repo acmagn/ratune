@@ -248,7 +248,7 @@ fn write_atomic(
 }
 
 fn sanitize_field(s: &str) -> String {
-    s.replace(['\t', '\n'], " ")
+    ratune_subsonic::sanitize_terminal_text(s.to_string())
 }
 
 /// Truncate then pad with spaces so columns line up in a monospace terminal.
@@ -931,6 +931,24 @@ mod tests {
         let mut out = Vec::new();
         write_fzf_input_lines(&mut out, tracks, cols).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn browse_artist_name_drops_carriage_returns() {
+        let song: Song = serde_json::from_value(serde_json::json!({
+            "id": "1",
+            "title": "T'amo mia vita",
+            "album": "Concerto delle dame",
+            "albumId": "al-1",
+            "albumArtist": "Sergio Vartolo\rMarinella Pennicchi\rCristina Miatello\rHelena Afonso",
+            "albumArtistId": "ar-1",
+        }))
+        .unwrap();
+        let snap = build_browse_snapshot(std::slice::from_ref(&song));
+        assert_eq!(
+            snap.artists[0].name,
+            "Sergio Vartolo Marinella Pennicchi Cristina Miatello Helena Afonso"
+        );
     }
 
     #[test]
