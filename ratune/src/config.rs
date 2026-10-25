@@ -130,6 +130,8 @@ pub struct KeybindsSection {
     pub quit_stop: Option<String>,
     /// Fuzzy track picker (metadata index). Default: Ctrl+f
     pub library_fzf: Option<String>,
+    /// Fuzzy album picker (metadata index). Default: Alt+f
+    pub library_fzf_albums: Option<String>,
     /// Force library index refresh. Default: Ctrl+g
     pub library_refresh: Option<String>,
     /// Ping the Subsonic server and update online/offline mode (`""` disables). Default: `Shift+c`.
@@ -349,6 +351,9 @@ pub struct LibraryFzfSection {
     /// Max width per TSV field (terminal columns). `0` = no truncation.
     #[serde(default)]
     pub columns: crate::library_index::FzfColumns,
+    /// Album picker (`[library.fzf.albums]`). Shares `binary`.
+    #[serde(default)]
+    pub albums: LibraryFzfAlbumsSection,
 }
 
 impl Default for LibraryFzfSection {
@@ -357,6 +362,27 @@ impl Default for LibraryFzfSection {
             binary: default_fzf_binary(),
             args: default_fzf_args(),
             columns: crate::library_index::FzfColumns::default(),
+            albums: LibraryFzfAlbumsSection::default(),
+        }
+    }
+}
+
+/// Album picker settings under `[library.fzf.albums]`. One row per album.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct LibraryFzfAlbumsSection {
+    /// Arguments passed to the picker in album mode.
+    #[serde(default = "default_fzf_album_args")]
+    pub args: Vec<String>,
+    /// Max width per TSV field (terminal columns). `0` = no truncation.
+    #[serde(default)]
+    pub columns: crate::library_index::FzfAlbumColumns,
+}
+
+impl Default for LibraryFzfAlbumsSection {
+    fn default() -> Self {
+        Self {
+            args: default_fzf_album_args(),
+            columns: crate::library_index::FzfAlbumColumns::default(),
         }
     }
 }
@@ -421,6 +447,7 @@ impl LibrarySection {
                     .unwrap_or_else(default_fzf_args)
             },
             columns: nested.columns,
+            albums: nested.albums.clone(),
         }
     }
 }
@@ -461,6 +488,20 @@ fn default_fzf_args() -> Vec<String> {
         // Enter = append to queue; Ctrl+R = replace queue (first stdout line is `ctrl-r`).
         "--expect=ctrl-r".into(),
         "--border=rounded".into(),
+    ]
+}
+
+fn default_fzf_album_args() -> Vec<String> {
+    vec![
+        "--delimiter=\t".into(),
+        // Hide album id; show artist, album, year, track count, total time.
+        "--with-nth=2,3,4,5,6".into(),
+        // Search album artist and album name only.
+        "--nth=1,2".into(),
+        "--multi".into(),
+        "--expect=ctrl-r".into(),
+        "--border=rounded".into(),
+        "--prompt=Albums> ".into(),
     ]
 }
 
@@ -2139,6 +2180,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # quit          = "q"
 # quit_stop     = "Ctrl+q"    # quit TUI and stop daemon; "" disables
 # library_fzf     = "Ctrl+f"
+# library_fzf_albums = "Alt+f"   # album picker; "" disables
 # library_refresh = "Ctrl+g"
 # library_index_append_queue = "Ctrl+a"   # append full index to queue (y/n); "" to disable
 # toggle_help = "i"
@@ -2254,6 +2296,9 @@ location = "right"
 # album = 28
 # title = 36               # set to 0 to search long track names
 # duration = 6
+# [library.fzf.albums]     # album picker (Alt+f); Ctrl+s switches songs / albums
+# args = ["--delimiter=\\t", "--with-nth=2,3,4,5,6", "--nth=1,2", "--multi", "--expect=ctrl-r", "--border=rounded", "--prompt=Albums> "]
+# [library.fzf.albums.columns]   # artist = 26, album = 40, year = 4, tracks = 6, duration = 8
 # fetch_album_parallelism = 12    # concurrent getAlbum per artist during index refresh
 # fetch_artist_parallelism = 4    # concurrent artists during index refresh
 # navidrome_skip_unchanged_scan = false   # Navidrome: skip full walk when lastScan unchanged
@@ -3212,6 +3257,27 @@ title = 0
         assert_eq!(fzf.binary, "sk");
         assert_eq!(fzf.columns.title, 0);
         assert_eq!(fzf.args, default_fzf_args());
+        assert_eq!(fzf.albums, LibraryFzfAlbumsSection::default());
+    }
+
+    #[test]
+    fn parses_library_fzf_albums_nested() {
+        let text = r#"
+[library.fzf.albums]
+args = ["--multi"]
+
+[library.fzf.albums.columns]
+album = 0
+"#;
+        let fc: FileConfig = toml::from_str(text).expect("toml");
+        let fzf = fc.library.resolve_fzf();
+        assert_eq!(fzf.args, default_fzf_args());
+        assert_eq!(fzf.albums.args, vec!["--multi".to_string()]);
+        assert_eq!(fzf.albums.columns.album, 0);
+        assert_eq!(
+            fzf.albums.columns.artist,
+            crate::library_index::FzfAlbumColumns::default().artist
+        );
     }
 
     #[test]

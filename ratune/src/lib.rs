@@ -226,8 +226,11 @@ pub async fn run() -> Result<()> {
         _ => app.fetch_artists(),
     }
 
-    // Spawn a task that sets a flag on SIGTERM, SIGHUP, SIGPIPE, or SIGINT so the main loop
+    // Spawn a task that sets a flag on SIGTERM, SIGHUP, or SIGINT so the main loop
     // can shut down cleanly (same path as pressing `q`).
+    // SIGPIPE stays ignored (Rust default): any closed pipe raises it, including fzf's stdin
+    // when the picker exits early. A dead terminal surfaces as EPIPE/EIO on draw and as
+    // `tty::terminal_disconnected`.
     let signal_quit = Arc::new(AtomicBool::new(false));
     {
         let flag = signal_quit.clone();
@@ -237,15 +240,11 @@ pub async fn run() -> Result<()> {
                 signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
             let mut sighup =
                 signal(SignalKind::hangup()).expect("failed to install SIGHUP handler");
-            // SIGPIPE: stdout/stdin fd closed (e.g. tmux pane killed while piped).
-            let mut sigpipe =
-                signal(SignalKind::pipe()).expect("failed to install SIGPIPE handler");
             let mut sigint =
                 signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
             tokio::select! {
                 _ = sigterm.recv() => {}
                 _ = sighup.recv()  => {}
-                _ = sigpipe.recv() => {}
                 _ = sigint.recv() => {}
             }
             flag.store(true, Ordering::Relaxed);
@@ -379,14 +378,16 @@ pub async fn run() -> Result<()> {
     result
 }
 
-/// Suspend the TUI and run `fzf` over the local metadata index.
+/// Suspend the TUI and run `fzf` over the local metadata index. The switch key
+/// ([`fzf_picker::FZF_EXPECT_SWITCH_MODE`]) reopens the picker in the other mode.
 fn run_library_fzf_picker(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     last_rendered_art: &mut Option<(u64, Rect)>,
     art_displayed: &mut bool,
+    mut mode: crate::fzf_picker::FzfPickerMode,
 ) -> anyhow::Result<()> {
-    use crate::fzf_picker;
+    use crate::fzf_picker::{self, FzfAccept, FzfPickerMode};
     use crate::library_index;
 
     app.pending_gg = false;
@@ -405,34 +406,43 @@ fn run_library_fzf_picker(
     }
 
     let cached_only = !app.server_reachable && app.config.cache_enabled && app.cache.enabled;
-    let cache = &app.cache;
-    let picker_tracks = || {
-        app.library_index_tracks
-            .iter()
-            .filter(move |s| !cached_only || cache.get_const(&s.id))
-    };
-    if picker_tracks().next().is_none() {
+    if !app
+        .library_index_tracks
+        .iter()
+        .any(|s| !cached_only || app.cache.get_const(&s.id))
+    {
         app.flash_status("No cached tracks — play online to download audio");
         return Ok(());
     }
 
+    let mut album_snapshot = None;
     fzf_picker::suspend_tui(terminal, app.in_tmux)?;
-    let cols = app.config.fzf.columns;
-    let mut fzf_args = app.config.fzf.args.clone();
-    if !fzf_args.iter().any(|a| a.starts_with("--header")) {
-        let with_nth = library_index::parse_fzf_with_nth(&fzf_args);
-        fzf_args.insert(
-            0,
-            format!(
-                "--header={}",
-                library_index::fzf_header_line(cols, &with_nth)
-            ),
-        );
-    }
-    let fzf_args = fzf_picker::prepare_library_fuzzy_picker_args(&app.config.fzf.binary, fzf_args);
-    let res = fzf_picker::run_fzf(&app.config.fzf.binary, &fzf_args, |w| {
-        library_index::write_fzf_input_lines(w, picker_tracks(), cols)
-    });
+    let res = loop {
+        let res = match mode {
+            FzfPickerMode::Songs => run_fzf_songs(app, cached_only),
+            FzfPickerMode::Albums => {
+                if album_snapshot.is_none() {
+                    album_snapshot = app.fzf_album_snapshot(cached_only);
+                }
+                let albums = album_snapshot
+                    .as_deref()
+                    .map(|s| s.flat_albums.as_slice())
+                    .unwrap_or_default();
+                run_fzf_albums(app, albums)
+            }
+        };
+        match res {
+            Ok(Some(lines)) => match fzf_picker::parse_fzf_output_lines(&lines) {
+                (FzfAccept::SwitchMode, _) => {
+                    fzf_picker::prepare_picker_relaunch();
+                    mode = mode.toggled();
+                }
+                (accept, rows) => break Ok(Some((accept, rows))),
+            },
+            other => break other.map(|_| None),
+        }
+    };
+    fzf_picker::prepare_picker_relaunch();
     if let Err(e) = fzf_picker::resume_tui(terminal, app.in_tmux) {
         eprintln!("resume terminal after fzf: {e}");
     }
@@ -453,20 +463,82 @@ fn run_library_fzf_picker(
         app.clear_ratatui_art_state();
     }
     match res {
-        Ok(Some(lines)) => {
-            let (replace, rows) = fzf_picker::parse_fzf_output_lines(&lines);
+        Ok(Some((accept, rows))) => {
             let ids: Vec<String> = rows
                 .iter()
                 .filter_map(|line| library_index::parse_pick_line(line))
                 .collect();
+            let replace = accept == FzfAccept::Replace;
             if !ids.is_empty() {
-                app.apply_library_index_picks(&ids, replace);
+                match mode {
+                    FzfPickerMode::Songs => {
+                        app.apply_library_index_picks(&ids, replace);
+                    }
+                    FzfPickerMode::Albums => {
+                        if let Some(snapshot) = album_snapshot.as_deref() {
+                            app.apply_library_index_album_picks(snapshot, &ids, replace);
+                        }
+                    }
+                }
             }
         }
         Ok(None) => {}
         Err(e) => app.flash_status(format!("fzf: {e}")),
     }
     Ok(())
+}
+
+/// Picker argv: auto `--header` aligned to `--with-nth` (unless the user set one), plus
+/// the switch / replace keys.
+fn library_fzf_args(
+    binary: &str,
+    mut args: Vec<String>,
+    default_with_nth: &[usize],
+    header: impl FnOnce(&[usize]) -> String,
+) -> Vec<String> {
+    if !args.iter().any(|a| a.starts_with("--header")) {
+        let with_nth = crate::library_index::parse_fzf_with_nth_or(&args, default_with_nth);
+        args.insert(0, format!("--header={}", header(&with_nth)));
+    }
+    crate::fzf_picker::prepare_library_fuzzy_picker_args(binary, args)
+}
+
+fn run_fzf_songs(app: &App, cached_only: bool) -> anyhow::Result<Option<Vec<String>>> {
+    use crate::library_index;
+    let fzf = &app.config.fzf;
+    let cols = fzf.columns;
+    let args = library_fzf_args(
+        &fzf.binary,
+        fzf.args.clone(),
+        library_index::FZF_DEFAULT_WITH_NTH,
+        |with_nth| library_index::fzf_header_line(cols, with_nth),
+    );
+    let cache = &app.cache;
+    let tracks = app
+        .library_index_tracks
+        .iter()
+        .filter(move |s| !cached_only || cache.get_const(&s.id));
+    crate::fzf_picker::run_fzf(&fzf.binary, &args, |w| {
+        library_index::write_fzf_input_lines(w, tracks, cols)
+    })
+}
+
+fn run_fzf_albums(
+    app: &App,
+    albums: &[ratune_subsonic::Album],
+) -> anyhow::Result<Option<Vec<String>>> {
+    use crate::library_index;
+    let fzf = &app.config.fzf;
+    let cols = fzf.albums.columns;
+    let args = library_fzf_args(
+        &fzf.binary,
+        fzf.albums.args.clone(),
+        library_index::FZF_ALBUM_DEFAULT_WITH_NTH,
+        |with_nth| library_index::fzf_album_header_line(cols, with_nth),
+    );
+    crate::fzf_picker::run_fzf(&fzf.binary, &args, |w| {
+        library_index::write_fzf_album_lines(w, albums, cols)
+    })
 }
 
 /// Merge completed Now Playing `ThreadProtocol` encodes from the worker thread.
@@ -557,7 +629,7 @@ async fn run_loop(
             50
         };
 
-        // Check for SIGTERM / SIGHUP / SIGPIPE / SIGINT from the signal handler task.
+        // Check for SIGTERM / SIGHUP / SIGINT from the signal handler task.
         if signal_quit.load(Ordering::Relaxed) {
             app.should_quit = true;
         }
@@ -1131,12 +1203,20 @@ async fn run_loop(
                                         )
                                     };
                                     match action {
-                                        Action::LibraryFzfPicker => {
+                                        Action::LibraryFzfPicker
+                                        | Action::LibraryFzfAlbumPicker => {
+                                            let mode =
+                                                if matches!(action, Action::LibraryFzfAlbumPicker) {
+                                                    crate::fzf_picker::FzfPickerMode::Albums
+                                                } else {
+                                                    crate::fzf_picker::FzfPickerMode::Songs
+                                                };
                                             if let Err(e) = run_library_fzf_picker(
                                                 app,
                                                 terminal,
                                                 &mut last_rendered_art,
                                                 &mut art_displayed,
+                                                mode,
                                             ) {
                                                 eprintln!("fzf picker: {e}");
                                             }
@@ -2309,6 +2389,11 @@ fn map_key(
     if let Some(spec) = &kb.library_fzf {
         if spec.matches(code, modifiers) {
             return Action::LibraryFzfPicker;
+        }
+    }
+    if let Some(spec) = &kb.library_fzf_albums {
+        if spec.matches(code, modifiers) {
+            return Action::LibraryFzfAlbumPicker;
         }
     }
     if let Some(spec) = &kb.library_refresh {
