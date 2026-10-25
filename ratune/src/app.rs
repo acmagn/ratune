@@ -533,8 +533,8 @@ pub enum LibraryUpdate {
         rating: u8,
         error: Option<String>,
     },
-    /// Starred tracks to prefetch into the offline cache (`song_id`, `album_id`).
-    PrefetchStarredCache(Vec<(String, String)>),
+    /// Starred tracks to prefetch into the offline cache (`song_id`, `album_id`, `suffix`).
+    PrefetchStarredCache(Vec<(String, String, Option<String>)>),
     /// Starred library from `getStarred2` for the favorites overlay.
     StarredFetched(Result<ratune_subsonic::Starred2, String>),
     /// Results from Subsonic `search3` (server search overlay).
@@ -4445,7 +4445,8 @@ impl App {
                             });
                         if let Some(album_id) = album_id.filter(|a| !a.is_empty()) {
                             if !self.cache.get_const(&id) {
-                                self.spawn_cache_download(&id, &album_id);
+                                let suffix = self.suffix_for_song_id(&id);
+                                self.spawn_cache_download(&id, &album_id, suffix.as_deref());
                             }
                         }
                     } else if !was_starred
@@ -4483,7 +4484,7 @@ impl App {
             LibraryUpdate::PrefetchStarredCache(tracks) => {
                 let uncached: Vec<_> = tracks
                     .into_iter()
-                    .filter(|(sid, _)| !self.cache.get_const(sid))
+                    .filter(|(sid, _, _)| !self.cache.get_const(sid))
                     .collect();
                 if !uncached.is_empty() {
                     self.spawn_prefetch_starred_downloads(uncached);
@@ -5203,7 +5204,11 @@ impl App {
             let duration = next
                 .duration
                 .map(|s| std::time::Duration::from_secs(u64::from(s)));
-            let url = self.song_stream_url(&next.id, &next.album_id.clone().unwrap_or_default());
+            let url = self.song_stream_url(
+                &next.id,
+                &next.album_id.clone().unwrap_or_default(),
+                next.suffix.as_deref(),
+            );
             self.send_player(PlayerCommand::EnqueueNext { url, duration });
             self.flash_status_secs("Next track: bad cache — re-streaming", 5);
             return true;
@@ -5251,7 +5256,12 @@ impl App {
             .as_ref()
             .and_then(|s| s.album_id.clone())
             .unwrap_or_default();
-        let url = self.song_stream_url(&song_id, &album_id);
+        let suffix = self
+            .playback
+            .current_song
+            .as_ref()
+            .and_then(|s| s.suffix.clone());
+        let url = self.song_stream_url(&song_id, &album_id, suffix.as_deref());
         let gen = self.play_gen;
         self.playback.player_loaded = true;
         self.playback_from_cache = None;
@@ -5274,13 +5284,55 @@ impl App {
             return ResolvedPlayback::UnavailableOffline;
         }
         let album_id = song.album_id.clone().unwrap_or_default();
-        ResolvedPlayback::Url(self.song_stream_url(&song.id, &album_id))
+        ResolvedPlayback::Url(self.song_stream_url(&song.id, &album_id, song.suffix.as_deref()))
+    }
+
+    /// Suffix for `song_id` from the queue, the current track, the library index, or starred songs.
+    fn suffix_for_song_id(&self, song_id: &str) -> Option<String> {
+        let nonempty =
+            |suffix: &Option<String>| suffix.as_ref().filter(|s| !s.trim().is_empty()).cloned();
+        self.playback
+            .current_song
+            .as_ref()
+            .filter(|s| s.id == song_id)
+            .and_then(|s| nonempty(&s.suffix))
+            .or_else(|| {
+                self.queue
+                    .songs
+                    .iter()
+                    .find(|s| s.id == song_id)
+                    .and_then(|s| nonempty(&s.suffix))
+            })
+            .or_else(|| {
+                self.library_index_by_id
+                    .get(song_id)
+                    .and_then(|&i| self.library_index_tracks.get(i))
+                    .and_then(|s| nonempty(&s.suffix))
+            })
+            .or_else(|| {
+                self.server_starred
+                    .as_ref()?
+                    .songs()
+                    .iter()
+                    .find(|s| s.id == song_id)
+                    .and_then(|s| nonempty(&s.suffix))
+            })
     }
 
     /// Stream URL for the player; remembered so the finished download can be cached.
-    fn song_stream_url(&mut self, song_id: &str, album_id: &str) -> String {
+    fn song_stream_url(&mut self, song_id: &str, album_id: &str, suffix: Option<&str>) -> String {
         const REMEMBERED: usize = 8;
-        let url = self.subsonic.stream_url(song_id, self.config.max_bit_rate);
+        let looked_up;
+        let suffix = if suffix.is_some_and(|s| !s.trim().is_empty()) {
+            suffix
+        } else {
+            looked_up = self.suffix_for_song_id(song_id);
+            looked_up.as_deref()
+        };
+        let format = self.config.transcode_format(suffix).map(str::to_owned);
+        let url = self
+            .subsonic
+            .stream_url(song_id, self.config.max_bit_rate, format.as_deref());
         if self.streamed_songs.len() >= REMEMBERED {
             self.streamed_songs.pop_front();
         }
@@ -5331,13 +5383,19 @@ impl App {
             return;
         }
         let cursor = self.queue.cursor;
-        let upcoming: Vec<(String, String)> = (1..=2usize)
+        let upcoming: Vec<(String, String, Option<String>)> = (1..=2usize)
             .filter_map(|offset| self.queue.songs.get(cursor + offset))
             .filter(|s| !self.cache.get_const(&s.id))
-            .map(|s| (s.id.clone(), s.album_id.clone().unwrap_or_default()))
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    s.album_id.clone().unwrap_or_default(),
+                    s.suffix.clone(),
+                )
+            })
             .collect();
-        for (song_id, album_id) in upcoming {
-            self.spawn_cache_download(&song_id, &album_id);
+        for (song_id, album_id, suffix) in upcoming {
+            self.spawn_cache_download(&song_id, &album_id, suffix.as_deref());
         }
     }
 
@@ -5942,11 +6000,14 @@ impl App {
     /// Callers are responsible for checking `cache.get_const()` first.
     /// The task checks `prefetch_gen` after download and discards stale bytes
     /// (from rapid skips or queue changes since spawn time).
-    fn spawn_cache_download(&self, song_id: &str, album_id: &str) {
+    fn spawn_cache_download(&self, song_id: &str, album_id: &str, suffix: Option<&str>) {
         if !self.remote_available() {
             return;
         }
-        let url = self.subsonic.stream_url(song_id, self.config.max_bit_rate);
+        let format = self.config.transcode_format(suffix).map(str::to_owned);
+        let url = self
+            .subsonic
+            .stream_url(song_id, self.config.max_bit_rate, format.as_deref());
         let song_id = song_id.to_string();
         let album_id = album_id.to_string();
         let tx = self.library_tx.clone();
@@ -6589,11 +6650,11 @@ impl App {
         let Some(ref starred) = self.server_starred else {
             return;
         };
-        let mut pairs: Vec<(String, String)> = Vec::new();
+        let mut pairs: Vec<(String, String, Option<String>)> = Vec::new();
         if self.config.cache_starred {
             for song in starred.songs() {
                 if let Some(album_id) = song.album_id.as_ref().filter(|a| !a.is_empty()) {
-                    pairs.push((song.id.clone(), album_id.clone()));
+                    pairs.push((song.id.clone(), album_id.clone(), song.suffix.clone()));
                 }
             }
         }
@@ -6613,11 +6674,11 @@ impl App {
         });
     }
 
-    fn cache_pairs_for_album(&self, album_id: &str) -> Vec<(String, String)> {
+    fn cache_pairs_for_album(&self, album_id: &str) -> Vec<(String, String, Option<String>)> {
         self.library_index_tracks
             .iter()
             .filter(|s| s.album_id.as_deref() == Some(album_id))
-            .map(|s| (s.id.clone(), album_id.to_string()))
+            .map(|s| (s.id.clone(), album_id.to_string(), s.suffix.clone()))
             .collect()
     }
 
@@ -6632,7 +6693,7 @@ impl App {
         if !from_index.is_empty() {
             let uncached: Vec<_> = from_index
                 .into_iter()
-                .filter(|(sid, _)| !self.cache.get_const(sid))
+                .filter(|(sid, _, _)| !self.cache.get_const(sid))
                 .collect();
             if !uncached.is_empty() {
                 self.spawn_prefetch_starred_downloads(uncached);
@@ -6649,7 +6710,7 @@ impl App {
                     .into_iter()
                     .map(|s| {
                         let aid = s.album_id.unwrap_or_else(|| album_id.clone());
-                        (s.id, aid)
+                        (s.id, aid, s.suffix)
                     })
                     .collect::<Vec<_>>(),
                 Err(_) => return,
@@ -6679,20 +6740,30 @@ impl App {
         }
     }
 
-    fn spawn_prefetch_starred_downloads(&self, tracks: Vec<(String, String)>) {
+    fn spawn_prefetch_starred_downloads(&self, tracks: Vec<(String, String, Option<String>)>) {
         let parallelism = self.config.cache_starred_parallelism.max(1);
         let max_bit_rate = self.config.max_bit_rate;
         let subsonic = self.subsonic.clone();
         let tx = self.library_tx.clone();
+        let jobs: Vec<_> = tracks
+            .into_iter()
+            .map(|(song_id, album_id, suffix)| {
+                let format = self
+                    .config
+                    .transcode_format(suffix.as_deref())
+                    .map(str::to_owned);
+                (song_id, album_id, format)
+            })
+            .collect::<Vec<_>>();
         tokio::spawn(async move {
             let sem = Arc::new(Semaphore::new(parallelism));
-            for (song_id, album_id) in tracks {
+            for (song_id, album_id, format) in jobs {
                 let sem = sem.clone();
                 let subsonic = subsonic.clone();
                 let tx = tx.clone();
                 tokio::spawn(async move {
                     let _permit = sem.acquire().await.ok();
-                    let url = subsonic.stream_url(&song_id, max_bit_rate);
+                    let url = subsonic.stream_url(&song_id, max_bit_rate, format.as_deref());
                     if let Ok(resp) = reqwest::Client::new().get(&url).send().await {
                         if let Ok(bytes) = resp.bytes().await {
                             let _ = tx
@@ -8105,7 +8176,7 @@ impl App {
                     let sid = record.song_id.clone();
                     let resolved = match self.queue.current().cloned() {
                         Some(s) => self.resolve_playback(&s),
-                        None => ResolvedPlayback::Url(self.song_stream_url(&sid, "")),
+                        None => ResolvedPlayback::Url(self.song_stream_url(&sid, "", None)),
                     };
                     self.playback.player_loaded = true;
                     let gen = self.play_gen;
