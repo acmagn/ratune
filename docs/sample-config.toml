@@ -565,8 +565,8 @@ source = "lrclib"
 # [library.fzf.columns] — max TSV field width (terminal columns); 0 = no truncation.
 # [library.fzf.albums] — album picker (Alt+f), one row per album. Shares `binary`.
 #   Fields: 1 album id (hidden), 2 artist, 3 album, 4 year, 5 tracks, 6 total time.
-#   Enter appends the album(s), Ctrl+r replaces the queue. In either picker, Ctrl+s
-#   switches between songs and albums (added to --expect automatically).
+#   Enter appends the album(s), Ctrl+r replaces the queue. In either picker,
+#   switch_key (default ctrl-s) flips songs ↔ albums (added to --expect).
 
 [library]
 enabled = true
@@ -579,6 +579,8 @@ notify_on_forced_index_refresh = true
 
 [library.fzf]
 binary = "fzf"
+# fzf --expect name that flips songs ↔ albums. "" disables. Use fzf names (ctrl-s, alt-a).
+switch_key = "ctrl-s"
 args = [
   "--delimiter=\t",
   "--with-nth=2,3,4,5",

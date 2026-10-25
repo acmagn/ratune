@@ -19,9 +19,18 @@ use ratatui::Terminal;
 /// Key name fzf prints when using `--expect=ctrl-r` and the user accepts with that key.
 pub const FZF_EXPECT_REPLACE_QUEUE: &str = "ctrl-r";
 
-/// Key that closes the picker and reopens it in the other mode (songs ↔ albums).
-/// Always added to `--expect` by [`prepare_library_fuzzy_picker_args`].
-pub const FZF_EXPECT_SWITCH_MODE: &str = "ctrl-s";
+/// Default fzf `--expect` key that flips songs ↔ albums (`[library.fzf].switch_key`).
+pub const FZF_EXPECT_SWITCH_MODE_DEFAULT: &str = "ctrl-s";
+
+/// Normalize an fzf `--expect` name from config. Empty → disabled. `+` is treated as `-`
+/// so `ctrl+s` matches fzf's `ctrl-s`. `ctrl-r` is rejected (replace-queue).
+pub fn normalize_fzf_expect_key(raw: &str) -> Option<String> {
+    let key = raw.trim().to_ascii_lowercase().replace('+', "-");
+    if key.is_empty() || key == FZF_EXPECT_REPLACE_QUEUE {
+        return None;
+    }
+    Some(key)
+}
 
 /// What the library picker lists, one row per item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +58,10 @@ pub enum FzfAccept {
 
 /// Split fzf stdout when `--expect` is set: first line is the key (empty string for default
 /// Enter) or, without `--expect`, the first selected row.
-pub fn parse_fzf_output_lines(lines: &[String]) -> (FzfAccept, Vec<String>) {
+pub fn parse_fzf_output_lines(
+    lines: &[String],
+    switch_key: Option<&str>,
+) -> (FzfAccept, Vec<String>) {
     if lines.is_empty() {
         return (FzfAccept::Append, Vec::new());
     }
@@ -57,7 +69,7 @@ pub fn parse_fzf_output_lines(lines: &[String]) -> (FzfAccept, Vec<String>) {
     if first == FZF_EXPECT_REPLACE_QUEUE {
         return (FzfAccept::Replace, lines[1..].to_vec());
     }
-    if first == FZF_EXPECT_SWITCH_MODE {
+    if switch_key.is_some_and(|k| first.eq_ignore_ascii_case(k)) {
         return (FzfAccept::SwitchMode, Vec::new());
     }
     if first.is_empty() {
@@ -128,15 +140,25 @@ fn add_expect_key(args: &mut Vec<String>, key: &str) {
     args.push(format!("--expect={key}"));
 }
 
-/// Add the songs ↔ albums switch key to `--expect`. Skim's default bindings (Ctrl+R rotates
-/// fuzzy/regex mode) win over `--expect`, so for `sk` also append
+/// Add the songs ↔ albums switch key to `--expect` when `switch_key` is set. Skim's default
+/// bindings (Ctrl+R rotates fuzzy/regex mode) win over `--expect`, so for `sk` also append
 /// `--bind=<key>:accept(<key>)` for each picker key the user has not bound.
-pub fn prepare_library_fuzzy_picker_args(binary: &str, mut args: Vec<String>) -> Vec<String> {
-    add_expect_key(&mut args, FZF_EXPECT_SWITCH_MODE);
+pub fn prepare_library_fuzzy_picker_args(
+    binary: &str,
+    mut args: Vec<String>,
+    switch_key: Option<&str>,
+) -> Vec<String> {
+    if let Some(key) = switch_key {
+        add_expect_key(&mut args, key);
+    }
     if !fuzzy_picker_basename_is_sk(binary) {
         return args;
     }
-    for key in [FZF_EXPECT_REPLACE_QUEUE, FZF_EXPECT_SWITCH_MODE] {
+    let mut bind_keys = vec![FZF_EXPECT_REPLACE_QUEUE];
+    if let Some(key) = switch_key {
+        bind_keys.push(key);
+    }
+    for key in bind_keys {
         if !args_specify_bind(&args, key) {
             args.push(format!("--bind={key}:accept({key})"));
         }
@@ -309,10 +331,18 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
+    fn parse(lines: &[String]) -> (FzfAccept, Vec<String>) {
+        parse_fzf_output_lines(lines, Some(FZF_EXPECT_SWITCH_MODE_DEFAULT))
+    }
+
+    fn prepare(binary: &str, args: Vec<String>) -> Vec<String> {
+        prepare_library_fuzzy_picker_args(binary, args, Some(FZF_EXPECT_SWITCH_MODE_DEFAULT))
+    }
+
     #[test]
     fn parse_expect_enter_then_rows() {
         let lines = vec![String::new(), "id1\ta\tb".into(), "id2\ta\tb".into()];
-        let (accept, rows) = parse_fzf_output_lines(&lines);
+        let (accept, rows) = parse(&lines);
         assert_eq!(accept, FzfAccept::Append);
         assert_eq!(rows.len(), 2);
     }
@@ -320,7 +350,7 @@ mod tests {
     #[test]
     fn parse_expect_ctrl_r() {
         let lines = vec!["ctrl-r".into(), "id1\tx".into()];
-        let (accept, rows) = parse_fzf_output_lines(&lines);
+        let (accept, rows) = parse(&lines);
         assert_eq!(accept, FzfAccept::Replace);
         assert_eq!(rows.len(), 1);
     }
@@ -328,7 +358,7 @@ mod tests {
     #[test]
     fn parse_expect_switch_mode_drops_rows() {
         let lines = vec!["ctrl-s".into(), "id1\tx".into()];
-        let (accept, rows) = parse_fzf_output_lines(&lines);
+        let (accept, rows) = parse(&lines);
         assert_eq!(accept, FzfAccept::SwitchMode);
         assert!(rows.is_empty());
     }
@@ -336,9 +366,31 @@ mod tests {
     #[test]
     fn parse_no_expect_plain_rows() {
         let lines = vec!["id1\tx".into(), "id2\ty".into()];
-        let (accept, rows) = parse_fzf_output_lines(&lines);
+        let (accept, rows) = parse(&lines);
         assert_eq!(accept, FzfAccept::Append);
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn parse_custom_switch_key() {
+        let lines = vec!["alt-a".into(), "id1\tx".into()];
+        let (accept, rows) = parse_fzf_output_lines(&lines, Some("alt-a"));
+        assert_eq!(accept, FzfAccept::SwitchMode);
+        assert!(rows.is_empty());
+        let (accept, _) = parse_fzf_output_lines(&lines, None);
+        assert_eq!(accept, FzfAccept::Append);
+    }
+
+    #[test]
+    fn normalize_switch_key() {
+        assert_eq!(
+            normalize_fzf_expect_key(" Ctrl+S ").as_deref(),
+            Some("ctrl-s")
+        );
+        assert_eq!(normalize_fzf_expect_key("").as_deref(), None);
+        assert_eq!(normalize_fzf_expect_key("  ").as_deref(), None);
+        assert_eq!(normalize_fzf_expect_key("ctrl-r").as_deref(), None);
+        assert_eq!(normalize_fzf_expect_key("alt-a").as_deref(), Some("alt-a"));
     }
 
     #[test]
@@ -352,19 +404,24 @@ mod tests {
 
     #[test]
     fn prepare_merges_switch_key_into_expect() {
-        let out = prepare_library_fuzzy_picker_args("fzf", strs(&["--expect=ctrl-r", "--multi"]));
+        let out = prepare("fzf", strs(&["--expect=ctrl-r", "--multi"]));
         assert_eq!(out, strs(&["--expect=ctrl-r,ctrl-s", "--multi"]));
-        let out = prepare_library_fuzzy_picker_args("fzf", strs(&["--expect", "ctrl-r"]));
+        let out = prepare("fzf", strs(&["--expect", "ctrl-r"]));
         assert_eq!(out, strs(&["--expect", "ctrl-r,ctrl-s"]));
-        let out = prepare_library_fuzzy_picker_args("fzf", strs(&["--expect=ctrl-s"]));
+        let out = prepare("fzf", strs(&["--expect=ctrl-s"]));
         assert_eq!(out, strs(&["--expect=ctrl-s"]));
-        let out = prepare_library_fuzzy_picker_args("fzf", strs(&["--multi"]));
+        let out = prepare("fzf", strs(&["--multi"]));
         assert_eq!(out, strs(&["--multi", "--expect=ctrl-s"]));
+        let out = prepare_library_fuzzy_picker_args("fzf", strs(&["--multi"]), None);
+        assert_eq!(out, strs(&["--multi"]));
+        let out =
+            prepare_library_fuzzy_picker_args("fzf", strs(&["--expect=ctrl-r"]), Some("alt-a"));
+        assert_eq!(out, strs(&["--expect=ctrl-r,alt-a"]));
     }
 
     #[test]
     fn prepare_sk_appends_accept_binds() {
-        let out = prepare_library_fuzzy_picker_args("sk", strs(&["--multi"]));
+        let out = prepare("sk", strs(&["--multi"]));
         assert_eq!(
             out,
             strs(&[
@@ -374,16 +431,13 @@ mod tests {
                 "--bind=ctrl-s:accept(ctrl-s)",
             ])
         );
-        let out = prepare_library_fuzzy_picker_args("/x/sk", strs(&["--multi"]));
+        let out = prepare("/x/sk", strs(&["--multi"]));
         assert_eq!(out.last().unwrap(), "--bind=ctrl-s:accept(ctrl-s)");
     }
 
     #[test]
     fn prepare_sk_skips_keys_already_bound() {
-        let out = prepare_library_fuzzy_picker_args(
-            "sk",
-            strs(&["--bind=ctrl-r:ignore", "--expect=ctrl-r"]),
-        );
+        let out = prepare("sk", strs(&["--bind=ctrl-r:ignore", "--expect=ctrl-r"]));
         assert_eq!(
             out,
             strs(&[
@@ -392,7 +446,7 @@ mod tests {
                 "--bind=ctrl-s:accept(ctrl-s)",
             ])
         );
-        let out = prepare_library_fuzzy_picker_args(
+        let out = prepare(
             "sk",
             strs(&["--bind", "ctrl-r:accept(ctrl-alt-m),ctrl-s:ignore"]),
         );

@@ -379,7 +379,7 @@ pub async fn run() -> Result<()> {
 }
 
 /// Suspend the TUI and run `fzf` over the local metadata index. The switch key
-/// ([`fzf_picker::FZF_EXPECT_SWITCH_MODE`]) reopens the picker in the other mode.
+/// (`[library.fzf].switch_key`, default Ctrl+S) reopens the picker in the other mode.
 fn run_library_fzf_picker(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -415,6 +415,8 @@ fn run_library_fzf_picker(
         return Ok(());
     }
 
+    let switch_key = fzf_picker::normalize_fzf_expect_key(&app.config.fzf.switch_key);
+    let switch_key = switch_key.as_deref();
     let mut album_snapshot = None;
     fzf_picker::suspend_tui(terminal, app.in_tmux)?;
     let res = loop {
@@ -432,7 +434,7 @@ fn run_library_fzf_picker(
             }
         };
         match res {
-            Ok(Some(lines)) => match fzf_picker::parse_fzf_output_lines(&lines) {
+            Ok(Some(lines)) => match fzf_picker::parse_fzf_output_lines(&lines, switch_key) {
                 (FzfAccept::SwitchMode, _) => {
                     fzf_picker::prepare_picker_relaunch();
                     mode = mode.toggled();
@@ -495,23 +497,26 @@ fn library_fzf_args(
     mut args: Vec<String>,
     default_with_nth: &[usize],
     header: impl FnOnce(&[usize]) -> String,
+    switch_key: Option<&str>,
 ) -> Vec<String> {
     if !args.iter().any(|a| a.starts_with("--header")) {
         let with_nth = crate::library_index::parse_fzf_with_nth_or(&args, default_with_nth);
         args.insert(0, format!("--header={}", header(&with_nth)));
     }
-    crate::fzf_picker::prepare_library_fuzzy_picker_args(binary, args)
+    crate::fzf_picker::prepare_library_fuzzy_picker_args(binary, args, switch_key)
 }
 
 fn run_fzf_songs(app: &App, cached_only: bool) -> anyhow::Result<Option<Vec<String>>> {
     use crate::library_index;
     let fzf = &app.config.fzf;
     let cols = fzf.columns;
+    let switch_key = crate::fzf_picker::normalize_fzf_expect_key(&fzf.switch_key);
     let args = library_fzf_args(
         &fzf.binary,
         fzf.args.clone(),
         library_index::FZF_DEFAULT_WITH_NTH,
         |with_nth| library_index::fzf_header_line(cols, with_nth),
+        switch_key.as_deref(),
     );
     let cache = &app.cache;
     let tracks = app
@@ -530,11 +535,13 @@ fn run_fzf_albums(
     use crate::library_index;
     let fzf = &app.config.fzf;
     let cols = fzf.albums.columns;
+    let switch_key = crate::fzf_picker::normalize_fzf_expect_key(&fzf.switch_key);
     let args = library_fzf_args(
         &fzf.binary,
         fzf.albums.args.clone(),
         library_index::FZF_ALBUM_DEFAULT_WITH_NTH,
         |with_nth| library_index::fzf_album_header_line(cols, with_nth),
+        switch_key.as_deref(),
     );
     crate::fzf_picker::run_fzf(&fzf.binary, &args, |w| {
         library_index::write_fzf_album_lines(w, albums, cols)

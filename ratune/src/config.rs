@@ -351,6 +351,9 @@ pub struct LibraryFzfSection {
     /// Max width per TSV field (terminal columns). `0` = no truncation.
     #[serde(default)]
     pub columns: crate::library_index::FzfColumns,
+    /// fzf `--expect` key that flips songs ↔ albums. Default `ctrl-s`. Empty disables.
+    #[serde(default = "default_fzf_switch_key")]
+    pub switch_key: String,
     /// Album picker (`[library.fzf.albums]`). Shares `binary`.
     #[serde(default)]
     pub albums: LibraryFzfAlbumsSection,
@@ -362,6 +365,7 @@ impl Default for LibraryFzfSection {
             binary: default_fzf_binary(),
             args: default_fzf_args(),
             columns: crate::library_index::FzfColumns::default(),
+            switch_key: default_fzf_switch_key(),
             albums: LibraryFzfAlbumsSection::default(),
         }
     }
@@ -447,6 +451,7 @@ impl LibrarySection {
                     .unwrap_or_else(default_fzf_args)
             },
             columns: nested.columns,
+            switch_key: nested.switch_key.clone(),
             albums: nested.albums.clone(),
         }
     }
@@ -474,6 +479,10 @@ fn default_library_max_age_secs() -> u64 {
 
 fn default_fzf_binary() -> String {
     "fzf".into()
+}
+
+fn default_fzf_switch_key() -> String {
+    crate::fzf_picker::FZF_EXPECT_SWITCH_MODE_DEFAULT.into()
 }
 
 fn default_fzf_args() -> Vec<String> {
@@ -2296,7 +2305,8 @@ location = "right"
 # album = 28
 # title = 36               # set to 0 to search long track names
 # duration = 6
-# [library.fzf.albums]     # album picker (Alt+f); Ctrl+s switches songs / albums
+# switch_key = "ctrl-s"    # fzf --expect name; flips songs/albums; "" disables
+# [library.fzf.albums]     # album picker (Alt+f); switch_key flips songs / albums
 # args = ["--delimiter=\\t", "--with-nth=2,3,4,5,6", "--nth=1,2", "--multi", "--expect=ctrl-r", "--border=rounded", "--prompt=Albums> "]
 # [library.fzf.albums.columns]   # artist = 26, album = 40, year = 4, tracks = 6, duration = 8
 # fetch_album_parallelism = 12    # concurrent getAlbum per artist during index refresh
@@ -3258,6 +3268,28 @@ title = 0
         assert_eq!(fzf.columns.title, 0);
         assert_eq!(fzf.args, default_fzf_args());
         assert_eq!(fzf.albums, LibraryFzfAlbumsSection::default());
+        assert_eq!(fzf.switch_key, default_fzf_switch_key());
+    }
+
+    #[test]
+    fn parses_library_fzf_switch_key() {
+        let fc: FileConfig = toml::from_str(
+            r#"
+[library.fzf]
+switch_key = "alt-a"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(fc.library.resolve_fzf().switch_key, "alt-a");
+
+        let fc: FileConfig = toml::from_str(
+            r#"
+[library.fzf]
+switch_key = ""
+"#,
+        )
+        .expect("toml");
+        assert_eq!(fc.library.resolve_fzf().switch_key, "");
     }
 
     #[test]
