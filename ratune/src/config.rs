@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -1388,6 +1389,10 @@ struct PlayerSection {
     /// stops when ratune exits). Ignored on non-Unix platforms.
     #[serde(default = "default_daemon", alias = "background_playback")]
     daemon: bool,
+    /// Suffix → Subsonic `stream` `format` (for example `ape = "flac"`).
+    /// Empty requests the original file.
+    #[serde(default)]
+    transcode: BTreeMap<String, String>,
 }
 
 impl Default for PlayerSection {
@@ -1399,6 +1404,7 @@ impl Default for PlayerSection {
             queue_loop: default_queue_loop(),
             queue_skip_duplicates: false,
             daemon: default_daemon(),
+            transcode: BTreeMap::new(),
         }
     }
 }
@@ -1448,6 +1454,34 @@ fn default_queue_loop() -> bool {
 
 fn default_daemon() -> bool {
     true
+}
+
+/// Lowercase media suffix or format token, without a leading dot.
+fn normalize_media_token(raw: &str) -> Option<String> {
+    let token = raw.trim().trim_start_matches('.').to_ascii_lowercase();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+/// Drop empty targets, `raw` (direct play), and identity mappings (`flac = "flac"`).
+fn normalize_transcode_map(raw: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (suffix, format) in raw {
+        let Some(suffix) = normalize_media_token(&suffix) else {
+            continue;
+        };
+        let Some(format) = normalize_media_token(&format) else {
+            continue;
+        };
+        if format == "raw" || format == suffix {
+            continue;
+        }
+        out.insert(suffix, format);
+    }
+    out
 }
 
 fn default_rating_star_filled() -> String {
@@ -1542,6 +1576,9 @@ pub struct Config {
     pub connection_check_interval_secs: u64,
     pub default_volume: u8,
     pub max_bit_rate: u32,
+    /// Suffix (lowercase, no leading dot) → Subsonic `stream` `format`.
+    /// Missing suffixes are direct-played.
+    pub transcode_formats: BTreeMap<String, String>,
     /// Linux/macOS: OS media keys (`playerctl` / Control Center).
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
@@ -1990,6 +2027,7 @@ impl Config {
             subsonic_pass,
             default_volume: file_cfg.player.default_volume,
             max_bit_rate: file_cfg.player.max_bit_rate,
+            transcode_formats: normalize_transcode_map(file_cfg.player.transcode),
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
             queue_skip_duplicates: file_cfg.player.queue_skip_duplicates,
@@ -2090,6 +2128,13 @@ impl Config {
         ))
     }
 
+    /// Subsonic `stream` `format` for `suffix`, when `[player.transcode]` maps it.
+    #[must_use]
+    pub fn transcode_format(&self, suffix: Option<&str>) -> Option<&str> {
+        let suffix = normalize_media_token(suffix?)?;
+        self.transcode_formats.get(&suffix).map(String::as_str)
+    }
+
     /// Tab bar position and now-playing height for [`crate::ui::layout::build_layout`].
     pub fn layout_options(&self) -> crate::ui::layout::LayoutOptions {
         crate::ui::layout::LayoutOptions {
@@ -2144,6 +2189,9 @@ password = ""
 [player]
 default_volume = 70
 max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
+# [player.transcode]   # Subsonic stream `format` for suffixes ratune cannot play
+# ape = "flac"
+# opus = "mp3"
 # mpris = true     # Linux MPRIS / macOS Now Playing for media keys (default: true)
 # queue_loop = true   # wrap to first track after the last queue item (default: true)
 # queue_skip_duplicates = false  # skip a queue add when that song id is already queued
@@ -3028,6 +3076,33 @@ cache_enabled = false
     fn parses_queue_loop() {
         let fc: FileConfig = toml::from_str("[player]\nqueue_loop = false\n").expect("toml");
         assert!(!fc.player.queue_loop);
+    }
+
+    #[test]
+    fn transcode_map_normalizes_suffixes() {
+        let fc: FileConfig = toml::from_str(
+            r#"
+            [player.transcode]
+            APE = "FLAC"
+            ".opus" = "mp3"
+            wav = "raw"
+            flac = "flac"
+            aac = ""
+            "#,
+        )
+        .expect("toml");
+        let map = normalize_transcode_map(fc.player.transcode);
+        assert_eq!(map.get("ape").map(String::as_str), Some("flac"));
+        assert_eq!(map.get("opus").map(String::as_str), Some("mp3"));
+        assert!(!map.contains_key("wav"));
+        assert!(!map.contains_key("flac"));
+        assert!(!map.contains_key("aac"));
+    }
+
+    #[test]
+    fn transcode_map_defaults_empty() {
+        let fc = FileConfig::default();
+        assert!(fc.player.transcode.is_empty());
     }
 
     #[test]

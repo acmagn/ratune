@@ -487,12 +487,16 @@ impl SubsonicClient {
     /// The returned URL is self-contained and can be handed directly to a media
     /// player without any further signing.
     ///
-    /// Set `max_bit_rate` to `0` to request the original file without
-    /// transcoding.
+    /// Set `max_bit_rate` to `0` to impose no bitrate cap.
+    ///
+    /// `format` is the Subsonic `stream` transcode target (`flac`, `mp3`, …).
+    /// `None` omits the parameter so the server direct-plays the original file
+    /// unless a bitrate cap forces downsampling.
     #[must_use]
-    pub fn stream_url(&self, id: &str, max_bit_rate: u32) -> String {
+    pub fn stream_url(&self, id: &str, max_bit_rate: u32, format: Option<&str>) -> String {
+        let format = format.map(str::trim).filter(|f| !f.is_empty());
         let Ok(mut url) = url::Url::parse(&format!("{}/rest/stream", self.base_url)) else {
-            return self.stream_url_fallback(id, max_bit_rate);
+            return self.stream_url_fallback(id, max_bit_rate, format);
         };
         {
             let mut q = url.query_pairs_mut();
@@ -501,16 +505,22 @@ impl SubsonicClient {
             }
             q.append_pair("id", id);
             q.append_pair("maxBitRate", &max_bit_rate.to_string());
+            if let Some(format) = format {
+                q.append_pair("format", format);
+            }
         }
         url.into()
     }
 
     /// Pre-encoding fallback if `base_url` is not a valid URL prefix (should be rare).
-    fn stream_url_fallback(&self, id: &str, max_bit_rate: u32) -> String {
+    fn stream_url_fallback(&self, id: &str, max_bit_rate: u32, format: Option<&str>) -> String {
         let params = self.auth_params();
         let mut parts: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
         parts.push(format!("id={id}"));
         parts.push(format!("maxBitRate={max_bit_rate}"));
+        if let Some(format) = format {
+            parts.push(format!("format={format}"));
+        }
         format!("{}/rest/stream?{}", self.base_url, parts.join("&"))
     }
 
@@ -1430,7 +1440,7 @@ mod tests {
     #[test]
     fn stream_url_contains_auth_and_track_params() {
         let client = SubsonicClient::new("http://127.0.0.1:4533/", "alice", "secret").unwrap();
-        let url_s = client.stream_url("track-99", 320);
+        let url_s = client.stream_url("track-99", 320, None);
         let url = url::Url::parse(&url_s).expect("stream URL must parse");
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.host_str(), Some("127.0.0.1"));
@@ -1451,6 +1461,7 @@ mod tests {
             "MD5 hex token length"
         );
         assert!(!q.contains_key("p"), "no legacy password param");
+        assert!(!q.contains_key("format"), "direct play omits format");
     }
 
     #[test]
@@ -1458,13 +1469,28 @@ mod tests {
         let client = SubsonicClient::new("http://127.0.0.1:4533", "alice", "secret")
             .unwrap()
             .with_auth_mode(AuthMode::Legacy);
-        let url = url::Url::parse(&client.stream_url("track-99", 0)).unwrap();
+        let url = url::Url::parse(&client.stream_url("track-99", 0, None)).unwrap();
         let q: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
         assert_eq!(q.get("u").map(String::as_str), Some("alice"));
         assert_eq!(q.get("p").map(String::as_str), Some("enc:736563726574"));
         assert!(!q.contains_key("t"), "no token param");
         assert!(!q.contains_key("s"), "no salt param");
         assert_eq!(q.get("id").map(String::as_str), Some("track-99"));
+    }
+
+    #[test]
+    fn stream_url_requests_transcode_format() {
+        let client = SubsonicClient::new("http://127.0.0.1:4533", "alice", "secret").unwrap();
+        let url = url::Url::parse(&client.stream_url("track-99", 0, Some("flac"))).unwrap();
+        let q: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
+        assert_eq!(q.get("format").map(String::as_str), Some("flac"));
+        assert_eq!(q.get("maxBitRate").map(String::as_str), Some("0"));
+        assert_eq!(q.get("id").map(String::as_str), Some("track-99"));
+
+        let raw = url::Url::parse(&client.stream_url("track-99", 0, Some("  "))).unwrap();
+        let raw_q: std::collections::HashMap<String, String> =
+            raw.query_pairs().into_owned().collect();
+        assert!(!raw_q.contains_key("format"));
     }
 
     #[test]

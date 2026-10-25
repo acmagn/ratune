@@ -98,6 +98,12 @@ password = ""
 #                  `ratune stop` quits the daemon). Default: true.
 #                  Set false to restore in-process playback (music stops when
 #                  ratune exits). Alias: background_playback.
+# transcode      — Ask the server to transcode these suffixes via the Subsonic
+#                  `stream` `format` parameter (API 1.6.0+). The server does this
+#                  only when it has a transcoder for the target. Navidrome
+#                  provides mp3, flac, opus, and aac; other servers usually
+#                  provide mp3. Unlisted suffixes are direct-played. Playback
+#                  and the offline cache both use the transcoded bytes.
 
 [player]
 default_volume = 70
@@ -106,6 +112,10 @@ mpris = true
 queue_loop = true
 # queue_skip_duplicates = false
 # daemon = true
+
+# [player.transcode]
+# ape = "flac"
+# opus = "mp3"
 
 # -----------------------------------------------------------------------------
 # [ratings] — per-user song ratings (Subsonic setRating)
