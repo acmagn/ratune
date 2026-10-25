@@ -364,7 +364,7 @@ fn parse_lyrics_text(text: &str) -> Vec<LyricLine> {
     text.lines()
         .map(|l| LyricLine {
             time: None,
-            text: l.to_string(),
+            text: ratune_subsonic::sanitize_terminal_text(l.to_string()),
         })
         .collect()
 }
@@ -381,7 +381,7 @@ fn parse_lrc_line(line: &str) -> Option<LyricLine> {
     }
     let close = line.find(']')?;
     let tag = &line[1..close];
-    let text = line[close + 1..].trim().to_string();
+    let text = ratune_subsonic::sanitize_terminal_text(line[close + 1..].trim().to_string());
 
     let colon = tag.find(':')?;
     let dot = tag.find('.')?;
