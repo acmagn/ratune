@@ -925,6 +925,8 @@ pub fn build_browse_snapshot_filtered(
 
 #[cfg(test)]
 mod tests {
+    use ratune_subsonic::models::SongReplayGainInfo;
+
     use super::*;
 
     fn fzf_input_lines(tracks: &[Song], cols: FzfColumns) -> String {
@@ -1100,6 +1102,12 @@ mod tests {
                 path: None,
                 starred: None,
                 user_rating: None,
+                replay_gain: SongReplayGainInfo {
+                    track_gain: None,
+                    album_gain: None,
+                    track_peak: None,
+                    album_peak: None,
+                },
             }
         }
 
@@ -1159,6 +1167,12 @@ mod tests {
                 path: None,
                 starred: None,
                 user_rating: None,
+                replay_gain: SongReplayGainInfo {
+                    track_gain: None,
+                    album_gain: None,
+                    track_peak: None,
+                    album_peak: None,
+                },
             }
         }
 
@@ -1219,6 +1233,12 @@ mod tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         };
         let snap = build_browse_snapshot(&[track]);
         let names: Vec<_> = snap.artists.iter().map(|a| a.name.as_str()).collect();
@@ -1264,6 +1284,12 @@ mod tests {
                 path: None,
                 starred: None,
                 user_rating: None,
+                replay_gain: SongReplayGainInfo {
+                    track_gain: None,
+                    album_gain: None,
+                    track_peak: None,
+                    album_peak: None,
+                },
             }
         }
 
@@ -1307,6 +1333,12 @@ mod tests {
                 path: None,
                 starred: None,
                 user_rating: Some(3),
+                replay_gain: SongReplayGainInfo {
+                    track_gain: None,
+                    album_gain: None,
+                    track_peak: None,
+                    album_peak: None,
+                },
             }
         }
 
@@ -1435,6 +1467,12 @@ mod tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         };
         let cols = FzfColumns {
             title: 0,
@@ -1474,6 +1512,12 @@ mod tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         };
         let line = fzf_input_lines(std::slice::from_ref(&s), FzfColumns::default());
         assert_eq!(
@@ -1513,6 +1557,12 @@ mod tests {
                 path: None,
                 starred: None,
                 user_rating: None,
+                replay_gain: SongReplayGainInfo {
+                    track_gain: None,
+                    album_gain: None,
+                    track_peak: None,
+                    album_peak: None,
+                },
             }
         }
         let snap = build_browse_snapshot(&[
@@ -1562,6 +1612,12 @@ mod tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         }]);
         assert!(!index_supports_album_sort(
             &snap.flat_albums,

@@ -36,7 +36,8 @@ use crate::models::{
     InternetRadioStationsEnvelope, LegacyLyricsEnvelope, LyricLine, LyricsBySongIdEnvelope,
     MusicDirectory, MusicDirectoryEnvelope, MusicFolder, MusicFoldersEnvelope, PingEnvelope,
     Playlist, PlaylistDetail, PlaylistEnvelope, PlaylistsEnvelope, ScanStatus, ScanStatusEnvelope,
-    SearchEnvelope, SearchResult3, Song, SongEnvelope, Starred2, Starred2Envelope, SubsonicLibrary,
+    SearchEnvelope, SearchResult3, Song, SongEnvelope, SongReplayGainInfo, Starred2,
+    Starred2Envelope, SubsonicLibrary,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -149,6 +150,12 @@ fn music_directory_from_library_indexes(music_folder_id: &str, data: &Artists) -
             suffix: None,
             content_type: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         })
         .collect();
     directories.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
@@ -1372,6 +1379,12 @@ mod tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         }
     }
 

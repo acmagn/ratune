@@ -203,6 +203,63 @@ pub struct Song {
     /// User rating 1–5 from Subsonic `userRating` (absent or 0 = unrated).
     #[serde(default)]
     pub user_rating: Option<u8>,
+    #[serde(default)]
+    pub replay_gain: SongReplayGainInfo,
+}
+
+/// ReplayGain information for a particular [Song] from OpenSubsonic providers.
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SongReplayGainInfo {
+    pub track_gain: Option<f32>,
+    pub album_gain: Option<f32>,
+    pub track_peak: Option<f32>,
+    pub album_peak: Option<f32>,
+}
+
+impl SongReplayGainInfo {
+    fn db_to_linear(x: f32) -> f32 {
+        10_f32.powf(x / 20.0)
+    }
+
+    fn linear_to_db(x: f32) -> f32 {
+        20.0 * x.log10()
+    }
+
+    /// Calculate the amount of amplification to be applied to the track, in
+    /// decibels, whilst avoiding clipping by capping the gain such that the
+    /// resulting peak will be, at most, digital full scale.
+    ///
+    /// Returns None if the mode is None, or if no gain metadata is available.
+    /// If mode is Album but only track gain information is available, track
+    /// gain will be calculated instead.
+    pub fn amplification_db(&self, mode: SongReplayGainMode) -> Option<f32> {
+        if mode == SongReplayGainMode::None {
+            return None;
+        }
+        if mode == SongReplayGainMode::Album {
+            if let Some(album_gain) = self.album_gain {
+                return Some(Self::linear_to_db(f32::min(
+                    Self::db_to_linear(album_gain),
+                    1.0 / self.album_peak.unwrap_or(1.0),
+                )));
+            }
+        }
+        if let Some(track_gain) = self.track_gain {
+            return Some(Self::linear_to_db(f32::min(
+                Self::db_to_linear(track_gain),
+                1.0 / self.track_peak.unwrap_or(1.0),
+            )));
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SongReplayGainMode {
+    None,
+    Track,
+    Album,
 }
 
 /// Glyphs for ratings: small stars sit closer to the text centerline than `★`/`☆`.
@@ -496,6 +553,8 @@ pub struct DirectoryChild {
     /// User rating 1–5 when the server includes it on directory entries.
     #[serde(default)]
     pub user_rating: Option<u8>,
+    #[serde(default)]
+    pub replay_gain: SongReplayGainInfo,
 }
 
 impl DirectoryChild {
@@ -528,6 +587,7 @@ impl DirectoryChild {
             path: self.path.clone(),
             starred: None,
             user_rating: self.user_rating,
+            replay_gain: self.replay_gain,
         }
     }
 }
@@ -1452,5 +1512,14 @@ mod tests {
         assert!(d(Some(2020), None, None) < d(Some(2020), Some(1), None));
         assert!(d(Some(2020), Some(12), Some(31)) < d(Some(2021), None, None));
         assert!(d(None, None, None) < d(Some(1), None, None));
+    }
+
+    #[test]
+    fn db_linear_conversions() {
+        let x = 0.4278825;
+        assert_eq!(
+            SongReplayGainInfo::db_to_linear(SongReplayGainInfo::linear_to_db(x)),
+            x
+        );
     }
 }
