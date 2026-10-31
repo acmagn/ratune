@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use inquire::Password;
 use keyring_core::Error as KeyringError;
+use ratune_subsonic::models::SongReplayGainMode;
 use serde::{Deserialize, Serialize};
 
 /// How album art is rendered in the terminal (Now Playing column + Home strip).
@@ -1393,6 +1394,8 @@ struct PlayerSection {
     /// Empty requests the original file.
     #[serde(default)]
     transcode: BTreeMap<String, String>,
+    #[serde(default)]
+    replay_gain: Option<String>,
 }
 
 impl Default for PlayerSection {
@@ -1405,6 +1408,7 @@ impl Default for PlayerSection {
             queue_skip_duplicates: false,
             daemon: default_daemon(),
             transcode: BTreeMap::new(),
+            replay_gain: None,
         }
     }
 }
@@ -1587,6 +1591,8 @@ pub struct Config {
     pub queue_skip_duplicates: bool,
     /// Unix: keep a playback daemon so music continues after the TUI closes.
     pub daemon_enabled: bool,
+    /// Whether to apply ReplayGain, and which mode.
+    pub replay_gain: SongReplayGainMode,
     /// When true, show ratings in the UI and allow rating keybinds / MPRIS UserRating (`[ratings].enabled`).
     pub ratings_enabled: bool,
     /// Star glyphs for rating display (`[theme.icon].rating_*`, legacy `[ratings].star_*`).
@@ -2018,6 +2024,16 @@ impl Config {
         let library = file_cfg.library;
         let library_fzf = library.resolve_fzf();
 
+        let replay_gain = file_cfg
+            .player
+            .replay_gain
+            .map(|mode| match mode.to_lowercase().trim() {
+                "album" => SongReplayGainMode::Album,
+                "track" => SongReplayGainMode::Track,
+                _ => SongReplayGainMode::None,
+            })
+            .unwrap_or(SongReplayGainMode::None);
+
         Ok(Config {
             subsonic_url: file_cfg.server.url,
             subsonic_user: file_cfg.server.username,
@@ -2042,6 +2058,7 @@ impl Config {
                     false
                 }
             },
+            replay_gain,
             ratings_enabled: file_cfg.ratings.enabled,
             rating_stars: resolve_rating_stars(&file_cfg.theme.icon, &file_cfg.ratings),
             radio_enabled,

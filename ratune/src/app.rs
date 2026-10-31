@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratune_subsonic::models::SongReplayGainInfo;
 use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 
@@ -4843,14 +4844,23 @@ impl App {
                     let duration = next
                         .duration
                         .map(|s| std::time::Duration::from_secs(u64::from(s)));
+                    let replay_gain = next.replay_gain.amplification_db(self.config.replay_gain);
                     match self.resolve_playback(&next) {
                         ResolvedPlayback::Cached(path) => {
                             self.gapless_cached_song_id = Some(next.id.clone());
-                            self.send_player(PlayerCommand::EnqueueNextCached { path, duration });
+                            self.send_player(PlayerCommand::EnqueueNextCached {
+                                path,
+                                duration,
+                                replay_gain,
+                            });
                         }
                         ResolvedPlayback::Url(url) => {
                             self.gapless_cached_song_id = None;
-                            self.send_player(PlayerCommand::EnqueueNext { url, duration });
+                            self.send_player(PlayerCommand::EnqueueNext {
+                                url,
+                                duration,
+                                replay_gain,
+                            });
                         }
                         ResolvedPlayback::UnavailableOffline => {
                             self.gapless_cached_song_id = None;
@@ -5151,6 +5161,7 @@ impl App {
                 .map(|s| std::time::Duration::from_secs(u64::from(s)));
             let song_id = song.id.clone();
             let resolved = self.resolve_playback(&song);
+            let replay_gain = song.replay_gain.amplification_db(self.config.replay_gain);
             self.playback.current_song = Some(song);
             self.playback.player_loaded = true;
             let gen = self.play_gen;
@@ -5161,13 +5172,17 @@ impl App {
                         path,
                         duration,
                         gen,
+                        replay_gain,
                     });
                 }
                 ResolvedPlayback::Url(url) => {
                     self.playback_from_cache = None;
-                    let _ = self
-                        .player_tx
-                        .send(PlayerCommand::PlayUrl { url, duration, gen });
+                    let _ = self.player_tx.send(PlayerCommand::PlayUrl {
+                        url,
+                        duration,
+                        gen,
+                        replay_gain,
+                    });
                 }
                 ResolvedPlayback::UnavailableOffline => {
                     self.playback_from_cache = None;
@@ -5209,7 +5224,12 @@ impl App {
                 &next.album_id.clone().unwrap_or_default(),
                 next.suffix.as_deref(),
             );
-            self.send_player(PlayerCommand::EnqueueNext { url, duration });
+            let replay_gain = next.replay_gain.amplification_db(self.config.replay_gain);
+            self.send_player(PlayerCommand::EnqueueNext {
+                url,
+                duration,
+                replay_gain,
+            });
             self.flash_status_secs("Next track: bad cache — re-streaming", 5);
             return true;
         }
@@ -5263,11 +5283,19 @@ impl App {
             .and_then(|s| s.suffix.clone());
         let url = self.song_stream_url(&song_id, &album_id, suffix.as_deref());
         let gen = self.play_gen;
+        let replay_gain = self
+            .playback
+            .current_song
+            .as_ref()
+            .and_then(|s| s.replay_gain.amplification_db(self.config.replay_gain));
         self.playback.player_loaded = true;
         self.playback_from_cache = None;
-        let _ = self
-            .player_tx
-            .send(PlayerCommand::PlayUrl { url, duration, gen });
+        let _ = self.player_tx.send(PlayerCommand::PlayUrl {
+            url,
+            duration,
+            gen,
+            replay_gain,
+        });
         self.flash_status_secs("Cached track unreadable — re-streaming", 5);
         true
     }
@@ -5437,6 +5465,12 @@ impl App {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         }
     }
 
@@ -8160,6 +8194,12 @@ impl App {
                         size: None,
                         starred: None,
                         user_rating: None,
+                        replay_gain: SongReplayGainInfo {
+                            track_gain: None,
+                            album_gain: None,
+                            track_peak: None,
+                            album_peak: None,
+                        },
                     };
                     let result = self.enqueue_one(song);
                     if let Some(idx) = result.focus {
@@ -8187,6 +8227,7 @@ impl App {
                                 path,
                                 duration: dur,
                                 gen,
+                                replay_gain: None,
                             });
                         }
                         ResolvedPlayback::Url(url) => {
@@ -8195,6 +8236,7 @@ impl App {
                                 url,
                                 duration: dur,
                                 gen,
+                                replay_gain: None,
                             });
                         }
                         ResolvedPlayback::UnavailableOffline => {
@@ -8279,6 +8321,12 @@ impl App {
             size: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         };
         let was_empty = self.queue.songs.is_empty();
         self.enqueue_one(song);

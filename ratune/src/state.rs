@@ -1055,7 +1055,7 @@ pub struct PlaybackState {
 #[cfg(test)]
 mod queue_tests {
     use super::QueueState;
-    use ratune_subsonic::Song;
+    use ratune_subsonic::{models::SongReplayGainInfo, Song};
 
     fn song(id: &str) -> Song {
         Song {
@@ -1085,6 +1085,12 @@ mod queue_tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         }
     }
 

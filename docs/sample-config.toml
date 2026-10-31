@@ -104,6 +104,10 @@ password = ""
 #                  provides mp3, flac, opus, and aac; other servers usually
 #                  provide mp3. Unlisted suffixes are direct-played. Playback
 #                  and the offline cache both use the transcoded bytes.
+# replay_gain    — Enable ReplayGain volume adjustments if the server supports it.
+#                  Disabled by default, but can be set to to "track" or "album".
+#                  Uses track gain as a fallback if set to "album" but no album
+#                  gain is provided by the server.
 
 [player]
 default_volume = 70
@@ -112,6 +116,7 @@ mpris = true
 queue_loop = true
 # queue_skip_duplicates = false
 # daemon = true
+# replay_gain = "none"
 
 # [player.transcode]
 # ape = "flac"
