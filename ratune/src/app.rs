@@ -143,6 +143,12 @@ enum ResolvedPlayback {
 /// Prefix for synthetic [`Song::id`] values built from internet radio stations.
 pub const RADIO_SONG_ID_PREFIX: &str = "radio:";
 
+fn split_icy_stream_title(value: &str) -> Option<(&str, &str)> {
+    let (artist, title) = value.split_once(" - ")?;
+    let (artist, title) = (artist.trim(), title.trim());
+    (!artist.is_empty() && !title.is_empty()).then_some((artist, title))
+}
+
 // ── Tab ───────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -4909,6 +4915,11 @@ impl App {
                 }
             }
             PlayerEvent::TrackDownloaded(track) => self.cache_streamed_track(&track),
+            PlayerEvent::IcyMetadata { stream_title, gen } => {
+                if gen == self.play_gen {
+                    self.apply_icy_metadata(&stream_title);
+                }
+            }
             PlayerEvent::TrackEnded => {
                 if client {
                     // Queue advance is applied from the daemon snapshot.
@@ -5438,6 +5449,36 @@ impl App {
             starred: None,
             user_rating: None,
         }
+    }
+
+    fn apply_icy_metadata(&mut self, stream_title: &str) {
+        let stream_title = ratune_subsonic::sanitize_terminal_text(stream_title.to_owned());
+        let stream_title = stream_title.trim();
+        if stream_title.is_empty() {
+            return;
+        }
+
+        let Some(song) = self
+            .playback
+            .current_song
+            .as_mut()
+            .filter(|song| Self::is_radio_song(song))
+        else {
+            return;
+        };
+        let station_name = if song.artist.as_deref() == Some("Radio") {
+            song.title.clone()
+        } else {
+            song.album.clone().unwrap_or_else(|| "Radio".to_owned())
+        };
+        if let Some((artist, title)) = split_icy_stream_title(stream_title) {
+            song.artist = Some(artist.to_owned());
+            song.title = title.to_owned();
+        } else {
+            song.artist = Some(station_name.clone());
+            song.title = stream_title.to_owned();
+        }
+        song.album = Some(station_name);
     }
 
     /// Fetch internet radio stations for the picker and Now Playing radio pane.

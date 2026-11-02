@@ -19,8 +19,8 @@ use rodio::{Decoder, DeviceSinkBuilder, Player};
 
 use crate::adts_normalize::AdtsNormalizeReader;
 use crate::stream::{
-    open_live_stream, open_stream, track_http_client, DownloadStatus, StreamFormatHint,
-    StreamingReader,
+    open_live_stream_with_metadata, open_stream, track_http_client, DownloadStatus,
+    StreamFormatHint, StreamingReader,
 };
 use crate::tap::SampleTap;
 use crate::track::{is_not_buffered, TrackSource};
@@ -95,6 +95,11 @@ pub enum PlayerEvent {
     SeekUnavailable,
     /// A streamed track (current or gapless next) finished downloading.
     TrackDownloaded(DownloadedTrack),
+    /// Updated title sent inline by a live radio stream.
+    IcyMetadata {
+        stream_title: String,
+        gen: u64,
+    },
     Error(String),
 }
 
@@ -209,6 +214,7 @@ struct TrackState {
     pending_next: Option<PendingNext>,
     about_to_finish_sent: bool,
     prev_elapsed: Duration,
+    live_metadata_rx: Option<mpsc::Receiver<String>>,
 }
 
 struct Engine<'a> {
@@ -257,6 +263,7 @@ impl Engine<'_> {
 
             self.poll_pending_next();
             self.poll_downloads();
+            self.poll_live_metadata();
             self.tick();
             std::thread::sleep(Duration::from_millis(500));
         }
@@ -288,6 +295,22 @@ impl Engine<'_> {
             });
         for track in finished {
             self.send(PlayerEvent::TrackDownloaded(track));
+        }
+    }
+
+    fn poll_live_metadata(&mut self) {
+        let Some(rx) = &self.track.live_metadata_rx else {
+            return;
+        };
+        let mut latest = None;
+        while let Ok(stream_title) = rx.try_recv() {
+            latest = Some(stream_title);
+        }
+        if let Some(stream_title) = latest {
+            self.send(PlayerEvent::IcyMetadata {
+                stream_title,
+                gen: self.skip_gen,
+            });
         }
     }
 
@@ -519,8 +542,8 @@ impl Engine<'_> {
 
         self.reset_tracks();
 
-        let source = match live_stream_and_decode(&final_url) {
-            Ok(s) => s,
+        let (source, metadata_rx) = match live_stream_and_decode(&final_url) {
+            Ok(stream) => stream,
             Err(e) => {
                 self.send(PlayerEvent::Error(format!("playback error: {e}")));
                 return;
@@ -560,6 +583,7 @@ impl Engine<'_> {
         }
 
         self.track.current_total = None;
+        self.track.live_metadata_rx = Some(metadata_rx);
         let tapped = SampleTap::new(source, self.sample_buffer.clone());
         self.player.append(tapped);
         self.player.play();
@@ -712,8 +736,10 @@ impl std::io::Seek for LiveDecodeReader {
 /// Max time to probe/decode after the stream has connected and prebuffered.
 const LIVE_DECODE_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
-fn live_stream_and_decode(url: &str) -> Result<Decoder<LiveDecodeReader>> {
-    let mut reader = open_live_stream(url)?;
+fn live_stream_and_decode(
+    url: &str,
+) -> Result<(Decoder<LiveDecodeReader>, mpsc::Receiver<String>)> {
+    let (mut reader, metadata_rx) = open_live_stream_with_metadata(url)?;
     let decode_hint = reader.prepare_for_decode(url);
     let reader = if decode_hint.format == StreamFormatHint::Aac {
         LiveDecodeReader::Aac(AdtsNormalizeReader::new(reader))
@@ -740,7 +766,7 @@ fn live_stream_and_decode(url: &str) -> Result<Decoder<LiveDecodeReader>> {
         .context("failed to spawn live decode thread")?;
 
     match rx.recv_timeout(LIVE_DECODE_PROBE_TIMEOUT) {
-        Ok(Ok(decoder)) => Ok(decoder),
+        Ok(Ok(decoder)) => Ok((decoder, metadata_rx)),
         Ok(Err(e)) => Err(e),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(match decode_hint.format {
             StreamFormatHint::Aac => anyhow!(
