@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use ratune_subsonic::models::{Album, Artist, DiscTitle, InternetRadioStation, MusicFolder, Song};
+use ratune_subsonic::models::{
+    Album, Artist, DiscTitle, InternetRadioStation, MusicFolder, Song, SongReplayGainMode,
+};
 use serde::{Deserialize, Serialize};
 
 // ── LoadingState ──────────────────────────────────────────────────────────────
@@ -587,6 +589,21 @@ impl QueueState {
         }
     }
 
+    /// Peek at the prev song without moving the cursor.
+    /// When [`Self::loop_enabled`] and at the start, returns the last song.
+    pub fn peek_prev(&self) -> Option<&Song> {
+        if self.songs.is_empty() {
+            return None;
+        }
+        if self.cursor > 0 {
+            self.songs.get(self.cursor - 1)
+        } else if self.loop_enabled {
+            self.songs.last()
+        } else {
+            None
+        }
+    }
+
     /// Move to the previous song. Returns true if there is a previous song.
     /// When [`Self::loop_enabled`] and at the start of a non-empty queue, wraps to the last song.
     pub fn prev(&mut self) -> bool {
@@ -1050,6 +1067,9 @@ pub struct PlaybackState {
     /// True once a `PlayUrl` has been sent to the engine for this track.
     /// False after restore (current_song is set but engine has nothing loaded).
     pub player_loaded: bool,
+
+    pub replay_gain_mode: SongReplayGainMode,
+    pub replay_gain: Option<f32>,
 }
 
 #[cfg(test)]

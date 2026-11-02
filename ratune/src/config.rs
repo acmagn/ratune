@@ -687,6 +687,9 @@ pub struct UiGeneralSection {
     /// When true (default), show in-app playback level (`N%`) on the bottom-right of the status bar.
     #[serde(default)]
     pub show_volume_indicator: Option<bool>,
+    /// When true, show the current ReplayGain state on the bottom-right of the status bar, before the volume.
+    #[serde(default)]
+    pub show_replaygain_state: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -1653,6 +1656,8 @@ pub struct Config {
     pub tab_bar_position: String,
     /// Show `N%` playback level at the bottom-right of the status bar (in-app gain, not OS volume).
     pub show_volume_indicator: bool,
+    /// Show ReplayGain state at the bottom-right of the status bar.
+    pub show_replaygain_state: bool,
     /// Now-playing bar height in rows.
     pub now_playing_bar_height: u16,
     /// `row` or `boxed` now-playing layout.
@@ -1867,6 +1872,12 @@ impl Config {
             .as_ref()
             .and_then(|g| g.show_volume_indicator)
             .unwrap_or(true);
+
+        let show_replaygain_state = ui
+            .general
+            .as_ref()
+            .and_then(|g| g.show_replaygain_state)
+            .unwrap_or(false);
 
         let now_playing_bar_height = nptab
             .and_then(|n| n.now_playing.as_ref())
@@ -2089,6 +2100,7 @@ impl Config {
             visualizer_color_mode,
             tab_bar_position,
             show_volume_indicator,
+            show_replaygain_state,
             now_playing_bar_height,
             now_playing_layout,
             now_playing_box_location,

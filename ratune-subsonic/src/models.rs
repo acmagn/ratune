@@ -255,8 +255,9 @@ impl SongReplayGainInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SongReplayGainMode {
+    #[default]
     None,
     Track,
     Album,
