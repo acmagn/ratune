@@ -89,6 +89,27 @@ mod tests {
     use std::io::Cursor;
     use std::sync::mpsc;
 
+    struct FragmentedReader<R> {
+        inner: R,
+        max_read: usize,
+    }
+
+    impl<R: Read> Read for FragmentedReader<R> {
+        fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+            let limit = out.len().min(self.max_read);
+            self.inner.read(&mut out[..limit])
+        }
+    }
+
+    fn frame(audio: &[u8], metadata: &[u8]) -> Vec<u8> {
+        let blocks = metadata.len().div_ceil(16);
+        let mut bytes = audio.to_vec();
+        bytes.push(u8::try_from(blocks).unwrap());
+        bytes.extend_from_slice(metadata);
+        bytes.resize(audio.len() + 1 + blocks * 16, 0);
+        bytes
+    }
+
     #[test]
     fn strips_metadata_and_ignores_repeated_titles() {
         let body = b"a\x01StreamTitle='X';b\x01StreamTitle='X';c";
@@ -110,5 +131,101 @@ mod tests {
             stream_title("StreamTitle='Guns N' Roses - Don't Cry';"),
             Some("Guns N' Roses - Don't Cry")
         );
+    }
+
+    #[test]
+    fn handles_fragmented_audio_and_padded_metadata() {
+        let body = [
+            frame(b"abcd", b"StreamTitle='Artist - Track';"),
+            b"efgh".to_vec(),
+        ]
+        .concat();
+
+        for max_read in [1, 2, 3, 7] {
+            let (tx, rx) = mpsc::channel();
+            let source = FragmentedReader {
+                inner: Cursor::new(&body),
+                max_read,
+            };
+            let mut reader = IcyReader::new(source, 4, Some(tx));
+            let mut audio = Vec::new();
+
+            reader.read_to_end(&mut audio).unwrap();
+
+            assert_eq!(audio, b"abcdefgh", "read size: {max_read}");
+            assert_eq!(rx.try_iter().collect::<Vec<_>>(), ["Artist - Track"]);
+        }
+    }
+
+    #[test]
+    fn skips_zero_length_metadata_blocks() {
+        let body = [
+            frame(b"ab", b""),
+            frame(b"cd", b"StreamTitle='X';"),
+            b"ef".to_vec(),
+        ]
+        .concat();
+        let (tx, rx) = mpsc::channel();
+        let mut reader = IcyReader::new(Cursor::new(body), 2, Some(tx));
+        let mut audio = Vec::new();
+
+        reader.read_to_end(&mut audio).unwrap();
+
+        assert_eq!(audio, b"abcdef");
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), ["X"]);
+    }
+
+    #[test]
+    fn ignores_metadata_without_a_nonempty_title() {
+        for metadata in [
+            b"StreamTitle='';".as_slice(),
+            b"StreamTitle='   ';".as_slice(),
+            b"StreamUrl='https://radio.test';".as_slice(),
+        ] {
+            let body = [frame(b"ab", metadata), b"cd".to_vec()].concat();
+            let (tx, rx) = mpsc::channel();
+            let mut reader = IcyReader::new(Cursor::new(body), 2, Some(tx));
+            let mut audio = Vec::new();
+
+            reader.read_to_end(&mut audio).unwrap();
+
+            assert_eq!(audio, b"abcd");
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_truncated_metadata_without_leaking_it_into_audio() {
+        // The length byte announces 32 bytes, but only 16 follow.
+        let body = b"ab\x02StreamTitle='X';";
+        let (tx, rx) = mpsc::channel();
+        let mut reader = IcyReader::new(Cursor::new(body), 2, Some(tx));
+        let mut audio = Vec::new();
+
+        let error = reader.read_to_end(&mut audio).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        assert_eq!(audio, b"ab");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn emits_each_title_change_in_order() {
+        let body = [
+            frame(b"a", b"StreamTitle='A';"),
+            frame(b"b", b"StreamTitle='B';"),
+            frame(b"c", b"StreamTitle='B';"),
+            frame(b"d", b"StreamTitle='A';"),
+            b"e".to_vec(),
+        ]
+        .concat();
+        let (tx, rx) = mpsc::channel();
+        let mut reader = IcyReader::new(Cursor::new(body), 1, Some(tx));
+        let mut audio = Vec::new();
+
+        reader.read_to_end(&mut audio).unwrap();
+
+        assert_eq!(audio, b"abcde");
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), ["A", "B", "A"]);
     }
 }
