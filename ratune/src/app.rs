@@ -4752,13 +4752,24 @@ impl App {
         self.playback.replay_gain
     }
 
+    // use self.playback instead? maybe self gets overwritten?
     pub fn update_replay_gain_mode(
         &mut self,
-        _album_id: Option<&String>,
-        _prev_album_id: Option<&String>,
-        _next_album_id: Option<&String>,
+        album_id: Option<&String>,
+        prev_album_id: Option<&String>,
+        next_album_id: Option<&String>,
     ) -> SongReplayGainMode {
         self.playback.replay_gain_mode = match self.config.replay_gain {
+            SongReplayGainMode::Auto => {
+                if album_id.is_some_and(|album_id| {
+                    prev_album_id.is_some_and(|a| a == album_id)
+                        || next_album_id.is_some_and(|a| a == album_id)
+                }) {
+                    SongReplayGainMode::Album
+                } else {
+                    SongReplayGainMode::Track
+                }
+            }
             m => m,
         };
         self.playback.replay_gain_mode

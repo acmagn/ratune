@@ -2041,6 +2041,7 @@ impl Config {
             .map(|mode| match mode.to_lowercase().trim() {
                 "album" => SongReplayGainMode::Album,
                 "track" => SongReplayGainMode::Track,
+                "auto" => SongReplayGainMode::Auto,
                 _ => SongReplayGainMode::None,
             })
             .unwrap_or(SongReplayGainMode::None);

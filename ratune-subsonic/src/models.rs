@@ -261,6 +261,7 @@ pub enum SongReplayGainMode {
     None,
     Track,
     Album,
+    Auto,
 }
 
 /// Glyphs for ratings: small stars sit closer to the text centerline than `★`/`☆`.
