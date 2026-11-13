@@ -36,7 +36,12 @@ impl<R: Read> IcyReader<R> {
         let mut block = vec![0u8; length];
         self.inner.read_exact(&mut block)?;
         let end = block.iter().position(|&byte| byte == 0).unwrap_or(length);
-        let text = String::from_utf8_lossy(&block[..end]);
+        let bytes = &block[..end];
+        let text = match std::str::from_utf8(bytes) {
+            Ok(text) => std::borrow::Cow::Borrowed(text),
+            // Many SHOUTcast servers send Latin-1, where every byte is the same code point.
+            Err(_) => std::borrow::Cow::Owned(bytes.iter().copied().map(char::from).collect()),
+        };
         let Some(title) = stream_title(&text).filter(|title| !title.is_empty()) else {
             return Ok(true);
         };
@@ -108,6 +113,15 @@ mod tests {
         bytes.extend_from_slice(metadata);
         bytes.resize(audio.len() + 1 + blocks * 16, 0);
         bytes
+    }
+
+    #[test]
+    fn decodes_latin1_titles() {
+        let body = [frame(b"a", b"StreamTitle='Beyonc\xe9';"), b"b".to_vec()].concat();
+        let (tx, rx) = mpsc::channel();
+        let mut reader = IcyReader::new(Cursor::new(body), 1, Some(tx));
+        reader.read_to_end(&mut Vec::new()).unwrap();
+        assert_eq!(rx.recv().unwrap(), "Beyonc\u{e9}");
     }
 
     #[test]

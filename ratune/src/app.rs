@@ -5466,10 +5466,14 @@ impl App {
         else {
             return;
         };
-        let station_name = if song.artist.as_deref() == Some("Radio") {
-            song.title.clone()
-        } else {
-            song.album.clone().unwrap_or_else(|| "Radio".to_owned())
+        let station = match &self.radio.stations {
+            LoadingState::Loaded(stations) => Self::radio_station_for_song(song, stations),
+            _ => None,
+        };
+        let station_name = match station {
+            Some(station) => station.name.clone(),
+            None if song.artist.as_deref() == Some("Radio") => song.title.clone(),
+            None => song.album.clone().unwrap_or_else(|| "Radio".to_owned()),
         };
         if let Some((artist, title)) = split_icy_stream_title(stream_title) {
             song.artist = Some(artist.to_owned());
