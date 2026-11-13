@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::header::ACCEPT_ENCODING;
-use rodio::{Decoder, DeviceSinkBuilder, Player};
+use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 
 use crate::adts_normalize::AdtsNormalizeReader;
 use crate::stream::{
@@ -40,12 +40,14 @@ pub enum PlayerCommand {
         url: String,
         duration: Option<Duration>,
         gen: u64,
+        replay_gain: Option<f32>,
     },
     /// Same semantics as [`PlayUrl`](Self::PlayUrl), but reads audio from a local cache file.
     PlayCached {
         path: PathBuf,
         duration: Option<Duration>,
         gen: u64,
+        replay_gain: Option<f32>,
     },
     /// Same as [`PlayUrl`](Self::PlayUrl), but streams incrementally for live radio.
     /// `duration` is always `None`; gapless enqueue is not used.
@@ -60,11 +62,13 @@ pub enum PlayerCommand {
     EnqueueNext {
         url: String,
         duration: Option<Duration>,
+        replay_gain: Option<f32>,
     },
     /// Gapless prefetch for an offline-cached next track (see [`PlayCached`](Self::PlayCached)).
     EnqueueNextCached {
         path: PathBuf,
         duration: Option<Duration>,
+        replay_gain: Option<f32>,
     },
     Pause,
     Resume,
@@ -195,6 +199,7 @@ struct PendingNext {
     total: Option<Duration>,
     /// Stream URL, when the next track isn't from the cache.
     url: Option<String>,
+    replay_gain: Option<f32>,
 }
 
 /// Per-track playback state, reset on every new play or stop.
@@ -239,14 +244,20 @@ impl Engine<'_> {
                 use mpsc::TryRecvError;
                 match self.cmd_rx.try_recv() {
                     Ok(PlayerCommand::Quit) | Err(TryRecvError::Disconnected) => return,
-                    Ok(PlayerCommand::PlayUrl { url, duration, gen }) => {
-                        self.play_payload(PlayPayload::Url(url), duration, gen);
+                    Ok(PlayerCommand::PlayUrl {
+                        url,
+                        duration,
+                        gen,
+                        replay_gain,
+                    }) => {
+                        self.play_payload(PlayPayload::Url(url), duration, gen, replay_gain);
                     }
                     Ok(PlayerCommand::PlayCached {
                         path,
                         duration,
                         gen,
-                    }) => self.play_payload(PlayPayload::Cached(path), duration, gen),
+                        replay_gain,
+                    }) => self.play_payload(PlayPayload::Cached(path), duration, gen, replay_gain),
                     Ok(PlayerCommand::PlayLiveStream { url, gen }) => {
                         self.play_live_stream(url, gen);
                     }
@@ -300,6 +311,14 @@ impl Engine<'_> {
 
     fn start(&mut self, source: TrackSource) {
         let tapped = SampleTap::new(source, self.sample_buffer.clone());
+        self.player.append(tapped);
+        self.player.play();
+        self.send(PlayerEvent::TrackStarted);
+    }
+
+    fn start_amplified(&mut self, source: TrackSource, replay_gain: f32) {
+        let amplified = source.amplify_decibel(replay_gain);
+        let tapped = SampleTap::new(amplified, self.sample_buffer.clone());
         self.player.append(tapped);
         self.player.play();
         self.send(PlayerEvent::TrackStarted);
@@ -368,14 +387,21 @@ impl Engine<'_> {
         };
         let total = pending.total;
         let url = pending.url.clone();
+        let replay_gain = pending.replay_gain;
         self.track.pending_next = None;
         match result {
             Ok(source) => {
                 self.track.next_total = total;
                 self.track.next_queued = true;
                 self.watch_download(url, &source);
-                let tapped = SampleTap::new(source, self.sample_buffer.clone());
-                self.player.append(tapped);
+                if let Some(replay_gain) = replay_gain {
+                    let amplified = source.amplify_decibel(replay_gain);
+                    let tapped = SampleTap::new(amplified, self.sample_buffer.clone());
+                    self.player.append(tapped);
+                } else {
+                    let tapped = SampleTap::new(source, self.sample_buffer.clone());
+                    self.player.append(tapped);
+                }
             }
             Err(e) => self.send(PlayerEvent::Error(format!("enqueue error: {e}"))),
         }
@@ -385,6 +411,7 @@ impl Engine<'_> {
         &mut self,
         total: Option<Duration>,
         url: Option<String>,
+        replay_gain: Option<f32>,
         load: impl FnOnce() -> Result<TrackSource> + Send + 'static,
     ) {
         let (tx, rx) = mpsc::channel();
@@ -394,7 +421,14 @@ impl Engine<'_> {
                 let _ = tx.send(load());
             });
         match spawned {
-            Ok(_) => self.track.pending_next = Some(PendingNext { rx, total, url }),
+            Ok(_) => {
+                self.track.pending_next = Some(PendingNext {
+                    rx,
+                    total,
+                    url,
+                    replay_gain,
+                })
+            }
             Err(e) => self.send(PlayerEvent::Error(format!("enqueue error: {e}"))),
         }
     }
@@ -404,33 +438,44 @@ impl Engine<'_> {
     /// Before loading, drains any further play commands already queued, turning N rapid
     /// skips into one fetch/read. After the blocking load, drains again; if a newer play
     /// command arrived mid-load, discards the decoder and recurses.
-    fn play_payload(&mut self, payload: PlayPayload, duration: Option<Duration>, gen: u64) {
+    fn play_payload(
+        &mut self,
+        payload: PlayPayload,
+        duration: Option<Duration>,
+        gen: u64,
+        replay_gain: Option<f32>,
+    ) {
         self.skip_gen = gen;
 
         // ── Pre-load drain ────────────────────────────────────────────────────
         let mut final_payload = payload;
         let mut final_duration = duration;
         let mut final_gen = gen;
+        let mut final_replay_gain = replay_gain;
         loop {
             match self.cmd_rx.try_recv() {
                 Ok(PlayerCommand::PlayUrl {
                     url: u,
                     duration: d,
                     gen: g,
+                    replay_gain: r,
                 }) => {
                     final_payload = PlayPayload::Url(u);
                     final_duration = d;
                     final_gen = g;
+                    final_replay_gain = r;
                     self.skip_gen = g;
                 }
                 Ok(PlayerCommand::PlayCached {
                     path: p,
                     duration: d,
                     gen: g,
+                    replay_gain: r,
                 }) => {
                     final_payload = PlayPayload::Cached(p);
                     final_duration = d;
                     final_gen = g;
+                    final_replay_gain = r;
                     self.skip_gen = g;
                 }
                 Ok(_other) => break,
@@ -454,7 +499,7 @@ impl Engine<'_> {
         };
 
         // ── Post-load drain ───────────────────────────────────────────────────
-        let mut newer: Option<(PlayPayload, Option<Duration>, u64)> = None;
+        let mut newer: Option<(PlayPayload, Option<Duration>, u64, Option<f32>)> = None;
         loop {
             match self.cmd_rx.try_recv() {
                 Ok(PlayerCommand::PlayLiveStream { url: u, gen: g }) => {
@@ -467,17 +512,19 @@ impl Engine<'_> {
                     url: u,
                     duration: d,
                     gen: g,
+                    replay_gain: r,
                 }) => {
                     self.skip_gen = g;
-                    newer = Some((PlayPayload::Url(u), d, g));
+                    newer = Some((PlayPayload::Url(u), d, g, r));
                 }
                 Ok(PlayerCommand::PlayCached {
                     path: p,
                     duration: d,
                     gen: g,
+                    replay_gain: r,
                 }) => {
                     self.skip_gen = g;
-                    newer = Some((PlayPayload::Cached(p), d, g));
+                    newer = Some((PlayPayload::Cached(p), d, g, r));
                 }
                 Ok(_other) => break,
                 Err(_) => break,
@@ -486,8 +533,8 @@ impl Engine<'_> {
 
         if self.skip_gen != final_gen {
             drop(source);
-            if let Some((p, d, g)) = newer {
-                self.play_payload(p, d, g);
+            if let Some((p, d, g, r)) = newer {
+                self.play_payload(p, d, g, r);
             }
             return;
         }
@@ -495,6 +542,10 @@ impl Engine<'_> {
         self.track.current_total = final_duration;
         if let PlayPayload::Url(url) = final_payload {
             self.watch_download(Some(url), &source);
+        }
+        if let Some(replay_gain) = final_replay_gain {
+            self.start_amplified(source, replay_gain);
+            return;
         }
         self.start(source);
     }
@@ -537,18 +588,20 @@ impl Engine<'_> {
                 url: u,
                 duration: d,
                 gen: g,
+                replay_gain: r,
             }) => {
                 drop(source);
-                self.play_payload(PlayPayload::Url(u), d, g);
+                self.play_payload(PlayPayload::Url(u), d, g, r);
                 return;
             }
             Ok(PlayerCommand::PlayCached {
                 path: p,
                 duration: d,
                 gen: g,
+                replay_gain: r,
             }) => {
                 drop(source);
-                self.play_payload(PlayPayload::Cached(p), d, g);
+                self.play_payload(PlayPayload::Cached(p), d, g, r);
                 return;
             }
             Ok(_) | Err(_) => {}
@@ -575,12 +628,22 @@ impl Engine<'_> {
                     "PlayUrl / PlayCached / PlayLiveStream must be dispatched via play_payload()"
                 );
             }
-            PlayerCommand::EnqueueNext { url, duration } => {
+            PlayerCommand::EnqueueNext {
+                url,
+                duration,
+                replay_gain,
+            } => {
                 let watch_url = url.clone();
-                self.spawn_enqueue(duration, Some(watch_url), move || load_url_track(&url));
+                self.spawn_enqueue(duration, Some(watch_url), replay_gain, move || {
+                    load_url_track(&url)
+                });
             }
-            PlayerCommand::EnqueueNextCached { path, duration } => {
-                self.spawn_enqueue(duration, None, move || {
+            PlayerCommand::EnqueueNextCached {
+                path,
+                duration,
+                replay_gain,
+            } => {
+                self.spawn_enqueue(duration, None, replay_gain, move || {
                     read_cached_and_decode(&path).map(TrackSource::from_memory)
                 });
             }

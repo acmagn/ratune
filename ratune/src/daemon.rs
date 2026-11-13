@@ -16,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use ratune_subsonic::models::SongReplayGainMode;
 use serde::{Deserialize, Serialize};
 
 use ratune_player::PlayerEvent;
@@ -91,6 +92,8 @@ pub struct SessionSnapshot {
     pub paused: bool,
     pub player_loaded: bool,
     pub np_pane_focus: NowPlayingPaneFocus,
+    pub replay_gain_mode: SongReplayGainMode,
+    pub replay_gain: Option<f32>,
 }
 
 impl SessionSnapshot {
@@ -108,6 +111,8 @@ impl SessionSnapshot {
             paused: app.playback.paused,
             player_loaded: app.playback.player_loaded,
             np_pane_focus: app.np_pane_focus,
+            replay_gain_mode: app.get_replay_gain_mode(),
+            replay_gain: app.get_replay_gain(),
         }
     }
 
@@ -128,6 +133,7 @@ impl SessionSnapshot {
             .map(|s| s.id.as_str())
             .hash(&mut h);
         self.np_pane_focus.hash(&mut h);
+        self.replay_gain_mode.hash(&mut h);
         h.finish()
     }
 }
@@ -860,6 +866,8 @@ mod tests {
             paused: true,
             player_loaded: true,
             np_pane_focus: NowPlayingPaneFocus::Queue,
+            replay_gain_mode: SongReplayGainMode::None,
+            replay_gain: None,
         };
         let bytes = serde_json::to_vec(&ClientMessage::SyncSession(snap.clone())).unwrap();
         let msg: ClientMessage = serde_json::from_slice(&bytes).unwrap();

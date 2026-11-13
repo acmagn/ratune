@@ -104,6 +104,13 @@ password = ""
 #                  provides mp3, flac, opus, and aac; other servers usually
 #                  provide mp3. Unlisted suffixes are direct-played. Playback
 #                  and the offline cache both use the transcoded bytes.
+# replay_gain    — Enable ReplayGain volume adjustments if the server supports it.
+#                  Disabled by default, but can be set to to "track", "album", or
+#                  "auto".
+#                  Uses track gain as a fallback if set to "album" but no album
+#                  gain is provided by the server.
+#                  When set to "auto", album mode is used if two consecutive tracks
+#                  are from the same album, otherwise track mode is used.
 
 [player]
 default_volume = 70
@@ -112,6 +119,7 @@ mpris = true
 queue_loop = true
 # queue_skip_duplicates = false
 # daemon = true
+# replay_gain = "none"
 
 # [player.transcode]
 # ape = "flac"
@@ -354,6 +362,7 @@ preset = "dynamic"
 [ui.general]
 tab_bar_position = "bottom"
 # show_volume_indicator = true
+# show_replaygain_state = false
 
 # -----------------------------------------------------------------------------
 # [ui.row_now_playing] — shared bottom strip defaults (Home + Browse + NP row mode)

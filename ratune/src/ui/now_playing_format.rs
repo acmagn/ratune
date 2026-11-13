@@ -234,6 +234,8 @@ pub fn format_now_playing_line(
 
 #[cfg(test)]
 mod tests {
+    use ratune_subsonic::models::SongReplayGainInfo;
+
     use super::*;
 
     #[test]
@@ -273,6 +275,12 @@ mod tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         };
         let stars = crate::config::RatingStarGlyphs::default();
         let ctx = NowPlayingContext {
@@ -321,6 +329,12 @@ mod tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         };
         let stars = crate::config::RatingStarGlyphs::default();
         let ctx = NowPlayingContext {
@@ -372,6 +386,12 @@ mod tests {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         };
         let stars = crate::config::RatingStarGlyphs::default();
         let ctx = NowPlayingContext {

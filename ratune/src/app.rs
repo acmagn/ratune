@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratune_subsonic::models::{SongReplayGainInfo, SongReplayGainMode};
 use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 
@@ -1305,6 +1306,8 @@ impl App {
         if self.player_mode == PlayerMode::Client && apply_progress {
             let new_id = self.playback.current_song.as_ref().map(|s| s.id.as_str());
             if prev_id.as_deref() != new_id {
+                self.playback.replay_gain_mode = snap.replay_gain_mode;
+                self.playback.replay_gain = snap.replay_gain;
                 self.client_on_song_changed();
             }
         }
@@ -4741,6 +4744,37 @@ impl App {
         }
     }
 
+    pub fn get_replay_gain_mode(&self) -> SongReplayGainMode {
+        self.playback.replay_gain_mode
+    }
+
+    pub fn get_replay_gain(&self) -> Option<f32> {
+        self.playback.replay_gain
+    }
+
+    // use self.playback instead? maybe self gets overwritten?
+    pub fn update_replay_gain_mode(
+        &mut self,
+        album_id: Option<&String>,
+        prev_album_id: Option<&String>,
+        next_album_id: Option<&String>,
+    ) -> SongReplayGainMode {
+        self.playback.replay_gain_mode = match self.config.replay_gain {
+            SongReplayGainMode::Auto => {
+                if album_id.is_some_and(|album_id| {
+                    prev_album_id.is_some_and(|a| a == album_id)
+                        || next_album_id.is_some_and(|a| a == album_id)
+                }) {
+                    SongReplayGainMode::Album
+                } else {
+                    SongReplayGainMode::Track
+                }
+            }
+            m => m,
+        };
+        self.playback.replay_gain_mode
+    }
+
     pub fn handle_player_event(&mut self, event: PlayerEvent) {
         let client = self.player_mode == PlayerMode::Client;
         let daemon = self.player_mode == PlayerMode::Daemon;
@@ -4843,14 +4877,37 @@ impl App {
                     let duration = next
                         .duration
                         .map(|s| std::time::Duration::from_secs(u64::from(s)));
+                    self.playback.replay_gain = next.replay_gain.amplification_db(
+                        self.update_replay_gain_mode(
+                            next.album_id.as_ref(),
+                            self.playback
+                                .current_song
+                                .as_ref()
+                                .and_then(|s| s.album_id.clone())
+                                .as_ref(),
+                            self.queue
+                                .songs
+                                .get(self.queue.cursor + 2)
+                                .and_then(|s| s.album_id.clone())
+                                .as_ref(),
+                        ),
+                    );
                     match self.resolve_playback(&next) {
                         ResolvedPlayback::Cached(path) => {
                             self.gapless_cached_song_id = Some(next.id.clone());
-                            self.send_player(PlayerCommand::EnqueueNextCached { path, duration });
+                            self.send_player(PlayerCommand::EnqueueNextCached {
+                                path,
+                                duration,
+                                replay_gain: self.get_replay_gain(),
+                            });
                         }
                         ResolvedPlayback::Url(url) => {
                             self.gapless_cached_song_id = None;
-                            self.send_player(PlayerCommand::EnqueueNext { url, duration });
+                            self.send_player(PlayerCommand::EnqueueNext {
+                                url,
+                                duration,
+                                replay_gain: self.get_replay_gain(),
+                            });
                         }
                         ResolvedPlayback::UnavailableOffline => {
                             self.gapless_cached_song_id = None;
@@ -5125,6 +5182,21 @@ impl App {
         if self.player_mode == PlayerMode::Client {
             if let Some(song) = self.queue.current().cloned() {
                 self.np_pane_focus = NowPlayingPaneFocus::Queue;
+                self.playback.replay_gain = song.replay_gain.amplification_db(
+                    self.update_replay_gain_mode(
+                        song.album_id.as_ref(),
+                        self.queue
+                            .peek_prev()
+                            .as_ref()
+                            .and_then(|s| s.album_id.clone())
+                            .as_ref(),
+                        self.queue
+                            .peek_next()
+                            .as_ref()
+                            .and_then(|s| s.album_id.clone())
+                            .as_ref(),
+                    ),
+                );
                 self.playback.current_song = Some(song);
                 self.playback.player_loaded = true;
                 #[cfg(unix)]
@@ -5151,6 +5223,19 @@ impl App {
                 .map(|s| std::time::Duration::from_secs(u64::from(s)));
             let song_id = song.id.clone();
             let resolved = self.resolve_playback(&song);
+            self.playback.replay_gain = song.replay_gain.amplification_db(
+                self.update_replay_gain_mode(
+                    song.album_id.as_ref(),
+                    self.queue
+                        .peek_prev()
+                        .and_then(|s| s.album_id.clone())
+                        .as_ref(),
+                    self.queue
+                        .peek_next()
+                        .and_then(|s| s.album_id.clone())
+                        .as_ref(),
+                ),
+            );
             self.playback.current_song = Some(song);
             self.playback.player_loaded = true;
             let gen = self.play_gen;
@@ -5161,13 +5246,17 @@ impl App {
                         path,
                         duration,
                         gen,
+                        replay_gain: self.get_replay_gain(),
                     });
                 }
                 ResolvedPlayback::Url(url) => {
                     self.playback_from_cache = None;
-                    let _ = self
-                        .player_tx
-                        .send(PlayerCommand::PlayUrl { url, duration, gen });
+                    let _ = self.player_tx.send(PlayerCommand::PlayUrl {
+                        url,
+                        duration,
+                        gen,
+                        replay_gain: self.get_replay_gain(),
+                    });
                 }
                 ResolvedPlayback::UnavailableOffline => {
                     self.playback_from_cache = None;
@@ -5209,7 +5298,25 @@ impl App {
                 &next.album_id.clone().unwrap_or_default(),
                 next.suffix.as_deref(),
             );
-            self.send_player(PlayerCommand::EnqueueNext { url, duration });
+            self.playback.replay_gain = next.replay_gain.amplification_db(
+                self.update_replay_gain_mode(
+                    next.album_id.as_ref(),
+                    self.queue
+                        .current()
+                        .and_then(|s| s.album_id.clone())
+                        .as_ref(),
+                    self.queue
+                        .songs
+                        .get(self.queue.cursor + 2)
+                        .and_then(|s| s.album_id.clone())
+                        .as_ref(),
+                ),
+            );
+            self.send_player(PlayerCommand::EnqueueNext {
+                url,
+                duration,
+                replay_gain: self.get_replay_gain(),
+            });
             self.flash_status_secs("Next track: bad cache — re-streaming", 5);
             return true;
         }
@@ -5263,11 +5370,30 @@ impl App {
             .and_then(|s| s.suffix.clone());
         let url = self.song_stream_url(&song_id, &album_id, suffix.as_deref());
         let gen = self.play_gen;
+        let replay_gain_mode = self.update_replay_gain_mode(
+            Some(&album_id),
+            self.queue
+                .peek_prev()
+                .and_then(|s| s.album_id.clone())
+                .as_ref(),
+            self.queue
+                .peek_next()
+                .and_then(|s| s.album_id.clone())
+                .as_ref(),
+        );
+        self.playback.replay_gain = self
+            .playback
+            .current_song
+            .as_ref()
+            .and_then(|s| s.replay_gain.amplification_db(replay_gain_mode));
         self.playback.player_loaded = true;
         self.playback_from_cache = None;
-        let _ = self
-            .player_tx
-            .send(PlayerCommand::PlayUrl { url, duration, gen });
+        let _ = self.player_tx.send(PlayerCommand::PlayUrl {
+            url,
+            duration,
+            gen,
+            replay_gain: self.get_replay_gain(),
+        });
         self.flash_status_secs("Cached track unreadable — re-streaming", 5);
         true
     }
@@ -5437,6 +5563,12 @@ impl App {
             path: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         }
     }
 
@@ -8160,6 +8292,12 @@ impl App {
                         size: None,
                         starred: None,
                         user_rating: None,
+                        replay_gain: SongReplayGainInfo {
+                            track_gain: None,
+                            album_gain: None,
+                            track_peak: None,
+                            album_peak: None,
+                        },
                     };
                     let result = self.enqueue_one(song);
                     if let Some(idx) = result.focus {
@@ -8187,6 +8325,7 @@ impl App {
                                 path,
                                 duration: dur,
                                 gen,
+                                replay_gain: None,
                             });
                         }
                         ResolvedPlayback::Url(url) => {
@@ -8195,6 +8334,7 @@ impl App {
                                 url,
                                 duration: dur,
                                 gen,
+                                replay_gain: None,
                             });
                         }
                         ResolvedPlayback::UnavailableOffline => {
@@ -8279,6 +8419,12 @@ impl App {
             size: None,
             starred: None,
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         };
         let was_empty = self.queue.songs.is_empty();
         self.enqueue_one(song);

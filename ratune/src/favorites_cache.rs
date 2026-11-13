@@ -74,7 +74,7 @@ pub fn save(path: &Path, starred: &Starred2) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratune_subsonic::Song;
+    use ratune_subsonic::{models::SongReplayGainInfo, Song};
 
     #[test]
     fn roundtrip_save_load() {
@@ -111,6 +111,12 @@ mod tests {
             path: None,
             starred: Some("2024-01-01T00:00:00Z".into()),
             user_rating: None,
+            replay_gain: SongReplayGainInfo {
+                track_gain: None,
+                album_gain: None,
+                track_peak: None,
+                album_peak: None,
+            },
         });
 
         let ts = save(&path, &starred).unwrap();

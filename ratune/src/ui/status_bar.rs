@@ -88,6 +88,8 @@ fn push_scrobble_status_spans(
 /// Right-side status chrome: shuffle mode, volume, help hint.
 struct RightChrome {
     shuffle_mode_label: Option<String>,
+    replay_gain_label: String,
+    show_replay_gain: bool,
     vol_label: String,
     show_volume: bool,
     width: usize,
@@ -98,6 +100,14 @@ const HELP_HINT: &str = "i — help";
 
 fn right_chrome(app: &App) -> RightChrome {
     let t = &app.theme;
+    let replay_gain_mode = app.get_replay_gain_mode();
+    let replay_gain_label = format!(
+        "{:?}{}",
+        replay_gain_mode,
+        app.get_replay_gain()
+            .map(|g| format!(": {:.2} dB", g))
+            .unwrap_or_default(),
+    );
     let vol_label = format!("{}%", app.config.default_volume);
     let shuffle_mode_label = if app.shuffle_mode {
         Some(format!("{} add", t.icons.mode_shuffle))
@@ -106,6 +116,9 @@ fn right_chrome(app: &App) -> RightChrome {
     };
 
     let mut width = HELP_HINT.len();
+    if app.config.show_replaygain_state {
+        width += STATUS_SEP.len() + replay_gain_label.len();
+    }
     if app.config.show_volume_indicator {
         width += STATUS_SEP.len() + vol_label.len();
     }
@@ -115,6 +128,8 @@ fn right_chrome(app: &App) -> RightChrome {
 
     RightChrome {
         shuffle_mode_label,
+        replay_gain_label,
+        show_replay_gain: app.config.show_replaygain_state,
         vol_label,
         show_volume: app.config.show_volume_indicator,
         width,
@@ -129,6 +144,13 @@ fn push_right_chrome(
 ) {
     if let Some(ref label) = chrome.shuffle_mode_label {
         spans.push(Span::styled(label.clone(), Style::default().fg(accent)));
+        spans.push(Span::styled(STATUS_SEP, Style::default().fg(dimmed)));
+    }
+    if chrome.show_replay_gain {
+        spans.push(Span::styled(
+            chrome.replay_gain_label.clone(),
+            Style::default().fg(accent),
+        ));
         spans.push(Span::styled(STATUS_SEP, Style::default().fg(dimmed)));
     }
     if chrome.show_volume {
