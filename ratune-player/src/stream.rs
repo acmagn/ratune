@@ -14,6 +14,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,8 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, RANGE};
 use reqwest::StatusCode;
+
+use crate::icy::IcyReader;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -172,6 +175,7 @@ pub fn open_stream(url: &str) -> Result<StreamingReader> {
         PREBUFFER_BYTES,
         Some(TRACK_PREBUFFER_WAIT),
         PrebufferMode::MinBytes,
+        None,
     )
 }
 
@@ -181,10 +185,22 @@ const MAX_PLAYLIST_DEPTH: u8 = 3;
 /// Same as [`open_stream`] but tuned for unbounded live radio (smaller prebuffer).
 /// Follows simple M3U/PLS playlist wrappers to the direct stream URL.
 pub fn open_live_stream(url: &str) -> Result<StreamingReader> {
-    open_live_stream_resolved(url, 0)
+    open_live_stream_resolved(url, 0, None)
 }
 
-fn open_live_stream_resolved(url: &str, depth: u8) -> Result<StreamingReader> {
+pub(crate) fn open_live_stream_with_metadata(
+    url: &str,
+) -> Result<(StreamingReader, mpsc::Receiver<String>)> {
+    let (tx, rx) = mpsc::channel();
+    let reader = open_live_stream_resolved(url, 0, Some(tx))?;
+    Ok((reader, rx))
+}
+
+fn open_live_stream_resolved(
+    url: &str,
+    depth: u8,
+    metadata_tx: Option<Sender<String>>,
+) -> Result<StreamingReader> {
     if depth >= MAX_PLAYLIST_DEPTH {
         return Err(anyhow!(
             "playlist redirect limit reached — use a direct stream URL"
@@ -192,7 +208,7 @@ fn open_live_stream_resolved(url: &str, depth: u8) -> Result<StreamingReader> {
     }
     let likely_aac = hint_from_url(url) == StreamFormatHint::Aac;
     let reader = if likely_aac {
-        open_stream_with_aac_prebuffer(url)?
+        open_stream_with_aac_prebuffer(url, metadata_tx.clone())?
     } else {
         open_stream_with_prebuffer(
             url,
@@ -200,10 +216,11 @@ fn open_live_stream_resolved(url: &str, depth: u8) -> Result<StreamingReader> {
             LIVE_PREBUFFER_BYTES,
             Some(LIVE_PREBUFFER_WAIT),
             PrebufferMode::MinBytes,
+            metadata_tx.clone(),
         )?
     };
     if let Some(next_url) = try_resolve_playlist_url(&reader)? {
-        return open_live_stream_resolved(&next_url, depth + 1);
+        return open_live_stream_resolved(&next_url, depth + 1, metadata_tx);
     }
     Ok(reader)
 }
@@ -215,13 +232,17 @@ enum PrebufferMode {
     AdtsSync,
 }
 
-fn open_stream_with_aac_prebuffer(url: &str) -> Result<StreamingReader> {
+fn open_stream_with_aac_prebuffer(
+    url: &str,
+    metadata_tx: Option<Sender<String>>,
+) -> Result<StreamingReader> {
     open_stream_with_prebuffer(
         url,
         StreamKind::Live,
         LIVE_AAC_PREBUFFER_BYTES,
         Some(LIVE_AAC_PREBUFFER_WAIT),
         PrebufferMode::AdtsSync,
+        metadata_tx,
     )
 }
 
@@ -231,6 +252,7 @@ fn open_stream_with_prebuffer(
     prebuffer: usize,
     max_wait: Option<Duration>,
     mode: PrebufferMode,
+    metadata_tx: Option<Sender<String>>,
 ) -> Result<StreamingReader> {
     let response = send_request(url, kind, None)?;
     let content_type = response
@@ -238,6 +260,16 @@ fn open_stream_with_prebuffer(
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
+    let icy_metaint = (kind == StreamKind::Live)
+        .then(|| {
+            response
+                .headers()
+                .get("icy-metaint")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|&value| value > 0)
+        })
+        .flatten();
     let total_len = match kind {
         StreamKind::Track => response.content_length(),
         StreamKind::Live => None,
@@ -252,7 +284,16 @@ fn open_stream_with_prebuffer(
     let fetch_url = url.to_owned();
     std::thread::Builder::new()
         .name("ratune-stream".into())
-        .spawn(move || download_thread(&fetch_url, kind, response, inner_dl))
+        .spawn(move || {
+            download_thread(
+                &fetch_url,
+                kind,
+                response,
+                inner_dl,
+                icy_metaint,
+                metadata_tx,
+            )
+        })
         .context("failed to spawn stream thread")?;
 
     let deadline = max_wait.map(|d| Instant::now() + d);
@@ -622,8 +663,15 @@ fn parse_bare_stream_url(buf: &[u8]) -> Option<String> {
 
 // ── Download thread ───────────────────────────────────────────────────────────
 
-fn download_thread(url: &str, kind: StreamKind, response: Response, inner: Arc<StreamInner>) {
-    if let Err(e) = download_into(url, kind, response, &inner) {
+fn download_thread(
+    url: &str,
+    kind: StreamKind,
+    response: Response,
+    inner: Arc<StreamInner>,
+    icy_metaint: Option<usize>,
+    metadata_tx: Option<Sender<String>>,
+) {
+    if let Err(e) = download_into(url, kind, response, &inner, icy_metaint, metadata_tx) {
         *inner.error.lock().unwrap() = Some(format!("{e:#}"));
     }
     {
@@ -681,6 +729,9 @@ fn send_request(url: &str, kind: StreamKind, offset: Option<u64>) -> Result<Resp
         .get(url)
         .header(ACCEPT, "*/*")
         .header(ACCEPT_ENCODING, "identity");
+    if kind == StreamKind::Live {
+        req = req.header("Icy-MetaData", "1");
+    }
     if let Some(offset) = offset {
         req = req.header(RANGE, format!("bytes={offset}-"));
     }
@@ -698,7 +749,7 @@ enum PumpEnd {
     Abandoned,
 }
 
-fn pump_body(response: &mut Response, inner: &Arc<StreamInner>) -> Result<PumpEnd> {
+fn pump_body(response: &mut impl Read, inner: &Arc<StreamInner>) -> Result<PumpEnd> {
     let mut chunk = vec![0u8; 32 * 1024];
     loop {
         if Arc::strong_count(inner) == 1 {
@@ -721,7 +772,17 @@ fn download_into(
     kind: StreamKind,
     mut response: Response,
     inner: &Arc<StreamInner>,
+    icy_metaint: Option<usize>,
+    metadata_tx: Option<Sender<String>>,
 ) -> Result<()> {
+    if let Some(interval) = icy_metaint {
+        let mut response = IcyReader::new(response, interval, metadata_tx);
+        return match pump_body(&mut response, inner) {
+            Ok(PumpEnd::Eof | PumpEnd::Abandoned) => Ok(()),
+            Err(error) => Err(error),
+        };
+    }
+
     let mut resumes = 0u32;
     loop {
         let err = match pump_body(&mut response, inner) {

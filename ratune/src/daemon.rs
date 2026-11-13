@@ -198,8 +198,8 @@ impl PlayerEventWire {
             PlayerEvent::TrackAdvanced => Self::TrackAdvanced,
             PlayerEvent::TrackEnded => Self::TrackEnded,
             PlayerEvent::SeekUnavailable => Self::SeekUnavailable,
-            // Cached by the daemon's own App; megabytes that clients don't need.
-            PlayerEvent::TrackDownloaded(_) => return None,
+            // Handled by the daemon before it broadcasts the updated snapshot.
+            PlayerEvent::TrackDownloaded(_) | PlayerEvent::IcyMetadata { .. } => return None,
             PlayerEvent::Error(s) => Self::Error(s.clone()),
         })
     }
