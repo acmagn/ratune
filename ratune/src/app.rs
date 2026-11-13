@@ -5226,9 +5226,8 @@ impl App {
             self.playback.replay_gain = song.replay_gain.amplification_db(
                 self.update_replay_gain_mode(
                     song.album_id.as_ref(),
-                    self.playback
-                        .current_song
-                        .as_ref()
+                    self.queue
+                        .peek_prev()
                         .and_then(|s| s.album_id.clone())
                         .as_ref(),
                     self.queue
