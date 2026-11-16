@@ -293,14 +293,18 @@ pub async fn run() -> Result<()> {
                 p.set_background_color(theme::color_to_rgba(app.theme.surface));
                 match app.config.album_art_protocol {
                     AlbumArtProtocol::Auto => {}
-                    AlbumArtProtocol::Kitty =>
-                        p.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty),
-                    AlbumArtProtocol::Iterm2 =>
-                        p.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2),
-                    AlbumArtProtocol::Sixel =>
-                        p.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel),
-                    AlbumArtProtocol::HalfBlocks =>
-                        p.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks),
+                    AlbumArtProtocol::Kitty => {
+                        p.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty)
+                    }
+                    AlbumArtProtocol::Iterm2 => {
+                        p.set_protocol_type(ratatui_image::picker::ProtocolType::Iterm2)
+                    }
+                    AlbumArtProtocol::Sixel => {
+                        p.set_protocol_type(ratatui_image::picker::ProtocolType::Sixel)
+                    }
+                    AlbumArtProtocol::HalfBlocks => {
+                        p.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks)
+                    }
                 }
                 app.cell_px = Some(p.font_size());
                 app.art_picker = Some(p);
