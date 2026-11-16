@@ -345,9 +345,11 @@ preset = "dynamic"
 # -----------------------------------------------------------------------------
 #
 # album_art_backend — "ratatui-image" (default) or "kitty-apc" (Kitty terminal APC + post-draw).
+# album_art_protocol - "auto" (default) or "kitty", "iterm2", "sixel" or "half-blocks" (only if backend is "ratatui-image").
 
 [ui]
 # album_art_backend = "ratatui-image"
+# album_art_protocol = "auto"
 
 # -----------------------------------------------------------------------------
 # [ui.general] — cross-tab chrome
