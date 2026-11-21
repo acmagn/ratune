@@ -18,6 +18,20 @@ pub enum AlbumArtBackend {
     KittyApc,
 }
 
+/// Override the `ratatui-image` protocol instead of auto-detecting it.
+/// Only used when `album_art_backend = "ratatui-image"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AlbumArtProtocol {
+    #[default]
+    Auto,
+    Kitty,
+    Iterm2,
+    Sixel,
+    #[serde(alias = "halfblocks")]
+    HalfBlocks,
+}
+
 // ── File-level serde structs ──────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -919,6 +933,8 @@ pub struct UiSection {
     #[serde(default)]
     pub album_art_backend: AlbumArtBackend,
     #[serde(default)]
+    pub album_art_protocol: AlbumArtProtocol,
+    #[serde(default)]
     pub nptab: Option<UiNpTabSection>,
     #[serde(default)]
     pub row_now_playing: Option<UiRowNowPlayingSection>,
@@ -1625,6 +1641,7 @@ pub struct Config {
     /// NowPlaying tab: show the album-art column.
     pub nowplaying_show_art: bool,
     pub album_art_backend: AlbumArtBackend,
+    pub album_art_protocol: AlbumArtProtocol,
     /// NowPlaying tab: album art side ("left" or "right").
     pub nowplaying_art_position: String,
     /// NowPlaying tab: queue side ("left" or "right").
@@ -2086,6 +2103,7 @@ impl Config {
             progress_style,
             nowplaying_show_art,
             album_art_backend: ui.album_art_backend,
+            album_art_protocol: ui.album_art_protocol,
             nowplaying_art_position,
             nowplaying_queue_position,
             nowplaying_left_width_percent,
