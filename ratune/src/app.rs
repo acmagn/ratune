@@ -5001,6 +5001,16 @@ impl App {
             PlayerEvent::SeekUnavailable => {
                 self.flash_status("Can't seek there yet — track still downloading");
             }
+            PlayerEvent::OutputLost(_) => {
+                self.flash_status_secs("Audio output lost — reconnecting…", 12);
+            }
+            PlayerEvent::OutputUnavailable(_) => {
+                if self.playback.player_loaded {
+                    self.playback.paused = true;
+                }
+                self.flash_status_secs("No audio output — paused. Resume to try again", 12);
+            }
+            PlayerEvent::OutputRestored => self.flash_status("Audio output restored"),
             PlayerEvent::Error(e) => {
                 // Corrupt / unreadable cache: drop the bad file and re-stream once when online.
                 // Skip when this TUI is a daemon client (the daemon owns playback recovery).

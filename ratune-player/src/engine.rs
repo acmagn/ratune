@@ -15,9 +15,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::header::ACCEPT_ENCODING;
-use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
+use rodio::{Decoder, Player, Source};
 
 use crate::adts_normalize::AdtsNormalizeReader;
+use crate::output::{Output, OutputChange};
 use crate::stream::{
     open_live_stream_with_metadata, open_stream, track_http_client, DownloadStatus,
     StreamFormatHint, StreamingReader,
@@ -104,6 +105,14 @@ pub enum PlayerEvent {
         stream_title: String,
         gen: u64,
     },
+    /// The audio device failed or couldn't be opened. Playback is held at its
+    /// position while the engine retries with a backoff.
+    OutputLost(String),
+    /// Retrying after [`OutputLost`](Self::OutputLost) failed. Playback is
+    /// paused; `Resume` or a new track tries again.
+    OutputUnavailable(String),
+    /// A device is working again after [`OutputLost`](Self::OutputLost).
+    OutputRestored,
     Error(String),
 }
 
@@ -168,23 +177,15 @@ fn player_thread(
     evt_tx: mpsc::Sender<PlayerEvent>,
     sample_buffer: SampleBuffer,
 ) {
-    // MixerDeviceSink must live for the duration of playback.
-    let mut device = match DeviceSinkBuilder::open_default_sink() {
-        Ok(d) => d,
-        Err(e) => {
-            let _ = evt_tx.send(PlayerEvent::Error(format!("audio device error: {e}")));
-            return;
-        }
-    };
-    // Suppress the default stderr message on drop. We control shutdown explicitly.
-    device.log_on_drop(false);
-
-    let player = Player::connect_new(device.mixer());
+    let (player, queue) = Player::new();
+    let mut output = Output::new(queue);
 
     Engine {
         cmd_rx: &cmd_rx,
         evt_tx: &evt_tx,
         player: &player,
+        output: &mut output,
+        want_playing: false,
         sample_buffer: &sample_buffer,
         skip_gen: 0,
         track: TrackState::default(),
@@ -195,7 +196,7 @@ fn player_thread(
     // Stop playback before releasing the audio device.
     player.stop();
     drop(player);
-    drop(device);
+    drop(output);
 }
 
 /// Next gapless track, still loading on a background thread.
@@ -226,6 +227,10 @@ struct Engine<'a> {
     cmd_rx: &'a mpsc::Receiver<PlayerCommand>,
     evt_tx: &'a mpsc::Sender<PlayerEvent>,
     player: &'a Player,
+    output: &'a mut Output,
+    /// Play/pause as requested by the caller. The player itself stays paused
+    /// while no output device is open.
+    want_playing: bool,
     sample_buffer: &'a SampleBuffer,
     /// Skip-generation counter: updated every time a PlayUrl / PlayCached is received.
     /// Used to discard stale loads when the user skips rapidly.
@@ -245,6 +250,8 @@ enum PlayPayload {
 impl Engine<'_> {
     fn run(&mut self) {
         loop {
+            self.poll_output();
+
             // ── Drain all pending commands (non-blocking) ─────────────────────
             loop {
                 use mpsc::TryRecvError;
@@ -282,6 +289,35 @@ impl Engine<'_> {
 
     fn send(&self, event: PlayerEvent) {
         let _ = self.evt_tx.send(event);
+    }
+
+    fn poll_output(&mut self) {
+        match self.output.poll() {
+            Some(OutputChange::Lost(reason)) => self.send(PlayerEvent::OutputLost(reason)),
+            Some(OutputChange::GaveUp(reason)) => {
+                self.want_playing = false;
+                self.send(PlayerEvent::OutputUnavailable(reason));
+            }
+            Some(OutputChange::Restored) => self.send(PlayerEvent::OutputRestored),
+            None => {}
+        }
+        self.apply_play_state();
+    }
+
+    fn set_playing(&mut self, playing: bool) {
+        self.want_playing = playing;
+        if playing {
+            self.output.retry();
+        }
+        self.poll_output();
+    }
+
+    fn apply_play_state(&self) {
+        if self.want_playing && self.output.is_up() {
+            self.player.play();
+        } else {
+            self.player.pause();
+        }
     }
 
     fn watch_download(&mut self, url: Option<String>, source: &TrackSource) {
@@ -334,16 +370,20 @@ impl Engine<'_> {
 
     fn start(&mut self, source: TrackSource) {
         let tapped = SampleTap::new(source, self.sample_buffer.clone());
+        // `append` after a stop blocks on the audio thread; drop a dead device first.
+        self.poll_output();
         self.player.append(tapped);
-        self.player.play();
+        self.set_playing(true);
         self.send(PlayerEvent::TrackStarted);
     }
 
     fn start_amplified(&mut self, source: TrackSource, replay_gain: f32) {
         let amplified = source.amplify_decibel(replay_gain);
         let tapped = SampleTap::new(amplified, self.sample_buffer.clone());
+        // `append` after a stop blocks on the audio thread; drop a dead device first.
+        self.poll_output();
         self.player.append(tapped);
-        self.player.play();
+        self.set_playing(true);
         self.send(PlayerEvent::TrackStarted);
     }
 
@@ -638,8 +678,10 @@ impl Engine<'_> {
         self.track.current_total = None;
         self.track.live_metadata_rx = Some(metadata_rx);
         let tapped = SampleTap::new(source, self.sample_buffer.clone());
+        // `append` after a stop blocks on the audio thread; drop a dead device first.
+        self.poll_output();
         self.player.append(tapped);
-        self.player.play();
+        self.set_playing(true);
         self.send(PlayerEvent::TrackStarted);
     }
 
@@ -671,17 +713,21 @@ impl Engine<'_> {
                     read_cached_and_decode(&path).map(TrackSource::from_memory)
                 });
             }
-            PlayerCommand::Pause => self.player.pause(),
-            PlayerCommand::Resume => self.player.play(),
+            PlayerCommand::Pause => self.set_playing(false),
+            PlayerCommand::Resume => self.set_playing(true),
             PlayerCommand::Stop => self.reset_tracks(),
             PlayerCommand::SetVolume(v) => self.player.set_volume(v),
-            PlayerCommand::Seek(pos) => match self.player.try_seek(pos) {
-                // Update prev_elapsed so the gapless-transition heuristic isn't
-                // confused by the sudden position jump.
-                Ok(()) => self.track.prev_elapsed = pos,
-                Err(e) if is_not_buffered(&e) => self.send(PlayerEvent::SeekUnavailable),
-                Err(_) => {}
-            },
+            PlayerCommand::Seek(pos) => {
+                // `try_seek` blocks on the audio thread; drop a dead device first.
+                self.poll_output();
+                match self.player.try_seek(pos) {
+                    // Update prev_elapsed so the gapless-transition heuristic isn't
+                    // confused by the sudden position jump.
+                    Ok(()) => self.track.prev_elapsed = pos,
+                    Err(e) if is_not_buffered(&e) => self.send(PlayerEvent::SeekUnavailable),
+                    Err(_) => {}
+                }
+            }
             PlayerCommand::Quit => {
                 // Handled by the command-drain loop in `run`.
                 unreachable!("Quit must be handled in the command-drain loop");

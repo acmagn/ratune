@@ -6,7 +6,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -182,6 +181,9 @@ pub enum PlayerEventWire {
     TrackAdvanced,
     TrackEnded,
     SeekUnavailable,
+    OutputLost(String),
+    OutputUnavailable(String),
+    OutputRestored,
     Error(String),
 }
 
@@ -198,6 +200,9 @@ impl PlayerEventWire {
             PlayerEvent::TrackAdvanced => Self::TrackAdvanced,
             PlayerEvent::TrackEnded => Self::TrackEnded,
             PlayerEvent::SeekUnavailable => Self::SeekUnavailable,
+            PlayerEvent::OutputLost(s) => Self::OutputLost(s.clone()),
+            PlayerEvent::OutputUnavailable(s) => Self::OutputUnavailable(s.clone()),
+            PlayerEvent::OutputRestored => Self::OutputRestored,
             // Handled by the daemon before it broadcasts the updated snapshot.
             PlayerEvent::TrackDownloaded(_) | PlayerEvent::IcyMetadata { .. } => return None,
             PlayerEvent::Error(s) => Self::Error(s.clone()),
@@ -220,6 +225,9 @@ impl From<PlayerEventWire> for PlayerEvent {
             PlayerEventWire::TrackAdvanced => Self::TrackAdvanced,
             PlayerEventWire::TrackEnded => Self::TrackEnded,
             PlayerEventWire::SeekUnavailable => Self::SeekUnavailable,
+            PlayerEventWire::OutputLost(s) => Self::OutputLost(s),
+            PlayerEventWire::OutputUnavailable(s) => Self::OutputUnavailable(s),
+            PlayerEventWire::OutputRestored => Self::OutputRestored,
             PlayerEventWire::Error(s) => Self::Error(s),
         }
     }
@@ -538,24 +546,22 @@ fn bind_listener() -> Result<UnixListener> {
     Ok(listener)
 }
 
-fn redirect_stdio(log: &Path) -> Result<()> {
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
-        .with_context(|| format!("opening {}", log.display()))?;
-    let fd = file.as_raw_fd();
-    unsafe {
-        libc::dup2(fd, libc::STDOUT_FILENO);
-        libc::dup2(fd, libc::STDERR_FILENO);
+/// Entry point for `ratune daemon`.
+pub async fn run_daemon() -> Result<()> {
+    crate::keyring_init::install_default_keyring_store();
+    let _ = crate::daemon_log::install(&log_path()?);
+    let result = serve().await;
+    if let Err(e) = &result {
+        eprintln!("error: {e:#}");
+    }
+    crate::daemon_log::sync();
+    if result.is_err() {
+        std::process::exit(1);
     }
     Ok(())
 }
 
-/// Entry point for `ratune daemon`.
-pub async fn run_daemon() -> Result<()> {
-    crate::keyring_init::install_default_keyring_store();
-    let _ = redirect_stdio(&log_path()?);
+async fn serve() -> Result<()> {
     eprintln!(
         "ratune daemon starting pid={} sock={}",
         std::process::id(),
@@ -571,10 +577,7 @@ pub async fn run_daemon() -> Result<()> {
         Err(e) => return Err(e),
     };
 
-    let config = Config::load().unwrap_or_else(|e| {
-        eprintln!("error: {e:#}");
-        std::process::exit(1);
-    });
+    let config = Config::load()?;
     let mut app = App::new_with_mode(config, PlayerMode::Daemon, None)?;
 
     if let Err(e) = crate::persist::restore_state(&mut app) {
@@ -662,6 +665,16 @@ pub async fn run_daemon() -> Result<()> {
         }
 
         while let Ok(event) = app.player_rx.try_recv() {
+            match &event {
+                PlayerEvent::OutputLost(reason) => {
+                    eprintln!("audio output lost: {reason}; reopening with backoff");
+                }
+                PlayerEvent::OutputUnavailable(reason) => {
+                    eprintln!("audio output unavailable: {reason}; playback paused");
+                }
+                PlayerEvent::OutputRestored => eprintln!("audio output restored"),
+                _ => {}
+            }
             let wire = PlayerEventWire::from_event(&event);
             let persist = matches!(
                 event,

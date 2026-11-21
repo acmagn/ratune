@@ -447,7 +447,7 @@ On Linux and macOS, a playback daemon is on by default so music does not stop wh
 - **Status:** `ratune status` shows whether the daemon is running.
 - **Disable:** `[player] daemon = false` in [`docs/sample-config.toml`](docs/sample-config.toml) restores in-process playback (music stops when the TUI exits).
 
-The socket lives under `$XDG_RUNTIME_DIR/ratune/` (or a per-user temp dir if that variable is unset). Logs go to `~/.local/state/ratune/daemon.log`.
+The socket lives under `$XDG_RUNTIME_DIR/ratune/` (or a per-user temp dir if that variable is unset). Logs go to `~/.local/state/ratune/daemon.log`, with a timestamp per line and repeated lines collapsed. Past 5 MB it is rotated to `daemon.log.1`.
 
 ---
 
