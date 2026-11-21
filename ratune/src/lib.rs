@@ -5,6 +5,8 @@ mod color;
 mod config;
 #[cfg(unix)]
 mod daemon;
+#[cfg(unix)]
+mod daemon_log;
 mod debug;
 mod desktop_notify;
 mod favorites_cache;
