@@ -55,6 +55,8 @@ pub(crate) struct Output {
     retry_at: Option<Instant>,
     /// A loss has been reported and the matching restore has not.
     outage: bool,
+    /// Only the first open may fall back to a non-default device.
+    first_open: bool,
 }
 
 impl Output {
@@ -68,6 +70,7 @@ impl Output {
             attempts: 0,
             retry_at: Some(Instant::now()),
             outage: false,
+            first_open: true,
         }
     }
 
@@ -111,7 +114,8 @@ impl Output {
         }
         // Only one consumer may pull the queue at a time.
         self.null_output = None;
-        match OpenDevice::open(&self.source) {
+        let any_device = std::mem::take(&mut self.first_open);
+        match OpenDevice::open(&self.source, any_device) {
             Ok(device) => {
                 self.device = Some(device);
                 None
@@ -162,9 +166,10 @@ struct OpenDevice {
 }
 
 impl OpenDevice {
-    fn open(source: &SharedSource) -> Result<Self, String> {
+    fn open(source: &SharedSource, any_device: bool) -> Result<Self, String> {
         let health = Arc::new(Health::default());
-        let mut sink = open_sink(error_callback(health.clone())).map_err(|e| describe(&e))?;
+        let mut sink =
+            open_sink(error_callback(health.clone()), any_device).map_err(|e| describe(&e))?;
         sink.log_on_drop(false);
         sink.mixer().add(source.clone());
         let now = Instant::now();
@@ -202,37 +207,42 @@ impl StallWatch {
     }
 }
 
-/// Same device selection as [`DeviceSinkBuilder::open_default_sink`], which
-/// can't take a custom error callback: the default device, then any non-null one.
-fn open_sink<E>(callback: E) -> Result<MixerDeviceSink, DeviceSinkError>
+/// The default device. With `any_device`, falls back to any non-null one like
+/// [`DeviceSinkBuilder::open_default_sink`] (which can't take a custom error callback).
+///
+/// Reopens must not fall back: with the sound server down, that opens raw
+/// hardware behind its back and keeps the card from it.
+fn open_sink<E>(callback: E, any_device: bool) -> Result<MixerDeviceSink, DeviceSinkError>
 where
     E: FnMut(CpalError) + Send + Clone + 'static,
 {
-    DeviceSinkBuilder::from_default_device()
-        .and_then(|b| {
-            b.with_error_callback(callback.clone())
-                .open_sink_or_fallback()
-        })
-        .or_else(|original| {
-            let Ok(devices) = rodio::cpal::default_host().output_devices() else {
-                return Err(original);
-            };
-            devices
-                .filter(|dev| {
-                    dev.description()
-                        .map(|desc| desc.driver().is_some_and(|driver| driver != "null"))
-                        .unwrap_or(false)
-                })
-                .find_map(|dev| {
-                    DeviceSinkBuilder::from_device(dev)
-                        .and_then(|b| {
-                            b.with_error_callback(callback.clone())
-                                .open_sink_or_fallback()
-                        })
-                        .ok()
-                })
-                .ok_or(original)
-        })
+    let default = DeviceSinkBuilder::from_default_device().and_then(|b| {
+        b.with_error_callback(callback.clone())
+            .open_sink_or_fallback()
+    });
+    if !any_device {
+        return default;
+    }
+    default.or_else(|original| {
+        let Ok(devices) = rodio::cpal::default_host().output_devices() else {
+            return Err(original);
+        };
+        devices
+            .filter(|dev| {
+                dev.description()
+                    .map(|desc| desc.driver().is_some_and(|driver| driver != "null"))
+                    .unwrap_or(false)
+            })
+            .find_map(|dev| {
+                DeviceSinkBuilder::from_device(dev)
+                    .and_then(|b| {
+                        b.with_error_callback(callback.clone())
+                            .open_sink_or_fallback()
+                    })
+                    .ok()
+            })
+            .ok_or(original)
+    })
 }
 
 fn describe(err: &dyn std::error::Error) -> String {
