@@ -3,7 +3,7 @@
 //! repeats, and rotates the file so it stays bounded.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
@@ -201,6 +201,17 @@ struct LogFile {
 
 impl LogFile {
     fn open(path: PathBuf) -> io::Result<Self> {
+        let rotated = rotated_path(&path);
+        let mut trimmed = Vec::new();
+        // Logs from before rotation existed could grow without bound (#110).
+        for p in [&rotated, &path] {
+            if let Some(len) = fs::metadata(p).ok().map(|m| m.len()) {
+                if len > 2 * MAX_LOG_BYTES {
+                    keep_tail(p, &rotated);
+                    trimmed.push(len);
+                }
+            }
+        }
         let mut log = Self {
             path,
             file: None,
@@ -210,6 +221,13 @@ impl LogFile {
             log.rotate();
         } else {
             log.reopen()?;
+        }
+        for len in trimmed {
+            log.write_line(&format!(
+                "trimmed an oversized old log ({}) to its last {}",
+                human_size(len),
+                human_size(MAX_LOG_BYTES)
+            ));
         }
         Ok(log)
     }
@@ -227,9 +245,7 @@ impl LogFile {
     /// On failure the file stays closed and lines are dropped, keeping the cap.
     fn rotate(&mut self) {
         self.file = None;
-        let mut rotated = self.path.clone().into_os_string();
-        rotated.push(".1");
-        if fs::rename(&self.path, rotated).is_ok() {
+        if fs::rename(&self.path, rotated_path(&self.path)).is_ok() {
             let _ = self.reopen();
         }
     }
@@ -245,6 +261,46 @@ impl LogFile {
         if file.write_all(entry.as_bytes()).is_ok() {
             self.len += entry.len() as u64;
         }
+    }
+}
+
+fn rotated_path(path: &Path) -> PathBuf {
+    let mut rotated = path.to_path_buf().into_os_string();
+    rotated.push(".1");
+    rotated.into()
+}
+
+/// Replace `to` with the last [`MAX_LOG_BYTES`] of `from` (from a line
+/// start), then delete `from` if it's a different file. `from` is deleted
+/// even if the copy fails: a full disk is likely when the log is huge.
+fn keep_tail(from: &Path, to: &Path) {
+    let mut tmp = to.to_path_buf().into_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let copied = (|| -> io::Result<()> {
+        let mut src = File::open(from)?;
+        let len = src.metadata()?.len();
+        src.seek(SeekFrom::Start(len.saturating_sub(MAX_LOG_BYTES)))?;
+        let mut tail = Vec::new();
+        src.take(MAX_LOG_BYTES).read_to_end(&mut tail)?;
+        let start = tail.iter().position(|&b| b == b'\n').map_or(0, |i| i + 1);
+        fs::write(&tmp, &tail[start..])?;
+        fs::rename(&tmp, to)
+    })();
+    if copied.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    if from != to {
+        let _ = fs::remove_file(from);
+    }
+}
+
+fn human_size(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    if bytes >= 1024 * MB {
+        format!("{:.1} GB", bytes as f64 / (1024 * MB) as f64)
+    } else {
+        format!("{} MB", bytes / MB)
     }
 }
 
@@ -346,6 +402,44 @@ mod tests {
         log.write_line("next");
         assert!(fs::read_to_string(&rotated).unwrap().ends_with(" hello\n"));
         assert!(fs::read_to_string(&path).unwrap().ends_with(" next\n"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn trims_runaway_logs_to_their_tail() {
+        let dir = std::env::temp_dir().join(format!("ratune-trim-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemon.log");
+        let rotated = dir.join("daemon.log.1");
+        let huge = |p: &Path, last: &str| {
+            let mut f = File::create(p).unwrap();
+            f.set_len(3 * MAX_LOG_BYTES).unwrap();
+            f.seek(SeekFrom::End(0)).unwrap();
+            write!(f, "\nold line\n{last}\n").unwrap();
+        };
+        huge(&rotated, "end of rotated");
+        huge(&path, "end of live");
+
+        let mut log = LogFile::open(path.clone()).unwrap();
+        log.write_line("fresh");
+
+        let kept = fs::read(&rotated).unwrap();
+        assert!(kept.len() as u64 <= MAX_LOG_BYTES);
+        assert!(kept.ends_with(b"old line\nend of live\n"));
+        assert!(!dir.join("daemon.log.1.tmp").exists());
+        let live = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = live
+            .lines()
+            .map(|l| l.splitn(3, ' ').nth(2).unwrap())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "trimmed an oversized old log (15 MB) to its last 5 MB",
+                "trimmed an oversized old log (15 MB) to its last 5 MB",
+                "fresh"
+            ]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
