@@ -248,6 +248,16 @@ fn mark_starred_songs(
     }
 }
 
+/// Where a background-fetched block of tracks lands in the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueInsert {
+    Append,
+    /// Insert at the front (album / track order preserved).
+    Prepend,
+    /// Replace the queue contents (the caller has already stopped playback).
+    Replace,
+}
+
 /// Outcome of a queue add. `focus` is the row the highlight moved to.
 struct QueueAddResult {
     added: usize,
@@ -431,8 +441,7 @@ pub enum LibraryUpdate {
     AllTracksForArtist {
         songs: Vec<ratune_subsonic::Song>,
         start_playing: bool,
-        /// When true, insert all songs at the front of the queue (album / track order preserved).
-        prepend: bool,
+        insert: QueueInsert,
     },
     /// Raw image bytes for a cover art ID fetched from Navidrome.
     CoverArt {
@@ -1941,7 +1950,7 @@ impl App {
         self.playback.elapsed = std::time::Duration::ZERO;
         self.playback.paused = false;
         self.playback.player_loaded = false;
-        self.fetch_and_replace_queue_with_album(album_id, true);
+        self.fetch_and_replace_queue_with_album(album_id);
     }
 
     /// Fetch `getAlbumList2` lists for the Recently Added / Recently Released panels.
@@ -2332,25 +2341,11 @@ impl App {
         Some(songs)
     }
 
-    fn flash_queue_bulk_add(&mut self, added: usize, skipped: usize, replaced: bool) {
-        if !replaced && added == 0 {
-            return;
-        }
-        if replaced {
-            if added == 1 {
-                self.flash_status_secs("Replaced queue with 1 track", 3);
-            } else {
-                self.flash_status_secs(format!("Replaced queue with {added} tracks"), 3);
-            }
-        } else if skipped > 0 {
-            self.flash_status_secs(
-                format!("Added {added} tracks ({skipped} already in queue)"),
-                3,
-            );
-        } else if added == 1 {
-            self.flash_status_secs("Added 1 track to queue", 3);
+    fn flash_queue_replaced(&mut self, added: usize) {
+        if added == 1 {
+            self.flash_status_secs("Replaced queue with 1 track", 3);
         } else {
-            self.flash_status_secs(format!("Added {added} tracks to queue"), 3);
+            self.flash_status_secs(format!("Replaced queue with {added} tracks"), 3);
         }
     }
 
@@ -3278,25 +3273,7 @@ impl App {
             self.enqueue_append(collected)
         };
         self.play_if_queue_was_empty(was_empty);
-        let n = result.added;
-        if replace {
-            self.flash_status_secs(
-                if n == 1 {
-                    "Replaced queue (1 track)".into()
-                } else {
-                    format!("Replaced queue ({n} tracks)")
-                },
-                3,
-            );
-        } else if n > 1 {
-            let msg = if result.skipped > 0 {
-                format!("Added {n} tracks ({} already in queue)", result.skipped)
-            } else {
-                format!("Added {n} tracks to queue")
-            };
-            self.flash_status_secs(msg, 3);
-        }
-        n
+        result.added
     }
 
     /// Spawn a task to fetch albums for the given artist.
@@ -3756,9 +3733,8 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// Spawn a task to fetch all tracks for an album, then replace the queue
-    /// and start playing (or just append, depending on `replace`).
-    pub fn fetch_and_replace_queue_with_album(&self, album_id: String, start_playing: bool) {
+    /// Spawn a task to fetch all tracks for an album, then replace the queue and start playing.
+    pub fn fetch_and_replace_queue_with_album(&self, album_id: String) {
         if !self.remote_available() {
             return;
         }
@@ -3772,8 +3748,8 @@ impl App {
                     let _ = tx
                         .send(LibraryUpdate::AllTracksForArtist {
                             songs,
-                            start_playing,
-                            prepend: false,
+                            start_playing: true,
+                            insert: QueueInsert::Replace,
                         })
                         .await;
                 }
@@ -3798,7 +3774,7 @@ impl App {
                         .send(LibraryUpdate::AllTracksForArtist {
                             songs,
                             start_playing: false,
-                            prepend: false,
+                            insert: QueueInsert::Append,
                         })
                         .await;
                 }
@@ -3808,8 +3784,8 @@ impl App {
     }
 
     /// Spawn one task that fetches several albums in order and delivers all of their
-    /// tracks as a single `AllTracksForArtist` update.
-    pub fn fetch_albums_into_queue(&self, album_ids: Vec<String>, start_playing: bool) {
+    /// tracks as a single `AllTracksForArtist` update. `replace` also starts playback.
+    pub fn fetch_albums_into_queue(&self, album_ids: Vec<String>, replace: bool) {
         if !self.remote_available() {
             return;
         }
@@ -3833,8 +3809,12 @@ impl App {
             let _ = tx
                 .send(LibraryUpdate::AllTracksForArtist {
                     songs,
-                    start_playing,
-                    prepend: false,
+                    start_playing: replace,
+                    insert: if replace {
+                        QueueInsert::Replace
+                    } else {
+                        QueueInsert::Append
+                    },
                 })
                 .await;
         });
@@ -3846,9 +3826,9 @@ impl App {
         &self,
         artist_id: String,
         start_playing: bool,
-        prepend: bool,
+        insert: QueueInsert,
     ) {
-        self.fetch_all_tracks_for_artists(vec![artist_id], start_playing, prepend);
+        self.fetch_all_tracks_for_artists(vec![artist_id], start_playing, insert);
     }
 
     /// Like [`Self::fetch_all_tracks_for_artist`] for several artists, delivered as one update.
@@ -3856,7 +3836,7 @@ impl App {
         &self,
         artist_ids: Vec<String>,
         start_playing: bool,
-        prepend: bool,
+        insert: QueueInsert,
     ) {
         if !self.remote_available() {
             return;
@@ -3897,7 +3877,7 @@ impl App {
                 .send(LibraryUpdate::AllTracksForArtist {
                     songs,
                     start_playing,
-                    prepend,
+                    insert,
                 })
                 .await;
         });
@@ -4051,7 +4031,7 @@ impl App {
             LibraryUpdate::AllTracksForArtist {
                 mut songs,
                 start_playing,
-                prepend,
+                insert,
             } => {
                 let was_empty = self.queue.songs.is_empty();
                 songs.sort_by_key(|s| {
@@ -4062,10 +4042,16 @@ impl App {
                         s.track.unwrap_or(0),
                     )
                 });
-                if prepend {
-                    self.enqueue_prepend(songs);
-                } else {
-                    self.enqueue_append(songs);
+                match insert {
+                    QueueInsert::Append => {
+                        self.enqueue_append(songs);
+                    }
+                    QueueInsert::Prepend => {
+                        self.enqueue_prepend(songs);
+                    }
+                    QueueInsert::Replace => {
+                        self.enqueue_replace(songs);
+                    }
                 }
                 if start_playing {
                     self.play_if_queue_was_empty(was_empty);
@@ -4453,14 +4439,8 @@ impl App {
                             return;
                         }
                         let was_empty = self.queue.songs.is_empty();
-                        let added = self.enqueue_append(tracks);
+                        self.enqueue_append(tracks);
                         self.play_if_queue_was_empty(was_empty);
-                        if added.added > 0 {
-                            self.flash_status_secs(
-                                format!("Added {} tracks to queue", added.added),
-                                3,
-                            );
-                        }
                     }
                     Err(e) => {
                         self.flash_status_secs(format!("Library fetch failed: {e}"), 6);
@@ -8563,7 +8543,11 @@ impl App {
         let Some((artist_id, _)) = self.home.rediscover.get(idx).cloned() else {
             return;
         };
-        self.fetch_all_tracks_for_artist(artist_id, self.queue.songs.is_empty(), false);
+        self.fetch_all_tracks_for_artist(
+            artist_id,
+            self.queue.songs.is_empty(),
+            QueueInsert::Append,
+        );
     }
 
     fn handle_add_to_queue(&mut self) {
@@ -8606,13 +8590,8 @@ impl App {
             return;
         }
         let was_empty = self.queue.songs.is_empty();
-        let added = self.enqueue_append(songs);
+        self.enqueue_append(songs);
         self.play_if_queue_was_empty(was_empty);
-        if added.added == 1 {
-            self.flash_status_secs("Added 1 track to queue", 3);
-        } else if added.added > 1 {
-            self.flash_status_secs(format!("Added {} tracks to queue", added.added), 3);
-        }
     }
 
     fn handle_add_all_to_queue(&mut self, mode: AddAllMode) {
@@ -8620,33 +8599,29 @@ impl App {
             let Some(songs) = self.folder_preview_songs_for_queue() else {
                 return;
             };
-            let prepend = matches!(mode, AddAllMode::Prepend);
-            let replaced = matches!(mode, AddAllMode::ReplaceAlbum | AddAllMode::ReplaceArtist);
-            let result = match mode {
+            match mode {
                 AddAllMode::ReplaceAlbum | AddAllMode::ReplaceArtist => {
                     self.send_player(PlayerCommand::Stop);
                     self.playback.current_song = None;
                     self.playback.elapsed = std::time::Duration::ZERO;
                     self.playback.paused = false;
                     self.playback.player_loaded = false;
-                    let result = self.enqueue_replace(songs);
+                    self.enqueue_replace(songs);
                     if !self.queue.songs.is_empty() {
                         self.play_current();
                     }
-                    result
                 }
-                AddAllMode::Append | AddAllMode::Prepend => {
+                AddAllMode::Append => {
                     let was_empty = self.queue.songs.is_empty();
-                    let result = if prepend {
-                        self.enqueue_prepend(songs)
-                    } else {
-                        self.enqueue_append(songs)
-                    };
+                    self.enqueue_append(songs);
                     self.play_if_queue_was_empty(was_empty);
-                    result
                 }
-            };
-            self.flash_queue_bulk_add(result.added, result.skipped, replaced);
+                AddAllMode::Prepend => {
+                    let was_empty = self.queue.songs.is_empty();
+                    self.enqueue_prepend(songs);
+                    self.play_if_queue_was_empty(was_empty);
+                }
+            }
             return;
         }
         match mode {
@@ -8659,7 +8634,12 @@ impl App {
                         if let Some(artist) = self.library.current_artist() {
                             let artist_id = artist.id.clone();
                             let start_playing = self.queue.songs.is_empty();
-                            self.fetch_all_tracks_for_artist(artist_id, start_playing, prepend);
+                            let insert = if prepend {
+                                QueueInsert::Prepend
+                            } else {
+                                QueueInsert::Append
+                            };
+                            self.fetch_all_tracks_for_artist(artist_id, start_playing, insert);
                         }
                     }
                     BrowserColumn::Tracks => {
@@ -8732,7 +8712,7 @@ impl App {
         };
         let artist_id = artist.id.clone();
         self.handle_clear_queue();
-        self.fetch_all_tracks_for_artist(artist_id, true, false);
+        self.fetch_all_tracks_for_artist(artist_id, true, QueueInsert::Replace);
     }
 
     fn handle_shuffle(&mut self) {
@@ -8813,6 +8793,27 @@ impl App {
         }
     }
 
+    /// Confirm a non-empty append/prepend in the status bar. `first` is the first added song.
+    fn note_queue_add(
+        &mut self,
+        first: Option<&ratune_subsonic::Song>,
+        result: &QueueAddResult,
+        front: bool,
+    ) {
+        let place = if front { "front of queue" } else { "queue" };
+        let mut msg = match (result.added, first) {
+            (1, Some(song)) => match song.artist.as_deref().filter(|a| !a.is_empty()) {
+                Some(artist) => format!("Added to {place}: {} — {artist}", song.title),
+                None => format!("Added to {place}: {}", song.title),
+            },
+            (n, _) => format!("Added {n} tracks to {place}"),
+        };
+        if result.skipped > 0 {
+            msg.push_str(&format!(" ({} already in queue)", result.skipped));
+        }
+        self.flash_status_secs(msg, 3);
+    }
+
     /// Start playback at the first row when an add filled an empty queue.
     /// The highlight stays on that row so later track changes keep following it.
     fn play_if_queue_was_empty(&mut self, was_empty: bool) {
@@ -8849,14 +8850,17 @@ impl App {
             return result;
         }
         let added = songs.len();
+        let first = songs.first().cloned();
         self.queue.append_block(songs, self.shuffle_mode);
         let focus = self.queue.songs.len().saturating_sub(1);
         self.focus_queue_selection(focus);
-        QueueAddResult {
+        let result = QueueAddResult {
             added,
             skipped,
             focus: Some(focus),
-        }
+        };
+        self.note_queue_add(first.as_ref(), &result, false);
+        result
     }
 
     /// Prepend a block, shuffling play order when shuffle mode is on.
@@ -8877,17 +8881,20 @@ impl App {
             return result;
         }
         let added = songs.len();
+        let first = songs.first().cloned();
         if self.shuffle_mode {
             self.queue.prepend_block(songs, true);
         } else {
             self.queue.prepend_songs(songs);
         }
         self.focus_queue_selection(0);
-        QueueAddResult {
+        let result = QueueAddResult {
             added,
             skipped,
             focus: Some(0),
-        }
+        };
+        self.note_queue_add(first.as_ref(), &result, true);
+        result
     }
 
     /// Replace the queue contents (caller handles stop/clear playback as needed).
@@ -8899,6 +8906,7 @@ impl App {
         self.queue.replace_with_block(songs, self.shuffle_mode);
         let focus = if added > 0 {
             self.focus_queue_selection(0);
+            self.flash_queue_replaced(added);
             Some(0)
         } else {
             None
@@ -9245,7 +9253,11 @@ impl App {
         self.browser_focus = BrowserColumn::Artists;
         if let Some(artist) = self.library.current_artist() {
             let artist_id = artist.id.clone();
-            self.fetch_all_tracks_for_artist(artist_id, self.queue.songs.is_empty(), false);
+            self.fetch_all_tracks_for_artist(
+                artist_id,
+                self.queue.songs.is_empty(),
+                QueueInsert::Append,
+            );
         }
     }
 
@@ -9869,7 +9881,7 @@ impl App {
                         self.queue.songs.clear();
                         self.queue.zero_position();
                         self.queue.clear_shuffle_state();
-                        self.fetch_and_replace_queue_with_album(album.id.clone(), true);
+                        self.fetch_and_replace_queue_with_album(album.id.clone());
                     } else {
                         self.fetch_and_append_album_to_queue(album.id.clone());
                     }
@@ -9881,9 +9893,17 @@ impl App {
                         self.queue.songs.clear();
                         self.queue.zero_position();
                         self.queue.clear_shuffle_state();
-                        self.fetch_all_tracks_for_artist(artist.id.clone(), true, false);
+                        self.fetch_all_tracks_for_artist(
+                            artist.id.clone(),
+                            true,
+                            QueueInsert::Replace,
+                        );
                     } else {
-                        self.fetch_all_tracks_for_artist(artist.id.clone(), false, false);
+                        self.fetch_all_tracks_for_artist(
+                            artist.id.clone(),
+                            false,
+                            QueueInsert::Append,
+                        );
                     }
                 }
             }
@@ -9951,15 +9971,10 @@ impl App {
             }
             Action::FavoritesPlay => {
                 self.favorites_queue_action(true, self.favorites_focus_scope());
-                self.favorites_overlay.visible = false;
             }
             Action::FavoritesAddAndClose => {
-                if self.favorites_overlay.focus == FavoritesFocus::Categories {
-                    self.favorites_overlay.focus = FavoritesFocus::Items;
-                } else {
-                    self.favorites_queue_action(false, FavoritesScope::Selected);
-                    self.favorites_overlay.visible = false;
-                }
+                self.favorites_queue_action(false, self.favorites_focus_scope());
+                self.favorites_overlay.visible = false;
             }
             Action::FavoritesAppend => {
                 self.favorites_queue_action(false, self.favorites_focus_scope());
@@ -10060,7 +10075,12 @@ impl App {
                 if replace {
                     self.clear_queue_for_replace();
                 }
-                self.fetch_all_tracks_for_artists(ids, replace, false);
+                let insert = if replace {
+                    QueueInsert::Replace
+                } else {
+                    QueueInsert::Append
+                };
+                self.fetch_all_tracks_for_artists(ids, replace, insert);
             }
         }
     }
@@ -10076,6 +10096,7 @@ impl App {
             return;
         }
         let mut songs: Vec<ratune_subsonic::Song> = songs.to_vec();
+        let mut offline_note = None;
         if self.favorites_overlay.offline_snapshot && !self.remote_available() {
             let before = songs.len();
             songs.retain(|s| self.cache.get_const(&s.id));
@@ -10091,14 +10112,11 @@ impl App {
                 return;
             }
             if songs.len() < before {
-                self.flash_status_secs(
-                    format!(
-                        "Queued {} cached track(s) ({} not downloaded)",
-                        songs.len(),
-                        before - songs.len()
-                    ),
-                    4,
-                );
+                offline_note = Some(format!(
+                    "Queued {} cached track(s) ({} not downloaded)",
+                    songs.len(),
+                    before - songs.len()
+                ));
             }
         }
         if replace {
@@ -10115,6 +10133,9 @@ impl App {
             let was_empty = self.queue.songs.is_empty();
             self.enqueue_append(songs);
             self.play_if_queue_was_empty(was_empty);
+        }
+        if let Some(note) = offline_note {
+            self.flash_status_secs(note, 4);
         }
     }
 

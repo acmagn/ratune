@@ -94,11 +94,11 @@ pub enum Action {
     FavoritesFocusCategories,
     /// Favorites overlay: focus items list.
     FavoritesFocusItems,
-    /// Favorites overlay: replace queue and play, then close (whole section from the
-    /// category pane, highlighted item from the items pane).
+    /// Favorites overlay: replace queue and play without closing (whole section from
+    /// the category pane, highlighted item from the items pane).
     FavoritesPlay,
-    /// Favorites overlay: append the highlighted item and close. From the category
-    /// pane this moves focus to the items pane instead.
+    /// Favorites overlay: append and close (whole section from the category pane,
+    /// highlighted item from the items pane).
     FavoritesAddAndClose,
     /// Favorites overlay: append without closing (whole section from the category
     /// pane, highlighted item from the items pane).
