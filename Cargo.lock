@@ -2837,7 +2837,7 @@ dependencies = [
 
 [[package]]
 name = "ratune-player"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "ratune-subsonic"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "hex",
