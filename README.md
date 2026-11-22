@@ -260,6 +260,8 @@ export SUBSONIC_PASS="your_password"
 default_volume = 70
 max_bit_rate = 0
 queue_loop = true
+# queue_consume = false          # remove each track from the queue once it finishes playing
+# queue_consume_skipped = false  # with consume on, also remove tracks skipped with next_track
 # queue_skip_duplicates = false  # skip a queue add when that song id is already queued
 # daemon = true
 
@@ -472,6 +474,7 @@ These are defaults; everything is overridable in `config.toml`. Press `i` in the
 | `Ctrl+x` | Toggle shuffle mode (incoming adds land shuffled) |
 | `z` | Unshuffle queue |
 | `Q` | Toggle queue loop |
+| `c` | Toggle queue consume (remove tracks once played) |
 | `Shift+R` | Internet radio station picker |
 | `Ctrl+g` | Now Playing: radio pane ↔ library queue |
 | `+` / `-` | Volume |
@@ -499,7 +502,7 @@ Ratune captures pointer input when your terminal supports it. Keyboard navigatio
 | Area | Click |
 | --- | --- |
 | Tab bar | Switch Home / Browse / Now playing |
-| Transport row | Shuffle (`⇄`), previous, play/pause, next, queue loop (`↻`) |
+| Transport row | Shuffle (`⇄`), previous, play/pause, next, queue loop (`↻`), queue consume (`⊖`) |
 | Progress bar | Seek to position |
 | Browse | Select artist, album, or track; folder mode: directory or preview row |
 | Home | Recent albums (including art strip), recent tracks, rediscover rows |

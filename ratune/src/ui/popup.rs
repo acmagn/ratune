@@ -29,6 +29,7 @@ fn sections(
         ("Ctrl+x", "Toggle shuffle mode (incoming adds)"),
         ("z", "Unshuffle queue"),
         ("Q", "Toggle queue loop"),
+        ("c", "Toggle queue consume"),
     ];
     if server_search_enabled {
         playback.insert(4, ("Ctrl+s", "Server search (search3)"));

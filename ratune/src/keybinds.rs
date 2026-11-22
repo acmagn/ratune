@@ -182,6 +182,8 @@ pub struct Keybinds {
     /// Toggle sticky shuffle mode for incoming adds (default: Ctrl+x).
     pub toggle_shuffle_mode: KeySpec,
     pub toggle_queue_loop: KeySpec,
+    /// Toggle queue consume (remove tracks once played). Default: `c`
+    pub toggle_queue_consume: KeySpec,
     pub toggle_radio: KeySpec,
     pub np_focus_queue: KeySpec,
     pub clear_queue: KeySpec,
@@ -398,6 +400,10 @@ impl Keybinds {
                     code: KeyCode::Char('q'),
                     modifiers: KeyModifiers::SHIFT,
                 },
+            ),
+            toggle_queue_consume: resolve(
+                sec.toggle_queue_consume.as_deref(),
+                KeySpec::new(KeyCode::Char('c')),
             ),
             toggle_radio: resolve(
                 sec.toggle_radio.as_deref(),
@@ -725,6 +731,20 @@ mod tests {
         assert!(kb
             .toggle_queue_loop
             .matches(KeyCode::Char('q'), KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn toggle_queue_consume_defaults_to_c() {
+        let kb = Keybinds::from_section(&KeybindsSection::default());
+        assert!(kb
+            .toggle_queue_consume
+            .matches(KeyCode::Char('c'), KeyModifiers::empty()));
+        assert!(!kb
+            .toggle_queue_consume
+            .matches(KeyCode::Char('c'), KeyModifiers::SHIFT));
+        assert!(!kb
+            .toggle_queue_consume
+            .matches(KeyCode::Char('c'), KeyModifiers::CONTROL));
     }
 
     #[test]

@@ -1058,6 +1058,7 @@ impl App {
             folders: FolderBrowseState::default(),
             queue: QueueState {
                 loop_enabled: config.queue_loop,
+                consume: config.queue_consume,
                 ..QueueState::default()
             },
             shuffle_mode: false,
@@ -1296,6 +1297,7 @@ impl App {
             self.queue.selection = self.queue.cursor;
         }
         self.queue.loop_enabled = snap.loop_enabled;
+        self.queue.consume = snap.consume;
         self.queue.shuffle_active = snap.shuffle_active;
         self.queue.pre_shuffle_order = snap.pre_shuffle_order;
         self.queue
@@ -4925,7 +4927,7 @@ impl App {
                 if client {
                     // Queue cursor comes from the daemon snapshot.
                 } else {
-                    self.queue.next();
+                    self.advance_queue(self.queue.consume);
                     self.playback.paused = false;
                     self.playback.elapsed = std::time::Duration::ZERO;
                     if let Some(song) = self.queue.current().cloned() {
@@ -4991,8 +4993,10 @@ impl App {
                     self.playback.elapsed = Duration::ZERO;
                     self.playback.total = None;
                     return;
-                } else if self.queue.next() {
+                } else if self.advance_queue(self.queue.consume) {
                     self.play_current();
+                } else if self.queue.songs.is_empty() {
+                    self.handle_clear_queue();
                 } else {
                     self.playback.current_song = None;
                     self.playback.elapsed = std::time::Duration::ZERO;
@@ -7281,8 +7285,16 @@ impl App {
             Action::NextTrack => {
                 if self.is_playing_radio() {
                     self.radio_station_step(1);
-                } else if self.queue.next() {
-                    self.play_current();
+                } else {
+                    // Only consume when playback can move on; otherwise the skipped
+                    // track would leave the queue while it keeps playing.
+                    let consume = self.queue.consume
+                        && self.config.queue_consume_skipped
+                        && self.playback.player_loaded
+                        && self.queue.peek_next().is_some();
+                    if self.advance_queue(consume) {
+                        self.play_current();
+                    }
                 }
             }
             Action::PrevTrack => {
@@ -7311,6 +7323,7 @@ impl App {
             Action::Unshuffle => self.handle_unshuffle(),
             Action::ToggleShuffleMode => self.handle_toggle_shuffle_mode(),
             Action::ToggleQueueLoop => self.handle_toggle_queue_loop(),
+            Action::ToggleQueueConsume => self.handle_toggle_queue_consume(),
             Action::ToggleNpPaneFocus => self.handle_toggle_np_pane_focus(),
             Action::SeekForward => {
                 let new_pos = if let Some(total) = self.playback.total {
@@ -9081,6 +9094,21 @@ impl App {
         self.queue.loop_enabled = !self.queue.loop_enabled;
         let state = if self.queue.loop_enabled { "on" } else { "off" };
         self.flash_status_secs(format!("Queue loop {state}"), 2);
+    }
+
+    fn handle_toggle_queue_consume(&mut self) {
+        self.queue.consume = !self.queue.consume;
+        let state = if self.queue.consume { "on" } else { "off" };
+        self.flash_status_secs(format!("Queue consume {state}"), 2);
+    }
+
+    /// Move the playhead past the current track, removing it when `consume` is set.
+    fn advance_queue(&mut self, consume: bool) -> bool {
+        if consume {
+            self.queue.advance_consuming()
+        } else {
+            self.queue.next()
+        }
     }
 
     // ── Mouse-click helpers (called from main.rs event handler) ──────────────

@@ -88,6 +88,11 @@ password = ""
 #                  Default: true.
 # queue_loop     — When true, playback wraps to the first queue track after the
 #                  last one ends. Default: true. Toggle at runtime with R / ↻.
+# queue_consume  — When true, each track is removed from the queue once it
+#                  finishes playing. Default: false. Toggle at runtime with c / ⊖.
+# queue_consume_skipped — With consume on, a track skipped with next_track is
+#                  removed too. Previous-track and jumping to a queue row never
+#                  consume. Default: false.
 # queue_skip_duplicates — When true, adding a song whose id is already in the
 #                  queue does not append another copy. The highlight moves to
 #                  the existing row and the list scrolls so that row sits near
@@ -117,6 +122,8 @@ default_volume = 70
 max_bit_rate = 0
 mpris = true
 queue_loop = true
+# queue_consume = false
+# queue_consume_skipped = false
 # queue_skip_duplicates = false
 # daemon = true
 # replay_gain = "none"
@@ -173,6 +180,7 @@ queue_loop = true
 # unshuffle           = "z"
 # toggle_shuffle_mode = "Ctrl+x"      # toggle shuffle mode (incoming adds shuffled) from any tab
 # toggle_queue_loop   = "Shift+q"     # wrap queue after last track
+# toggle_queue_consume = "c"          # remove tracks from the queue once played
 # toggle_radio        = "Shift+r"     # open/close internet radio picker
 # clear_queue         = "Shift+d"     # clear entire queue
 # remove_from_queue   = "d"           # now playing: remove highlighted track
@@ -326,6 +334,7 @@ preset = "dynamic"
 # previous_song = "<<"
 # mode_shuffle = "><"
 # mode_loop = "o"
+# mode_consume = "-"
 # favorite = "*"
 # rating_filled = "*"
 # rating_empty = "-"

@@ -82,6 +82,8 @@ pub struct SessionSnapshot {
     pub songs: Vec<Song>,
     pub cursor: usize,
     pub loop_enabled: bool,
+    #[serde(default)]
+    pub consume: bool,
     pub shuffle_active: bool,
     pub pre_shuffle_order: Option<Vec<Song>>,
     pub volume: u8,
@@ -101,6 +103,7 @@ impl SessionSnapshot {
             songs: app.queue.songs.clone(),
             cursor: app.queue.cursor,
             loop_enabled: app.queue.loop_enabled,
+            consume: app.queue.consume,
             shuffle_active: app.queue.shuffle_active,
             pre_shuffle_order: app.queue.pre_shuffle_order.clone(),
             volume: app.config.default_volume,
@@ -123,6 +126,7 @@ impl SessionSnapshot {
         }
         self.cursor.hash(&mut h);
         self.loop_enabled.hash(&mut h);
+        self.consume.hash(&mut h);
         self.shuffle_active.hash(&mut h);
         self.volume.hash(&mut h);
         self.paused.hash(&mut h);
@@ -870,6 +874,7 @@ mod tests {
             songs: Vec::new(),
             cursor: 3,
             loop_enabled: true,
+            consume: true,
             shuffle_active: false,
             pre_shuffle_order: None,
             volume: 70,
@@ -887,6 +892,7 @@ mod tests {
         match msg {
             ClientMessage::SyncSession(s) => {
                 assert_eq!(s.cursor, 3);
+                assert!(s.consume);
                 assert_eq!(s.elapsed_ms, 1500);
                 assert!(s.paused);
             }

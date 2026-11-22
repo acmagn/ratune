@@ -120,6 +120,8 @@ pub struct KeybindsSection {
     pub toggle_shuffle_mode: Option<String>,
     /// Toggle queue loop after the last track. Default: Shift+q
     pub toggle_queue_loop: Option<String>,
+    /// Toggle queue consume (remove tracks once played). Default: c
+    pub toggle_queue_consume: Option<String>,
     /// Open or close the internet radio station picker. Default: Shift+r
     pub toggle_radio: Option<String>,
     /// Toggle Now Playing focus between live radio and library queue. Default: Ctrl+g
@@ -1264,6 +1266,8 @@ pub struct ThemeIconSection {
     pub mode_shuffle: Option<String>,
     /// Queue-loop control (default: `↻`).
     pub mode_loop: Option<String>,
+    /// Queue-consume control (default: `⊖`).
+    pub mode_consume: Option<String>,
     /// Starred / favorite marker (default: `★`).
     pub favorite: Option<String>,
     /// Glyph repeated for each filled rating star (default: `⭑`).
@@ -1400,6 +1404,13 @@ struct PlayerSection {
     /// When true, playback wraps to the first queue track after the last one ends.
     #[serde(default = "default_queue_loop")]
     queue_loop: bool,
+    /// Initial state of queue consume: remove each track once it finishes playing.
+    /// Toggle at runtime with `toggle_queue_consume`. Default: false.
+    #[serde(default)]
+    queue_consume: bool,
+    /// When consume is on, also remove a track skipped with `next_track`. Default: false.
+    #[serde(default)]
+    queue_consume_skipped: bool,
     /// When true, adding a song whose id is already queued does nothing and
     /// moves the queue highlight to the existing row. Default: false.
     #[serde(default)]
@@ -1424,6 +1435,8 @@ impl Default for PlayerSection {
             max_bit_rate: 0,
             mpris: default_mpris(),
             queue_loop: default_queue_loop(),
+            queue_consume: false,
+            queue_consume_skipped: false,
             queue_skip_duplicates: false,
             daemon: default_daemon(),
             transcode: BTreeMap::new(),
@@ -1606,6 +1619,10 @@ pub struct Config {
     pub mpris_enabled: bool,
     /// When true, playback wraps to the first queue track after the last one ends.
     pub queue_loop: bool,
+    /// Initial queue consume state (remove tracks once they finish playing).
+    pub queue_consume: bool,
+    /// When consume is on, skipping with `next_track` also removes the track.
+    pub queue_consume_skipped: bool,
     /// When true, queue adds skip a song id that is already present.
     pub queue_skip_duplicates: bool,
     /// Unix: keep a playback daemon so music continues after the TUI closes.
@@ -2075,6 +2092,8 @@ impl Config {
             transcode_formats: normalize_transcode_map(file_cfg.player.transcode),
             mpris_enabled: file_cfg.player.mpris,
             queue_loop: file_cfg.player.queue_loop,
+            queue_consume: file_cfg.player.queue_consume,
+            queue_consume_skipped: file_cfg.player.queue_consume_skipped,
             queue_skip_duplicates: file_cfg.player.queue_skip_duplicates,
             daemon_enabled: {
                 #[cfg(unix)]
@@ -2242,6 +2261,8 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # opus = "mp3"
 # mpris = true     # Linux MPRIS / macOS Now Playing for media keys (default: true)
 # queue_loop = true   # wrap to first track after the last queue item (default: true)
+# queue_consume = false          # remove each track from the queue once it finishes playing
+# queue_consume_skipped = false  # with consume on, also remove tracks skipped with next_track
 # queue_skip_duplicates = false  # skip a queue add when that song id is already queued
 # daemon = true       # Unix: keep playing after the TUI closes (`q` detaches, Ctrl+q / `ratune stop` quits)
 
@@ -2270,6 +2291,7 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # unshuffle     = "z"
 # toggle_shuffle_mode = "Ctrl+x"  # sticky mode: bulk adds land shuffled
 # toggle_queue_loop = "Q"
+# toggle_queue_consume = "c"
 # toggle_radio      = "R"
 # np_focus_queue = "Ctrl+g"
 # clear_queue   = "Shift+d"
@@ -3118,6 +3140,22 @@ cache_enabled = false
     fn queue_loop_defaults_true() {
         let fc: FileConfig = toml::from_str("").expect("toml");
         assert!(fc.player.queue_loop);
+    }
+
+    #[test]
+    fn queue_consume_defaults_off() {
+        let fc: FileConfig = toml::from_str("").expect("toml");
+        assert!(!fc.player.queue_consume);
+        assert!(!fc.player.queue_consume_skipped);
+    }
+
+    #[test]
+    fn parses_queue_consume() {
+        let fc: FileConfig =
+            toml::from_str("[player]\nqueue_consume = true\nqueue_consume_skipped = true\n")
+                .expect("toml");
+        assert!(fc.player.queue_consume);
+        assert!(fc.player.queue_consume_skipped);
     }
 
     #[test]

@@ -2390,6 +2390,9 @@ fn map_key(
     if kb.toggle_queue_loop.matches(code, modifiers) {
         return Action::ToggleQueueLoop;
     }
+    if kb.toggle_queue_consume.matches(code, modifiers) {
+        return Action::ToggleQueueConsume;
+    }
     if active_tab == Tab::NowPlaying && kb.np_focus_queue.matches(code, modifiers) {
         return Action::ToggleNpPaneFocus;
     }
