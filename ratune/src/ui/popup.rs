@@ -165,10 +165,10 @@ fn playlist_sections(
         ("PgUp / PgDn · Ctrl+u / Ctrl+d", "Page scroll"),
         ("gg / G", "Jump to top / bottom"),
         ("h / l · ← / →", "Switch between lists"),
-        ("Enter", "Append highlighted item and close"),
+        ("Enter", "Append and close (left list: whole section)"),
         ("a", "Append, stay open"),
         ("Shift+A", "Append whole section, stay open"),
-        ("Ctrl+r", "Replace queue and play"),
+        ("Ctrl+r", "Replace queue and play, stay open"),
         ("f", "Toggle favorite"),
     ];
     if ratings_enabled {

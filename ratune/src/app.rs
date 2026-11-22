@@ -9971,15 +9971,10 @@ impl App {
             }
             Action::FavoritesPlay => {
                 self.favorites_queue_action(true, self.favorites_focus_scope());
-                self.favorites_overlay.visible = false;
             }
             Action::FavoritesAddAndClose => {
-                if self.favorites_overlay.focus == FavoritesFocus::Categories {
-                    self.favorites_overlay.focus = FavoritesFocus::Items;
-                } else {
-                    self.favorites_queue_action(false, FavoritesScope::Selected);
-                    self.favorites_overlay.visible = false;
-                }
+                self.favorites_queue_action(false, self.favorites_focus_scope());
+                self.favorites_overlay.visible = false;
             }
             Action::FavoritesAppend => {
                 self.favorites_queue_action(false, self.favorites_focus_scope());
