@@ -2,10 +2,13 @@
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
+use crate::keybinds::{format_spec, Keybinds};
 use crate::state::{FavoritesCategory, FavoritesFocus, FavoritesOverlay};
+use crate::text_width::str_width;
 use crate::theme::{style_with_bg, Theme};
 
 pub struct PanelLayout {
@@ -67,6 +70,7 @@ pub fn render_favorites_overlay(
     overlay: &mut FavoritesOverlay,
     accent: ratatui::style::Color,
     theme: &Theme,
+    kb: &Keybinds,
 ) {
     if !overlay.visible {
         return;
@@ -93,6 +97,54 @@ pub fn render_favorites_overlay(
         accent,
         theme,
         right_active,
+    );
+    render_hints(frame, layout.items_col, theme, kb);
+}
+
+/// Key hints drawn over the items column's bottom border; trailing hints are dropped
+/// when the column is too narrow.
+fn render_hints(frame: &mut Frame, area: Rect, theme: &Theme, kb: &Keybinds) {
+    if area.height <= 4 {
+        return;
+    }
+    let mut hints = vec![
+        format!("{} add & close", format_spec(&kb.favorites_add_and_close)),
+        format!("{} add", format_spec(&kb.favorites_add)),
+        format!("{} add all", format_spec(&kb.favorites_add_all)),
+    ];
+    if let Some(spec) = kb.add_all_replace_album.as_ref() {
+        hints.push(format!("{} play", format_spec(spec)));
+    }
+    hints.push("Esc close".to_string());
+
+    let max = area.width.saturating_sub(6) as usize;
+    let mut text = String::new();
+    for hint in hints {
+        let candidate = if text.is_empty() {
+            hint
+        } else {
+            format!("{text} · {hint}")
+        };
+        if str_width(&candidate) > max {
+            break;
+        }
+        text = candidate;
+    }
+    if text.is_empty() {
+        return;
+    }
+    let hint_area = Rect {
+        x: area.x + 2,
+        y: area.y + area.height - 1,
+        width: area.width.saturating_sub(4),
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {text} "),
+            Style::default().fg(theme.dimmed),
+        ))),
+        hint_area,
     );
 }
 

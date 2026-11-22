@@ -222,6 +222,9 @@ queue_loop = true
 # rate_song_5         = "Shift+5"
 # rate_song_clear     = "Shift+0"   # clear song rating
 # favorites_overlay   = "Shift+f"   # favorites panel on Browse tab (`F`)
+# favorites_add_and_close = "Enter" # favorites panel: add highlighted item to queue, close panel
+# favorites_add       = "a"         # favorites panel: add highlighted item, keep panel open
+# favorites_add_all   = "Shift+a"   # favorites panel: add every song/album/artist in the section, keep open
 # server_search       = "Ctrl+s"    # search3 overlay; requires [server_search] enabled = true; "" disables key
 
 # -----------------------------------------------------------------------------

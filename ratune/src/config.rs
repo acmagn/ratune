@@ -184,6 +184,12 @@ pub struct KeybindsSection {
     pub toggle_favorite: Option<String>,
     /// Browse: open favorites overlay. Default: Shift+f (`F`)
     pub favorites_overlay: Option<String>,
+    /// Favorites overlay: append the highlighted item and close the panel. Default: Enter
+    pub favorites_add_and_close: Option<String>,
+    /// Favorites overlay: append the highlighted item, panel stays open. Default: a
+    pub favorites_add: Option<String>,
+    /// Favorites overlay: append every item in the current section, panel stays open. Default: Shift+a
+    pub favorites_add_all: Option<String>,
     /// Browse: open server `search3` overlay. Default: Ctrl+s
     pub server_search: Option<String>,
     /// Rate focused/playing song 1–5 (Subsonic setRating). Defaults: Shift+1 … Shift+5
@@ -2321,6 +2327,9 @@ max_bit_rate = 0   # 0 = unlimited; set e.g. 320 to cap streaming bitrate
 # home_section_prev = "Shift+k"
 # home_refresh = "r"
 # favorites_overlay = "Shift+f"
+# favorites_add_and_close = "Enter"   # favorites panel: add highlighted item, close panel
+# favorites_add = "a"                 # favorites panel: add highlighted item, keep panel open
+# favorites_add_all = "Shift+a"       # favorites panel: add whole section, keep panel open
 # server_search = "Ctrl+s"   # search3 overlay; requires [server_search] enabled = true
 
 # toggle_favorite = "f"
