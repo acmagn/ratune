@@ -389,6 +389,9 @@ pub struct QueueState {
     pub shuffle_active: bool,
     /// When true, next/prev and natural end wrap around the queue ends.
     pub loop_enabled: bool,
+    /// When true, a track is removed from the queue once playback moves past it
+    /// (see [`Self::advance_consuming`]).
+    pub consume: bool,
 }
 
 impl Default for QueueState {
@@ -401,6 +404,7 @@ impl Default for QueueState {
             pre_shuffle_order: None,
             shuffle_active: false,
             loop_enabled: true,
+            consume: false,
         }
     }
 }
@@ -574,15 +578,29 @@ impl QueueState {
         }
     }
 
+    /// Advance like [`Self::next`], then remove the song that was at the playhead.
+    /// Returns true if there is a song to play next. The last remaining song is
+    /// removed even when nothing follows it.
+    pub fn advance_consuming(&mut self) -> bool {
+        if self.songs.is_empty() {
+            return false;
+        }
+        let finished = self.cursor;
+        let advanced = self.next() && self.cursor != finished;
+        self.remove_at(finished);
+        advanced
+    }
+
     /// Peek at the next song without advancing the cursor.
-    /// When [`Self::loop_enabled`] and at the end, returns the first song.
+    /// When [`Self::loop_enabled`] and at the end, returns the first song, unless
+    /// [`Self::consume`] would remove the only song in the queue.
     pub fn peek_next(&self) -> Option<&Song> {
         if self.songs.is_empty() {
             return None;
         }
         if self.cursor + 1 < self.songs.len() {
             self.songs.get(self.cursor + 1)
-        } else if self.loop_enabled {
+        } else if self.loop_enabled && !(self.consume && self.songs.len() == 1) {
             self.songs.first()
         } else {
             None
@@ -1290,6 +1308,94 @@ mod queue_tests {
         assert_eq!(q.peek_next().map(|s| s.id.as_str()), Some("a"));
         q.loop_enabled = false;
         assert!(q.peek_next().is_none());
+    }
+
+    fn ids(q: &QueueState) -> Vec<&str> {
+        q.songs.iter().map(|s| s.id.as_str()).collect()
+    }
+
+    #[test]
+    fn consume_defaults_off() {
+        assert!(!QueueState::default().consume);
+    }
+
+    #[test]
+    fn advance_consuming_removes_finished_song() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 1;
+        q.selection = 1;
+        assert!(q.advance_consuming());
+        assert_eq!(ids(&q), vec!["a", "c"]);
+        assert_eq!(q.current().map(|s| s.id.as_str()), Some("c"));
+        assert_eq!(q.selection, q.cursor);
+        assert_eq!(
+            q.pre_shuffle_order
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "c"]
+        );
+    }
+
+    #[test]
+    fn advance_consuming_wraps_when_loop_enabled() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.cursor = 1;
+        assert!(q.advance_consuming());
+        assert_eq!(ids(&q), vec!["a"]);
+        assert_eq!(q.cursor, 0);
+    }
+
+    #[test]
+    fn advance_consuming_at_end_without_loop_removes_last() {
+        let mut q = QueueState::default();
+        q.loop_enabled = false;
+        q.push(song("a"));
+        q.push(song("b"));
+        q.cursor = 1;
+        assert!(!q.advance_consuming());
+        assert_eq!(ids(&q), vec!["a"]);
+    }
+
+    #[test]
+    fn advance_consuming_single_song_empties_queue() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        assert!(!q.advance_consuming());
+        assert!(q.songs.is_empty());
+        assert_eq!(q.cursor, 0);
+    }
+
+    #[test]
+    fn advance_consuming_keeps_highlight_on_other_row() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        q.push(song("b"));
+        q.push(song("c"));
+        q.cursor = 0;
+        q.selection = 2;
+        assert!(q.advance_consuming());
+        assert_eq!(q.current().map(|s| s.id.as_str()), Some("b"));
+        assert_eq!(q.songs[q.selection].id, "c");
+    }
+
+    #[test]
+    fn peek_next_skips_self_wrap_when_consuming_last_song() {
+        let mut q = QueueState::default();
+        q.push(song("a"));
+        assert_eq!(q.peek_next().map(|s| s.id.as_str()), Some("a"));
+        q.consume = true;
+        assert!(q.peek_next().is_none());
+        q.push(song("b"));
+        q.cursor = 1;
+        assert_eq!(q.peek_next().map(|s| s.id.as_str()), Some("a"));
     }
 
     #[test]

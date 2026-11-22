@@ -20,6 +20,7 @@ enum ControlSlot {
     PlayPause,
     Next,
     Loop,
+    Consume,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +43,7 @@ fn slot_for_span_index(i: usize) -> Option<ControlSlot> {
         4 => Some(ControlSlot::PlayPause),
         6 => Some(ControlSlot::Next),
         8 => Some(ControlSlot::Loop),
+        10 => Some(ControlSlot::Consume),
         _ => None,
     }
 }
@@ -51,7 +53,7 @@ fn control_segments(ctx: &ControlsClickCtx) -> (u16, Vec<ControlSegment>) {
     let line = controls_line_plain(ctx);
     let total = line.width() as u16;
     let mut pos = 0u16;
-    let mut segments = Vec::with_capacity(5);
+    let mut segments = Vec::with_capacity(6);
     for (i, span) in line.spans.iter().enumerate() {
         let width = span.width() as u16;
         if let Some(slot) = slot_for_span_index(i) {
@@ -78,6 +80,8 @@ fn controls_line_plain(ctx: &ControlsClickCtx) -> Line<'static> {
         Span::raw(ctx.icons.next_song.clone()),
         Span::raw(CONTROLS_GAP),
         Span::raw(ctx.icons.mode_loop.clone()),
+        Span::raw(CONTROLS_GAP),
+        Span::raw(ctx.icons.mode_consume.clone()),
     ])
 }
 
@@ -94,6 +98,7 @@ fn action_for_slot(slot: ControlSlot, ctx: &ControlsClickCtx) -> Action {
         ControlSlot::PlayPause => Action::PlayPause,
         ControlSlot::Next => Action::NextTrack,
         ControlSlot::Loop => Action::ToggleQueueLoop,
+        ControlSlot::Consume => Action::ToggleQueueConsume,
     }
 }
 
@@ -725,6 +730,7 @@ fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
     } else {
         inactive
     };
+    let consume_style = if app.queue.consume { active } else { inactive };
 
     let controls = Line::from(vec![
         Span::styled(ctx.icons.mode_shuffle.clone(), shuffle_style),
@@ -736,6 +742,8 @@ fn render_controls_widget(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled(ctx.icons.next_song.clone(), inactive),
         Span::raw(CONTROLS_GAP),
         Span::styled(ctx.icons.mode_loop.clone(), loop_style),
+        Span::raw(CONTROLS_GAP),
+        Span::styled(ctx.icons.mode_consume.clone(), consume_style),
     ]);
 
     if area.height <= 1 {
@@ -1064,13 +1072,18 @@ mod controls_click_tests {
 
     #[test]
     fn line_start_matches_ratatui_center_formula() {
+        // The two formulas only disagree for an odd line width in an even area.
         let ctx = ControlsClickCtx {
             has_current_song: false,
             paused: false,
             shuffled: false,
-            icons: ThemeIcons::default(),
+            icons: ThemeIcons {
+                stopped: "▶▶".into(),
+                ..ThemeIcons::default()
+            },
         };
         let total = controls_line_width(&ctx);
+        assert_eq!(total % 2, 1);
         let area = Rect::new(5, 0, 40, 1);
         let legacy = area.x + (area.width.saturating_sub(total)) / 2;
         let aligned = line_start(area, &ctx);
@@ -1111,7 +1124,7 @@ mod controls_click_tests {
     }
 
     #[test]
-    fn centered_clicks_map_to_all_five_buttons() {
+    fn centered_clicks_map_to_all_six_buttons() {
         let area = Rect::new(0, 0, 80, 3);
         let ctx = playing();
 
@@ -1134,6 +1147,10 @@ mod controls_click_tests {
         assert!(matches!(
             click_at_slot(&ctx, area, ControlSlot::Loop),
             Some(Action::ToggleQueueLoop)
+        ));
+        assert!(matches!(
+            click_at_slot(&ctx, area, ControlSlot::Consume),
+            Some(Action::ToggleQueueConsume)
         ));
     }
 

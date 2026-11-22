@@ -61,6 +61,8 @@ pub enum Action {
     ToggleShuffleMode,
     /// Toggle whether the queue loops after the last track (↻ control).
     ToggleQueueLoop,
+    /// Toggle whether finished tracks are removed from the queue (⊖ control).
+    ToggleQueueConsume,
     /// Toggle Now Playing pane focus between live radio and library queue.
     ToggleNpPaneFocus,
     SeekForward,

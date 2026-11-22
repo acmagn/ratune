@@ -22,13 +22,6 @@ fn sections(
         ("n / N", "Next / previous track"),
         ("f", "Toggle favorite (song / album / artist)"),
         ("F", "Favorites panel (Browse tab)"),
-        (
-            "x",
-            "Now Playing: shuffle queue · Home/Browse: shuffle mode",
-        ),
-        ("Ctrl+x", "Toggle shuffle mode (incoming adds)"),
-        ("z", "Unshuffle queue"),
-        ("Q", "Toggle queue loop"),
     ];
     if server_search_enabled {
         playback.insert(4, ("Ctrl+s", "Server search (search3)"));
@@ -73,15 +66,25 @@ fn sections(
         ),
         ("Playback", playback),
         (
-            "Queue",
+            "Queue (Now Playing)",
+            vec![
+                ("x", "Shuffle queue"),
+                ("z", "Unshuffle queue"),
+                ("d", "Remove highlighted track"),
+                ("D", "Clear queue"),
+                (".", "Center the playing track in the queue"),
+                ("Q", "Toggle queue loop"),
+                ("c", "Toggle queue consume"),
+            ],
+        ),
+        (
+            "Queue (Browse)",
             vec![
                 ("a", "Add track to queue"),
                 ("A", "Add all (artist/album or folder preview)"),
                 ("Ctrl+r", "Replace queue with album or folder preview"),
                 ("Ctrl+a", "Append full index to queue (y/n)"),
-                ("D", "Clear queue"),
-                ("d", "Remove highlighted track (Now Playing)"),
-                (".", "Center the playing track in the queue"),
+                ("x / Ctrl+x", "Toggle shuffle mode (incoming adds)"),
             ],
         ),
         (
@@ -117,8 +120,12 @@ fn sections(
     ];
 
     if radio_enabled {
+        let after_queue = out
+            .iter()
+            .position(|(header, _)| *header == "Queue (Browse)")
+            .map_or(out.len(), |i| i + 1);
         out.insert(
-            3,
+            after_queue,
             (
                 "Radio",
                 vec![
@@ -133,7 +140,7 @@ fn sections(
             ),
         );
         out.insert(
-            4,
+            after_queue + 1,
             (
                 "Now Playing (radio)",
                 vec![

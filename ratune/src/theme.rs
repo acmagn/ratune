@@ -42,6 +42,7 @@ pub struct ThemeIcons {
     pub previous_song: String,
     pub mode_shuffle: String,
     pub mode_loop: String,
+    pub mode_consume: String,
     /// Favorite / starred marker (without trailing space).
     pub favorite: String,
     /// Full tab separator including spaces (e.g. `" │ "`).
@@ -63,6 +64,7 @@ impl Default for ThemeIcons {
             previous_song: "⏮".into(),
             mode_shuffle: "⇄".into(),
             mode_loop: "↻".into(),
+            mode_consume: "⊖".into(),
             favorite: "★".into(),
             tab_separator: " │ ".into(),
             online: "●".into(),
@@ -88,6 +90,7 @@ impl ThemeIcons {
             previous_song: sec.previous_song.clone().unwrap_or(d.previous_song),
             mode_shuffle: sec.mode_shuffle.clone().unwrap_or(d.mode_shuffle),
             mode_loop: sec.mode_loop.clone().unwrap_or(d.mode_loop),
+            mode_consume: sec.mode_consume.clone().unwrap_or(d.mode_consume),
             favorite: sec.favorite.clone().unwrap_or(d.favorite),
             tab_separator: sec.tab_separator.clone().unwrap_or(d.tab_separator),
             online: sec.online.clone().unwrap_or(d.online),
