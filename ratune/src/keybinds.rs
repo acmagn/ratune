@@ -102,7 +102,6 @@ fn rate_default(digit: char) -> KeySpec {
 }
 
 /// Human-readable key chord (e.g. `Ctrl+Shift+r`, `N`, `` ` ``).
-#[allow(dead_code)] // used by dynamic help popup when that UI is re-enabled
 pub fn format_spec(spec: &KeySpec) -> String {
     use KeyCode::*;
     if spec.code == BackTab {
@@ -237,6 +236,12 @@ pub struct Keybinds {
     pub toggle_favorite: KeySpec,
     /// Browser: favorites overlay. Default: Shift+f (`F`)
     pub favorites_overlay: KeySpec,
+    /// Favorites overlay: append highlighted item and close. Default: Enter
+    pub favorites_add_and_close: KeySpec,
+    /// Favorites overlay: append highlighted item, keep open. Default: `a`
+    pub favorites_add: KeySpec,
+    /// Favorites overlay: append the whole section, keep open. Default: Shift+a
+    pub favorites_add_all: KeySpec,
     /// Browser: server `search3` overlay. Default: Ctrl+s (`None` = disabled).
     pub server_search: Option<KeySpec>,
     /// Rate focused/playing song 1–5 via Subsonic `setRating`.
@@ -526,6 +531,21 @@ impl Keybinds {
                 sec.favorites_overlay.as_deref(),
                 KeySpec {
                     code: KeyCode::Char('f'),
+                    modifiers: KeyModifiers::SHIFT,
+                },
+            ),
+            favorites_add_and_close: resolve(
+                sec.favorites_add_and_close.as_deref(),
+                KeySpec::new(KeyCode::Enter),
+            ),
+            favorites_add: resolve(
+                sec.favorites_add.as_deref(),
+                KeySpec::new(KeyCode::Char('a')),
+            ),
+            favorites_add_all: resolve(
+                sec.favorites_add_all.as_deref(),
+                KeySpec {
+                    code: KeyCode::Char('a'),
                     modifiers: KeyModifiers::SHIFT,
                 },
             ),

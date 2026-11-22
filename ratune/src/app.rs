@@ -628,6 +628,15 @@ enum AddAllMode {
     Prepend,
 }
 
+/// What a favorites-overlay queue action covers.
+#[derive(Clone, Copy)]
+enum FavoritesScope {
+    /// The highlighted row in the items pane.
+    Selected,
+    /// Every item in the current section.
+    All,
+}
+
 // ── PlaylistPicker ────────────────────────────────────────────────────────────
 
 /// Floating picker shown when the user wants to add browser track(s) to a
@@ -3798,11 +3807,54 @@ impl App {
         });
     }
 
+    /// Spawn one task that fetches several albums in order and delivers all of their
+    /// tracks as a single `AllTracksForArtist` update.
+    pub fn fetch_albums_into_queue(&self, album_ids: Vec<String>, start_playing: bool) {
+        if !self.remote_available() {
+            return;
+        }
+        let client = self.subsonic.clone();
+        let tx = self.library_tx.clone();
+        tokio::spawn(async move {
+            let mut songs = Vec::new();
+            for album_id in &album_ids {
+                match client.get_album(album_id).await {
+                    Ok(album) => {
+                        let mut s = album.song;
+                        s.sort_by_key(|t| (t.disc_number.unwrap_or(1), t.track.unwrap_or(0)));
+                        songs.extend(s);
+                    }
+                    Err(e) => eprintln!("fetch_albums_into_queue({album_id}): {e}"),
+                }
+            }
+            if songs.is_empty() {
+                return;
+            }
+            let _ = tx
+                .send(LibraryUpdate::AllTracksForArtist {
+                    songs,
+                    start_playing,
+                    prepend: false,
+                })
+                .await;
+        });
+    }
+
     /// Spawn a task that fetches every album + every track for the given artist,
     /// then delivers them as a flat sorted `AllTracksForArtist` update.
     pub fn fetch_all_tracks_for_artist(
         &self,
         artist_id: String,
+        start_playing: bool,
+        prepend: bool,
+    ) {
+        self.fetch_all_tracks_for_artists(vec![artist_id], start_playing, prepend);
+    }
+
+    /// Like [`Self::fetch_all_tracks_for_artist`] for several artists, delivered as one update.
+    pub fn fetch_all_tracks_for_artists(
+        &self,
+        artist_ids: Vec<String>,
         start_playing: bool,
         prepend: bool,
     ) {
@@ -3812,29 +3864,34 @@ impl App {
         let client = self.subsonic.clone();
         let tx = self.library_tx.clone();
         tokio::spawn(async move {
-            let mut artist = match client.get_artist(&artist_id).await {
-                Ok(a) => a,
-                Err(e) => {
-                    eprintln!("fetch_all_tracks_for_artist({}): {e}", artist_id);
-                    return;
-                }
-            };
-            artist.album.sort_by(|a, b| match (a.year, b.year) {
-                (Some(ya), Some(yb)) => ya.cmp(&yb).then_with(|| a.name.cmp(&b.name)),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.name.cmp(&b.name),
-            });
             let mut songs = Vec::new();
-            for album in &artist.album {
-                match client.get_album(&album.id).await {
-                    Ok(a) => {
-                        let mut s = a.song;
-                        s.sort_by_key(|t| (t.disc_number.unwrap_or(1), t.track.unwrap_or(0)));
-                        songs.extend(s);
+            for artist_id in &artist_ids {
+                let mut artist = match client.get_artist(artist_id).await {
+                    Ok(a) => a,
+                    Err(e) => {
+                        eprintln!("fetch_all_tracks_for_artist({artist_id}): {e}");
+                        continue;
                     }
-                    Err(e) => eprintln!("get_album({}): {e}", album.id),
+                };
+                artist.album.sort_by(|a, b| match (a.year, b.year) {
+                    (Some(ya), Some(yb)) => ya.cmp(&yb).then_with(|| a.name.cmp(&b.name)),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.name.cmp(&b.name),
+                });
+                for album in &artist.album {
+                    match client.get_album(&album.id).await {
+                        Ok(a) => {
+                            let mut s = a.song;
+                            s.sort_by_key(|t| (t.disc_number.unwrap_or(1), t.track.unwrap_or(0)));
+                            songs.extend(s);
+                        }
+                        Err(e) => eprintln!("get_album({}): {e}", album.id),
+                    }
                 }
+            }
+            if songs.is_empty() {
+                return;
             }
             let _ = tx
                 .send(LibraryUpdate::AllTracksForArtist {
@@ -5802,7 +5859,7 @@ impl App {
 
     pub fn double_click_favorites_category(&mut self, index: usize) {
         self.click_favorites_category(index);
-        self.favorites_queue_action(false);
+        self.favorites_queue_action(false, FavoritesScope::All);
     }
 
     /// Mouse click on an item row in the favorites overlay.
@@ -5816,7 +5873,7 @@ impl App {
 
     pub fn double_click_favorites_item(&mut self, index: usize) {
         self.click_favorites_item(index);
-        self.favorites_queue_action(false);
+        self.favorites_queue_action(false, FavoritesScope::Selected);
     }
 
     /// Mouse click on a category row in the server search overlay.
@@ -7675,7 +7732,9 @@ impl App {
             | Action::FavoritesFocusCategories
             | Action::FavoritesFocusItems
             | Action::FavoritesPlay
-            | Action::FavoritesAppend => {
+            | Action::FavoritesAddAndClose
+            | Action::FavoritesAppend
+            | Action::FavoritesAppendAll => {
                 self.handle_favorites_action(action);
             }
             Action::ToggleServerSearch
@@ -9891,28 +9950,47 @@ impl App {
                 self.favorites_overlay.focus = FavoritesFocus::Items;
             }
             Action::FavoritesPlay => {
-                self.favorites_queue_action(true);
+                self.favorites_queue_action(true, self.favorites_focus_scope());
                 self.favorites_overlay.visible = false;
             }
+            Action::FavoritesAddAndClose => {
+                if self.favorites_overlay.focus == FavoritesFocus::Categories {
+                    self.favorites_overlay.focus = FavoritesFocus::Items;
+                } else {
+                    self.favorites_queue_action(false, FavoritesScope::Selected);
+                    self.favorites_overlay.visible = false;
+                }
+            }
             Action::FavoritesAppend => {
-                self.favorites_queue_action(false);
-                self.favorites_overlay.visible = false;
+                self.favorites_queue_action(false, self.favorites_focus_scope());
+            }
+            Action::FavoritesAppendAll => {
+                self.favorites_queue_action(false, FavoritesScope::All);
             }
             _ => {}
         }
     }
 
-    fn favorites_queue_action(&mut self, replace: bool) {
-        // Replace/play uses the item list on the right; category pane only picks the section.
+    /// The category pane targets the whole section; the items pane targets the highlighted row.
+    fn favorites_focus_scope(&self) -> FavoritesScope {
+        match self.favorites_overlay.focus {
+            FavoritesFocus::Categories => FavoritesScope::All,
+            FavoritesFocus::Items => FavoritesScope::Selected,
+        }
+    }
+
+    fn favorites_queue_action(&mut self, replace: bool, scope: FavoritesScope) {
         let idx = self.favorites_overlay.selected_item_index;
         match self.favorites_overlay.category {
             FavoritesCategory::Songs => {
-                let songs = if self.favorites_overlay.focus == FavoritesFocus::Categories {
-                    self.favorites_overlay.songs.clone()
-                } else if let Some(song) = self.favorites_overlay.songs.get(idx) {
-                    vec![song.clone()]
-                } else {
-                    return;
+                let songs = match scope {
+                    FavoritesScope::All => self.favorites_overlay.songs.clone(),
+                    FavoritesScope::Selected => {
+                        let Some(song) = self.favorites_overlay.songs.get(idx) else {
+                            return;
+                        };
+                        vec![song.clone()]
+                    }
                 };
                 self.favorites_apply_songs(&songs, replace);
             }
@@ -9924,16 +10002,31 @@ impl App {
                     );
                     return;
                 }
-                if let Some(album) = self.favorites_overlay.albums.get(idx) {
-                    if replace {
-                        self.queue.songs.clear();
-                        self.queue.zero_position();
-                        self.queue.clear_shuffle_state();
-                        self.fetch_and_replace_queue_with_album(album.id.clone(), true);
-                    } else {
-                        self.fetch_and_append_album_to_queue(album.id.clone());
-                    }
+                let ids: Vec<String> = match scope {
+                    FavoritesScope::All => self
+                        .favorites_overlay
+                        .albums
+                        .iter()
+                        .map(|a| a.id.clone())
+                        .collect(),
+                    FavoritesScope::Selected => self
+                        .favorites_overlay
+                        .albums
+                        .get(idx)
+                        .map(|a| a.id.clone())
+                        .into_iter()
+                        .collect(),
+                };
+                if ids.is_empty() {
+                    return;
                 }
+                if ids.len() > 1 {
+                    self.flash_status_secs(format!("Loading {} favorite albums…", ids.len()), 3);
+                }
+                if replace {
+                    self.clear_queue_for_replace();
+                }
+                self.fetch_albums_into_queue(ids, replace);
             }
             FavoritesCategory::Artists => {
                 if self.favorites_overlay.offline_snapshot && !self.remote_available() {
@@ -9943,18 +10036,39 @@ impl App {
                     );
                     return;
                 }
-                if let Some(artist) = self.favorites_overlay.artists.get(idx) {
-                    if replace {
-                        self.queue.songs.clear();
-                        self.queue.zero_position();
-                        self.queue.clear_shuffle_state();
-                        self.fetch_all_tracks_for_artist(artist.id.clone(), true, false);
-                    } else {
-                        self.fetch_all_tracks_for_artist(artist.id.clone(), false, false);
-                    }
+                let ids: Vec<String> = match scope {
+                    FavoritesScope::All => self
+                        .favorites_overlay
+                        .artists
+                        .iter()
+                        .map(|a| a.id.clone())
+                        .collect(),
+                    FavoritesScope::Selected => self
+                        .favorites_overlay
+                        .artists
+                        .get(idx)
+                        .map(|a| a.id.clone())
+                        .into_iter()
+                        .collect(),
+                };
+                if ids.is_empty() {
+                    return;
                 }
+                if ids.len() > 1 {
+                    self.flash_status_secs(format!("Loading {} favorite artists…", ids.len()), 3);
+                }
+                if replace {
+                    self.clear_queue_for_replace();
+                }
+                self.fetch_all_tracks_for_artists(ids, replace, false);
             }
         }
+    }
+
+    fn clear_queue_for_replace(&mut self) {
+        self.queue.songs.clear();
+        self.queue.zero_position();
+        self.queue.clear_shuffle_state();
     }
 
     fn favorites_apply_songs(&mut self, songs: &[ratune_subsonic::Song], replace: bool) {

@@ -1810,10 +1810,12 @@ fn map_favorites_key(
     if let Some(dir) = overlay_list_nav_direction(code, modifiers, kb, pending_gg) {
         return Action::FavoritesNavigate(dir);
     }
-    let shift = modifiers.intersects(KeyModifiers::SHIFT);
     match code {
         KeyCode::Esc => Action::ToggleFavoritesOverlay,
         _ if kb.favorites_overlay.matches(code, modifiers) => Action::ToggleFavoritesOverlay,
+        _ if kb.favorites_add_all.matches(code, modifiers) => Action::FavoritesAppendAll,
+        _ if kb.favorites_add.matches(code, modifiers) => Action::FavoritesAppend,
+        _ if kb.favorites_add_and_close.matches(code, modifiers) => Action::FavoritesAddAndClose,
         _ if kb.toggle_favorite.matches(code, modifiers) => Action::ToggleFavorite,
         KeyCode::Left | KeyCode::Char('h') => Action::FavoritesFocusCategories,
         KeyCode::Right | KeyCode::Char('l') => Action::FavoritesFocusItems,
@@ -1827,7 +1829,6 @@ fn map_favorites_key(
         {
             Action::FavoritesFocusItems
         }
-        KeyCode::Enter => Action::FavoritesPlay,
         _ => {
             if kb.toggle_shuffle_mode.matches(code, modifiers)
                 || kb.shuffle.matches(code, modifiers)
@@ -1840,9 +1841,6 @@ fn map_favorites_key(
                 .is_some_and(|spec| spec.matches(code, modifiers))
             {
                 return Action::FavoritesPlay;
-            }
-            if code == KeyCode::Char('A') || (code == KeyCode::Char('a') && shift) {
-                return Action::FavoritesAppend;
             }
             Action::None
         }
@@ -3274,6 +3272,64 @@ mod map_key_tests {
 
     fn kb() -> Keybinds {
         Keybinds::from_section(&KeybindsSection::default())
+    }
+
+    fn favorites_key(code: KeyCode, modifiers: KeyModifiers, kb: &Keybinds) -> Action {
+        let mut pending = false;
+        map_favorites_key(
+            code,
+            modifiers,
+            &FavoritesFocus::Items,
+            kb,
+            false,
+            &mut pending,
+        )
+    }
+
+    #[test]
+    fn favorites_default_keys() {
+        let kb = kb();
+        assert!(matches!(
+            favorites_key(KeyCode::Enter, KeyModifiers::empty(), &kb),
+            Action::FavoritesAddAndClose
+        ));
+        assert!(matches!(
+            favorites_key(KeyCode::Char('a'), KeyModifiers::empty(), &kb),
+            Action::FavoritesAppend
+        ));
+        assert!(matches!(
+            favorites_key(KeyCode::Char('A'), KeyModifiers::SHIFT, &kb),
+            Action::FavoritesAppendAll
+        ));
+        assert!(matches!(
+            favorites_key(KeyCode::Char('A'), KeyModifiers::empty(), &kb),
+            Action::FavoritesAppendAll
+        ));
+        assert!(matches!(
+            favorites_key(KeyCode::Char('r'), KeyModifiers::CONTROL, &kb),
+            Action::FavoritesPlay
+        ));
+    }
+
+    #[test]
+    fn favorites_add_rebound_to_enter_keeps_panel_open() {
+        let kb = Keybinds::from_section(&KeybindsSection {
+            favorites_add: Some("Enter".into()),
+            favorites_add_and_close: Some("o".into()),
+            ..Default::default()
+        });
+        assert!(matches!(
+            favorites_key(KeyCode::Enter, KeyModifiers::empty(), &kb),
+            Action::FavoritesAppend
+        ));
+        assert!(matches!(
+            favorites_key(KeyCode::Char('o'), KeyModifiers::empty(), &kb),
+            Action::FavoritesAddAndClose
+        ));
+        assert!(matches!(
+            favorites_key(KeyCode::Char('a'), KeyModifiers::empty(), &kb),
+            Action::None
+        ));
     }
 
     #[test]

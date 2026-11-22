@@ -29,6 +29,7 @@ fn render_browser_overlays(app: &mut App, frame: &mut Frame, area: Rect, accent:
         &mut app.favorites_overlay,
         accent,
         &theme,
+        &app.keybinds,
     );
     if app.config.server_search_enabled {
         server_search_overlay::render_server_search_overlay(

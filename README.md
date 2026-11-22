@@ -313,7 +313,8 @@ Ratune syncs favorites with your server through the Subsonic **star** / **unstar
 
 - **Toggle favorite:** `f` on the focused song, album, artist, or queue row (`toggle_favorite` in `[keybinds]`)
 - **Browse favorites:** `F` on the Browse tab — songs, albums, and artists from `getStarred2`
-- **Queue from favorites:** same keys as Browse (`Enter` to play, `a` / `A` to append, etc.)
+- **Queue from favorites:** same keys as Browse (`Enter` to add and close, `a` / `A` to add one / all and keep the panel open, `Ctrl+r` to replace)
+- **Customize:** `favorites_add_and_close`, `favorites_add`, and `favorites_add_all` in `[keybinds]`
 - **Albums and artists** can be favorited too (Navidrome supports all three via the star API)
 - **Offline:** the favorites list is cached at `~/.cache/ratune/favorites.json`; open `F` without a connection to browse the last sync and play tracks already in the audio cache
 - **`[cache].cache_starred = true`:** while online, prefetch favorite **songs** into the offline cache (same `max_size_gb` pool as play-time caching)

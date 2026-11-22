@@ -94,10 +94,17 @@ pub enum Action {
     FavoritesFocusCategories,
     /// Favorites overlay: focus items list.
     FavoritesFocusItems,
-    /// Favorites overlay: replace queue and play (category or item).
+    /// Favorites overlay: replace queue and play, then close (whole section from the
+    /// category pane, highlighted item from the items pane).
     FavoritesPlay,
-    /// Favorites overlay: append to queue (category or item).
+    /// Favorites overlay: append the highlighted item and close. From the category
+    /// pane this moves focus to the items pane instead.
+    FavoritesAddAndClose,
+    /// Favorites overlay: append without closing (whole section from the category
+    /// pane, highlighted item from the items pane).
     FavoritesAppend,
+    /// Favorites overlay: append every item in the current section without closing.
+    FavoritesAppendAll,
     /// Toggle the server `search3` overlay.
     ToggleServerSearch,
     /// Server search: move selection in categories or items.
